@@ -252,7 +252,7 @@ test('work item table separates id and title and shows creator', async () => {
   expect(screen.getByRole('columnheader', { name: '标题' })).toBeInTheDocument();
   expect(screen.getByRole('columnheader', { name: '创建人' })).toBeInTheDocument();
   expect(await screen.findByRole('link', { name: 'WI202607114827' })).toHaveAttribute('href', '/work-items/WI202607114827');
-  expect(screen.getByText('优化工作项列表')).toBeInTheDocument();
+  expect(await screen.findByText('优化工作项列表')).toBeInTheDocument();
   expect(screen.getByRole('cell', { name: 'admin' })).toBeInTheDocument();
 });
 
