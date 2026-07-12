@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     default_model_provider: str = Field(default="anthropic", validation_alias=AliasChoices("V5_MODEL_PROVIDER", "V5_AGENT_PROVIDER"))
     default_model: str = Field(default="", validation_alias=AliasChoices("V5_MODEL", "V5_ANTHROPIC_MODEL", "V5_AGENT_MODEL"))
     default_model_base_url: str = Field(default="", validation_alias=AliasChoices("V5_MODEL_BASE_URL", "V5_ANTHROPIC_BASE_URL", "V5_AGENT_BASE_URL"))
-    default_model_api_key: str = Field(default="", validation_alias=AliasChoices("V5_MODEL_API_KEY", "V5_ANTHROPIC_API_KEY", "V5_AGENT_API_KEY"))
+    default_model_api_key: str = Field(default="", validation_alias=AliasChoices("V5_MODEL_API_KEY", "V5_ANTHROPIC_API_KEY", "V5_AGENT_API_KEY"))  # gitleaks:allow 这里只包含环境变量名
     engine_max_turns: int = Field(default=50, validation_alias=AliasChoices("V5_ENGINE_MAX_TURNS", "V5_CLAUDE_MAX_TURNS"))
     engine_timeout_seconds: int = Field(default=600, validation_alias=AliasChoices("V5_ENGINE_TIMEOUT_SECONDS", "V5_EXECUTION_TIMEOUT_SECONDS"))
     engine_effort_level: str = Field(default="", validation_alias=AliasChoices("V5_ENGINE_EFFORT_LEVEL", "V5_CLAUDE_CODE_EFFORT_LEVEL"))
