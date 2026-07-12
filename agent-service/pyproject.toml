@@ -1,0 +1,18 @@
+[project]
+name = "agent-team-v5-agent-service"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "openai>=1.0",
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+  "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.3", "httpx>=0.27"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

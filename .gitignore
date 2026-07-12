@@ -1,0 +1,17 @@
+runtime/
+.env
+.env.*
+!.env.example
+state/
+runs/
+logs/
+.venv/
+node_modules/
+dist/
+*.tsbuildinfo
+target/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.egg-info/
+.idea/

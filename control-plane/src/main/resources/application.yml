@@ -1,0 +1,34 @@
+server:
+  port: ${V5_CONTROL_PLANE_PORT:8085}
+
+spring:
+  application:
+    name: agent-team-v5-control-plane
+  datasource:
+    url: ${V5_DB_URL:jdbc:postgresql://localhost:5432/agent_team_v5?stringtype=unspecified&currentSchema=control_plane_v5,public}
+    username: ${V5_DB_USER:agent_team}
+    password: ${V5_DB_PASSWORD:}
+  flyway:
+    schemas: control_plane_v5
+    default-schema: control_plane_v5
+  threads:
+    virtual:
+      enabled: true
+
+agent-team:
+  initial-admin-password: ${V5_ADMIN_INITIAL_PASSWORD:}
+  seed-demo-data: ${V5_SEED_DEMO_DATA:false}
+  demo-password: ${V5_DEMO_PASSWORD:}
+  worker-callback:
+    token: ${V5_WORKER_CALLBACK_TOKEN:dev-worker-token}
+    profile: ${V5_PROFILE:local}
+  temporal:
+    target: ${V5_TEMPORAL_TARGET:127.0.0.1:7233}
+    namespace: ${V5_TEMPORAL_NAMESPACE:default}
+    task-queue: ${V5_TEMPORAL_TASK_QUEUE:agent-team-v5}
+  product-agent:
+    url: ${V5_PRODUCT_AGENT_URL:http://127.0.0.1:8090/prd-draft}
+
+springdoc:
+  api-docs:
+    path: /api/v5/openapi.json

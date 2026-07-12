@@ -1,0 +1,15 @@
+{
+  "system_id": "system-1",
+  "content": "做登录页",
+  "current_draft": {},
+  "missing_fields": [],
+  "conversation_history": [
+    {
+      "role": "user",
+      "content": "先做登录页"
+    }
+  ],
+  "approved_memories": [
+    "只能修改 src 目录"
+  ]
+}

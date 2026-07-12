@@ -1,0 +1,4 @@
+title = "agent-team gitleaks"
+
+[extend]
+useDefault = true

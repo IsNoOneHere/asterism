@@ -1,0 +1,128 @@
+services:
+  postgres:
+    profiles: ["docker-db", "prod"]
+    image: postgres:16
+    environment:
+      POSTGRES_DB: agent_team_v5
+      POSTGRES_USER: agent_team
+      POSTGRES_PASSWORD: ${V5_DB_PASSWORD:?必须设置 V5_DB_PASSWORD}
+    ports:
+      - "55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  temporal:
+    profiles: ["prod"]
+    image: temporalio/temporal:latest
+    command:
+      - server
+      - start-dev
+      - --ip
+      - 0.0.0.0
+      - --db-filename
+      - /tmp/temporal.db
+    ports:
+      - "7233:7233"
+      - "8233:8233"
+
+  agent-service:
+    profiles: ["llm", "prod"]
+    build:
+      context: ./agent-service
+    environment:
+      V5_AGENT_MODEL: ${V5_AGENT_MODEL:-gpt-4.1-mini}
+      V5_AGENT_BASE_URL: ${V5_AGENT_BASE_URL:-}
+      V5_AGENT_API_KEY: ${V5_AGENT_API_KEY:-}
+      V5_AGENT_CONTROL_PLANE_URL: ${V5_AGENT_CONTROL_PLANE_URL:-http://host.docker.internal:8085}
+      V5_AGENT_WORKER_CALLBACK_TOKEN: ${V5_WORKER_CALLBACK_TOKEN:?必须设置 V5_WORKER_CALLBACK_TOKEN}
+      # 仅外网模型请求走可选代理，容器内服务保持直连。
+      HTTP_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
+      HTTPS_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
+      http_proxy: ${V5_OUTBOUND_PROXY_URL:-}
+      https_proxy: ${V5_OUTBOUND_PROXY_URL:-}
+      NO_PROXY: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,postgres,temporal,agent-service,control-plane}
+      no_proxy: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,postgres,temporal,agent-service,control-plane}
+    ports:
+      - "8090:8090"
+
+  control-plane:
+    profiles: ["prod"]
+    build:
+      context: ./control-plane
+    environment:
+      SPRING_PROFILES_ACTIVE: temporal,llm
+      V5_DB_URL: jdbc:postgresql://postgres:5432/agent_team_v5?stringtype=unspecified&currentSchema=control_plane_v5,public
+      V5_DB_USER: ${V5_DB_USER:-agent_team}
+      V5_DB_PASSWORD: ${V5_DB_PASSWORD:?必须设置 V5_DB_PASSWORD}
+      V5_WORKER_CALLBACK_TOKEN: ${V5_WORKER_CALLBACK_TOKEN:?必须设置 V5_WORKER_CALLBACK_TOKEN}
+      V5_ADMIN_INITIAL_PASSWORD: ${V5_ADMIN_INITIAL_PASSWORD:-}
+      V5_TEMPORAL_TARGET: temporal:7233
+      V5_PRODUCT_AGENT_URL: http://agent-service:8090/prd-draft
+      V5_PROFILE: prod
+    depends_on:
+      - postgres
+      - temporal
+      - agent-service
+    ports:
+      - "8085:8085"
+
+  worker:
+    profiles: ["prod"]
+    build:
+      context: ./worker
+    environment:
+      V5_PROFILE: prod
+      V5_TEMPORAL_TARGET: temporal:7233
+      V5_CONTROL_PLANE_URL: http://control-plane:8085
+      V5_WORKER_CALLBACK_TOKEN: ${V5_WORKER_CALLBACK_TOKEN:?必须设置 V5_WORKER_CALLBACK_TOKEN}
+      V5_EXECUTION_ENGINE: http
+      V5_EXECUTION_HTTP_ENDPOINT: http://agent-service:8090/execute
+      V5_MODEL_PROVIDER: ${V5_MODEL_PROVIDER:-anthropic}
+      V5_MODEL_API_KEY: ${V5_MODEL_API_KEY:-}
+      V5_MODEL_BASE_URL: ${V5_MODEL_BASE_URL:-}
+      V5_MODEL: ${V5_MODEL:-}
+      V5_ENGINE_MAX_TURNS: ${V5_ENGINE_MAX_TURNS:-50}
+      V5_ENGINE_TIMEOUT_SECONDS: ${V5_ENGINE_TIMEOUT_SECONDS:-600}
+      V5_ENGINE_EFFORT_LEVEL: ${V5_ENGINE_EFFORT_LEVEL:-}
+      # 旧变量只作升级兼容，应用内已统一解析成一个默认 Profile/EngineConfig。
+      V5_ANTHROPIC_API_KEY: ${V5_ANTHROPIC_API_KEY:-}
+      V5_ANTHROPIC_BASE_URL: ${V5_ANTHROPIC_BASE_URL:-}
+      V5_ANTHROPIC_MODEL: ${V5_ANTHROPIC_MODEL:-}
+      V5_CLAUDE_CODE_EFFORT_LEVEL: ${V5_CLAUDE_CODE_EFFORT_LEVEL:-}
+      V5_CLAUDE_MAX_TURNS: ${V5_CLAUDE_MAX_TURNS:-50}
+      V5_ARTIFACTS_ROOT: /app/runtime/artifacts
+      V5_PLANNER_PROVIDER: http
+      V5_PLANNER_HTTP_ENDPOINT: http://agent-service:8090/plan
+      V5_AGENT_SERVICE_URL: http://agent-service:8090
+      V5_RELEASE_PUSH: ${V5_RELEASE_PUSH:-false}
+      V5_WORKSPACE_ROOT: /tmp/agent-team-v5-workspaces
+      # Claude SDK 与 HTTP provider 共用同一出站代理设置。
+      HTTP_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
+      HTTPS_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
+      http_proxy: ${V5_OUTBOUND_PROXY_URL:-}
+      https_proxy: ${V5_OUTBOUND_PROXY_URL:-}
+      NO_PROXY: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,postgres,temporal,agent-service,control-plane}
+      no_proxy: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,postgres,temporal,agent-service,control-plane}
+    volumes:
+      - ${V5_REPO_ROOT:-/tmp}:/repos
+      - ${V5_REPO_ROOT:-/tmp}:${V5_REPO_ROOT:-/tmp}
+      - worker-artifacts:/app/runtime/artifacts
+    depends_on:
+      - control-plane
+      - temporal
+      - agent-service
+
+  workbench:
+    profiles: ["prod"]
+    build:
+      context: ./workbench
+    environment:
+      V5_CONTROL_PLANE_HOST: control-plane
+    depends_on:
+      - control-plane
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres-data:
+  worker-artifacts:

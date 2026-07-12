@@ -1,0 +1,206 @@
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
+import { api, PrdMessageResult } from '../api/client';
+import { StatusBadge } from '../components/Display';
+import { SystemSelect } from '../components/SystemSelect';
+import { useCurrentSystem } from '../SystemContext';
+
+const schema = z.object({
+  systemId: z.string().min(1),
+  content: z.string().min(1),
+});
+
+type FormValue = z.infer<typeof schema>;
+
+const fieldNames: Record<string, string> = {
+  acceptanceCriteria: '验收标准',
+  acceptance_criteria: '验收标准',
+  title: '标题',
+  goal: '目标',
+};
+const unsavedMessage = '内容尚未保存，是否离开？';
+
+export function NewPrdPage() {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { prdId: routePrdId } = useParams();
+  const { systems, systemId, setSystemId } = useCurrentSystem();
+  const [prdId, setPrdId] = useState<string | undefined>(routePrdId);
+  const [conversationId, setConversationId] = useState<string>();
+  const [result, setResult] = useState<PrdMessageResult>({ status: 'waiting_input' });
+  const draftSession = useQuery({
+    queryKey: ['prd-session', routePrdId],
+    queryFn: () => api.prdSession(routePrdId!),
+    enabled: Boolean(routePrdId),
+    retry: false,
+  });
+  const conversation = useQuery({
+    queryKey: ['conversation', conversationId],
+    queryFn: () => api.conversation(conversationId!),
+    enabled: Boolean(conversationId),
+    retry: false,
+  });
+  const form = useForm<FormValue>({
+    resolver: zodResolver(schema),
+    defaultValues: { systemId, content: '' },
+  });
+  const selectedSystemId = form.watch('systemId');
+  const content = form.watch('content');
+  const readinessSystemId = draftSession.data?.systemId || selectedSystemId;
+  const readiness = useQuery({
+    queryKey: ['system-readiness', readinessSystemId],
+    queryFn: () => api.systemReadiness(readinessSystemId),
+    enabled: Boolean(readinessSystemId),
+    retry: false,
+  });
+  const confirmable = ['waiting_user_confirm', 'case_start_failed'].includes(result.status || '');
+
+  useEffect(() => {
+    if (!prdId && !routePrdId && systemId && selectedSystemId !== systemId) form.setValue('systemId', systemId);
+  }, [form, prdId, routePrdId, selectedSystemId, systemId]);
+
+  useEffect(() => {
+    const session = draftSession.data;
+    if (!session) return;
+    // 刷新编辑地址时，恢复草稿原始系统和对话。
+    setSystemId(session.systemId);
+    form.reset({ systemId: session.systemId, content: '' });
+    setPrdId(session.prdId);
+    setConversationId(session.conversationId);
+    setResult({ status: session.status, draft: session.draft, missingFields: session.missingFields, workItemId: session.workItemId });
+  }, [draftSession.data, form, setSystemId]);
+
+  const send = useMutation({
+    mutationFn: (value: FormValue) => api.sendPrdMessage(value.systemId, { prdId, content: value.content }),
+    onSuccess: (data) => {
+      console.info('v5 workbench PRD 对话发送成功', { prdId: data.prdId });
+      if (!prdId && data.prdId) navigate('/work-items/new/' + data.prdId, { replace: true });
+      setPrdId(data.prdId);
+      setConversationId(data.conversationId);
+      setResult(data);
+      form.resetField('content');
+      queryClient.invalidateQueries({ queryKey: ['conversation', data.conversationId] });
+      queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
+    },
+  });
+  const confirm = useMutation({
+    mutationFn: () => api.confirmPrd(prdId!),
+    onSuccess: (data) => {
+      setResult((current) => ({ ...current, ...data, status: 'confirmed' }));
+      queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
+    },
+  });
+
+  useEffect(() => {
+    if (prdId || !content.trim()) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    const guardLink = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+      if (!anchor || anchor.getAttribute('target') === '_blank') return;
+      const url = new URL(anchor.getAttribute('href') || '', window.location.href);
+      if (url.origin !== window.location.origin || window.confirm(unsavedMessage)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    document.addEventListener('click', guardLink, true);
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnload);
+      document.removeEventListener('click', guardLink, true);
+    };
+  }, [content, prdId]);
+
+  function reset() {
+    if (routePrdId) navigate('/work-items/new');
+    setPrdId(undefined);
+    setConversationId(undefined);
+    setResult({ status: 'waiting_input' });
+    form.reset({ systemId: selectedSystemId, content: '' });
+  }
+
+  function confirmPrd() {
+    if (window.confirm('确认后将创建工作项并启动执行流程，是否继续？')) confirm.mutate();
+  }
+
+  return (
+    <section className="create-workspace">
+      <header className="page-head create-workspace-head">
+        <div>
+          <Link className="secondary-action-link" to={routePrdId ? '/work-items/drafts' : '/work-items'}>
+            <ArrowLeft size={16} aria-hidden="true" />
+            {routePrdId ? '返回需求草稿' : '返回工作项中心'}
+          </Link>
+          <h1>{routePrdId ? '继续创建工作项' : '创建工作项'}</h1>
+          <p>通过 AI 沟通明确目标和验收标准，确认后生成工作项。</p>
+        </div>
+      </header>
+      {routePrdId && draftSession.isLoading && prdId !== routePrdId ? <div className="panel">草稿加载中...</div> :
+      routePrdId && draftSession.isError && prdId !== routePrdId ? <div className="panel error-text">草稿加载失败。</div> :
+      <div className="split wide-left create-workspace-grid">
+      <div className="panel chat-panel">
+        <h2>AI 需求沟通</h2>
+        <SystemSelect systems={systems} value={selectedSystemId} label="所属系统" disabled={Boolean(prdId)} onChange={(value) => { setSystemId(value); form.setValue('systemId', value); }} />
+        <div className="message-list">
+          {(conversation.data ?? []).map((message) => (
+            <div className={'bubble ' + (message.senderType === 'user' ? 'user' : 'assistant')} key={message.messageId}>
+              {message.content}
+            </div>
+          ))}
+        </div>
+        {Boolean(result.missingFields?.length) && (
+          <div className="warning">AI 需要你补充：{result.missingFields?.map((field) => fieldNames[field] || field).join('、')}</div>
+        )}
+        <form onSubmit={form.handleSubmit((value) => send.mutate(value))}>
+          <label>
+            需求描述
+            <textarea rows={4} {...form.register('content')} />
+          </label>
+          <button type="submit" disabled={send.isPending || !selectedSystemId}>发送</button>
+        </form>
+      </div>
+      <div className="panel">
+        <h2>工作项预览</h2>
+        <dl className="summary-list">
+          <dt>状态</dt>
+          <dd><StatusBadge value={result.lifecycleStatus || result.status || 'waiting_input'} /></dd>
+          <dt>标题</dt>
+          <dd>{text(result.draft?.title)}</dd>
+          <dt>目标</dt>
+          <dd>{text(result.draft?.goal)}</dd>
+          <dt>验收标准</dt>
+          <dd>{arrayText(result.draft?.acceptanceCriteria)}</dd>
+        </dl>
+        <button type="button" className={confirmable ? 'primary-strong' : ''} onClick={confirmPrd} disabled={!prdId || !confirmable || !readiness.data?.ready || confirm.isPending}>
+          确认并生成工作项
+        </button>
+        {!readiness.data?.ready && <div className="warning">系统尚未具备真实执行条件</div>}
+        {result.workItemId && (
+          <div className="success-text">
+            工作项已生成 <Link className="action-link" to={'/work-items/' + result.workItemId}>查看工作项</Link>
+          </div>
+        )}
+        {prdId && <button type="button" className="secondary" onClick={reset}>创建另一项</button>}
+        {send.isError && <div className="error-text">{String(send.error)}</div>}
+        {confirm.isError && <div className="error-text">{String(confirm.error)}</div>}
+      </div>
+      </div>}
+    </section>
+  );
+}
+
+function text(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : '未生成';
+}
+
+function arrayText(value: unknown) {
+  return Array.isArray(value) && value.length ? value.map(String).join('；') : '未生成';
+}

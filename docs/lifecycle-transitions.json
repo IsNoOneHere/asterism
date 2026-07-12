@@ -1,0 +1,14 @@
+{
+  "allocated": ["waiting_owner_approval", "cancelled"],
+  "waiting_owner_approval": ["activated", "rejected", "cancelled"],
+  "activated": ["modification_completed", "worker_blocked", "cancelled"],
+  "worker_blocked": ["activated", "cancelled"],
+  "modification_completed": ["patch_applied", "patch_rejected", "worker_blocked", "cancelled"],
+  "patch_rejected": ["activated", "cancelled"],
+  "patch_applied": ["validation_passed", "validation_failed"],
+  "validation_failed": ["activated", "cancelled"],
+  "validation_passed": ["completed", "worker_blocked", "cancelled"],
+  "completed": [],
+  "cancelled": [],
+  "rejected": []
+}

@@ -1,0 +1,9 @@
+spring:
+  flyway:
+    schemas: control_plane_v5
+    default-schema: control_plane_v5
+
+agent-team:
+  initial-admin-password: agent-team
+  seed-demo-data: true
+  demo-password: agent-team

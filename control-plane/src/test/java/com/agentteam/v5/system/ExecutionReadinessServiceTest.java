@@ -1,0 +1,81 @@
+package com.agentteam.v5.system;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+
+import java.time.Instant;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class ExecutionReadinessServiceTest {
+    @Test
+    void requiresLiveWorkerAndReportsWarningForUnrestrictedPaths() {
+        var service = new ExecutionReadinessService(new ObjectMapper());
+        assertThat(service.readiness(profile("claude_sdk")).ready()).isFalse();
+
+        service.report(new ExecutionReadinessService.WorkerReadinessReport(
+                "worker-1", "agent-team-v5", "http", List.of("http", "claude_sdk"), true, false,
+                Instant.now(), List.of(new ExecutionReadinessService.TargetReadiness(
+                        "sys-1", true, true, true, "gpt-4.1-mini",
+                        true, "deepseek-v4-pro", "system")), null));
+
+        var result = service.readiness(profile("claude_sdk"));
+        assertThat(result.ready()).isTrue();
+        assertThat(result.issues()).extracting(ExecutionReadinessService.ReadinessIssue::code)
+                .containsExactly("ALLOWED_PATHS_EMPTY");
+    }
+
+    @Test
+    void fakeProviderCannotBecomeBusinessReady() {
+        var service = new ExecutionReadinessService(new ObjectMapper());
+        service.report(new ExecutionReadinessService.WorkerReadinessReport(
+                "worker-1", "agent-team-v5", "fake", List.of("fake"), true, false,
+                Instant.now(), List.of(new ExecutionReadinessService.TargetReadiness(
+                        "sys-1", true, true, true, "model", false, "", "unconfigured")), null));
+
+        assertThat(service.readiness(profile("fake")).issues()).extracting(ExecutionReadinessService.ReadinessIssue::code)
+                .contains("FAKE_EXECUTION_FORBIDDEN");
+    }
+
+    @Test
+    void warnsWhenClaudeUsesWorkerEnvironmentFallback() {
+        var service = new ExecutionReadinessService(new ObjectMapper());
+        service.report(new ExecutionReadinessService.WorkerReadinessReport(
+                "worker-1", "agent-team-v5", "claude_sdk", List.of("claude_sdk"), false, false,
+                Instant.now(), List.of(new ExecutionReadinessService.TargetReadiness(
+                        "sys-1", true, true, true, "model", true, "legacy-model", "worker_env")), null));
+
+        assertThat(service.readiness(profile("claude_sdk")).issues())
+                .extracting(ExecutionReadinessService.ReadinessIssue::code)
+                .contains("CLAUDE_CONFIG_FALLBACK");
+    }
+
+    @Test
+    void httpExecutionRequiresDiffModelButClaudeDoesNot() {
+        var service = new ExecutionReadinessService(new ObjectMapper());
+        service.report(new ExecutionReadinessService.WorkerReadinessReport(
+                "worker-1", "agent-team-v5", "http", List.of("http", "claude_sdk"), true, false,
+                Instant.now(), List.of(new ExecutionReadinessService.TargetReadiness(
+                        "sys-1", true, true, false, "需求模型", true, "claude-model", "system",
+                        true, "需求模型", true, "规划模型", false, "Diff 模型")), null));
+
+        var http = service.readiness(profile("http"));
+        assertThat(http.ready()).isFalse();
+        assertThat(http.issues()).extracting(ExecutionReadinessService.ReadinessIssue::code)
+                .contains("DIFF_MODEL_NOT_READY");
+
+        var claude = service.readiness(profile("claude_sdk"));
+        assertThat(claude.issues()).extracting(ExecutionReadinessService.ReadinessIssue::code)
+                .doesNotContain("DIFF_MODEL_NOT_READY");
+        assertThat(claude.stages()).filteredOn(stage -> stage.name().equals("planning"))
+                .singleElement().extracting(ExecutionReadinessService.ReadinessStage::detail)
+                .isEqualTo("规划模型");
+    }
+
+    private SystemProfile profile(String provider) {
+        var now = Instant.now();
+        return new SystemProfile("sys-1", "系统", "", "/repo", "owner", "[]", "[]", "[\"mvn test\"]",
+                "{\"executionProvider\":\"" + provider + "\"}", "{}", "admin", now, now);
+    }
+}
