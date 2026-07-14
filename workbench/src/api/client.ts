@@ -100,28 +100,6 @@ export type SystemReadiness = {
   issues: Array<{ code: string; severity: 'error' | 'warning'; message: string }>;
 };
 
-export type BusinessModel = {
-  modelId: string;
-  name: string;
-  preset: string;
-  model: string;
-  baseUrl: string;
-  apiKeyConfigured: boolean;
-};
-
-export type BusinessModelRouting = {
-  defaultModelId: string;
-  prdModelId: string;
-  planningModelId: string;
-  diffModelId: string;
-};
-
-export type BusinessModelPool = {
-  models: BusinessModel[];
-  routing: BusinessModelRouting;
-  effectiveRouting: BusinessModelRouting;
-};
-
 export type ModelProfile = {
   id: string;
   name: string;
@@ -135,6 +113,7 @@ export type ModelRouting = {
   defaultProfileId: string;
   prdProfileId: string;
   planningProfileId: string;
+  diffProfileId: string;
 };
 
 export type AgentRole = {
@@ -209,30 +188,8 @@ export const api = {
     request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId), { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body) }),
   updateSystemProfile: (systemId: string, body: unknown) =>
     request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId) + '/profile', { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body) }),
-  updateModelConfig: (systemId: string, body: unknown) =>
-    request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-config', { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body) }),
-  updateClaudeModelConfig: (systemId: string, body: unknown) =>
-    request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId) + '/claude-model-config', { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body) }),
   updateExecutionConfig: (systemId: string, body: unknown) =>
     request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId) + '/execution-config', { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body) }),
-  businessModels: (systemId: string) =>
-    request<BusinessModelPool>('/api/v5/systems/' + encodeURIComponent(systemId) + '/business-models'),
-  createBusinessModel: (systemId: string, body: unknown) =>
-    request<BusinessModelPool>('/api/v5/systems/' + encodeURIComponent(systemId) + '/business-models', {
-      method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),
-    }),
-  updateBusinessModel: (systemId: string, modelId: string, body: unknown) =>
-    request<BusinessModelPool>('/api/v5/systems/' + encodeURIComponent(systemId) + '/business-models/' + encodeURIComponent(modelId), {
-      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
-    }),
-  deleteBusinessModel: (systemId: string, modelId: string) =>
-    request<BusinessModelPool>('/api/v5/systems/' + encodeURIComponent(systemId) + '/business-models/' + encodeURIComponent(modelId), {
-      method: 'DELETE',
-    }),
-  updateBusinessModelRouting: (systemId: string, body: unknown) =>
-    request<BusinessModelPool>('/api/v5/systems/' + encodeURIComponent(systemId) + '/business-model-routing', {
-      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
-    }),
   agentConfiguration: (systemId: string) =>
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agent-config'),
   createModelProfile: (systemId: string, body: unknown) =>

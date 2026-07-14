@@ -8,7 +8,7 @@
 
 完整 Profile 只由 worker-token 保护的 internal API 返回，并且只在 activity 进程内解析。Temporal workflow/activity 入参、事件、普通日志和前端均不携带 Key。
 
-未配置新结构时依次回落：旧系统 `agentConfig/modelProviderConfig`，然后部署环境的单套 `V5_MODEL_*` 默认 Profile。`V5_ANTHROPIC_*` 只作为升级兼容 alias。
+`ModelProfile + modelRouting + AgentRole` 是唯一运行时结构。旧 `businessModels`、单模型字段和独立 Claude 字段由 Flyway 一次性迁移后删除；部署环境的 `V5_MODEL_*` 仅保留给没有系统角色的旧 workflow history 回放。
 
 ## 执行内核
 

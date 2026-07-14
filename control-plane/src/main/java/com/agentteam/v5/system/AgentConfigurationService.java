@@ -59,7 +59,7 @@ public class AgentConfigurationService {
                 value(request.baseUrl()), value(request.apiKey()), value(request.model()));
         state.profiles().add(profile);
         if (state.modelRouting().defaultProfileId().isBlank()) {
-            state.setModelRouting(new ModelRouting(profile.id(), "", ""));
+            state.setModelRouting(new ModelRouting(profile.id(), "", "", ""));
         }
         save(state);
         log.info("模型 Profile 已新增 system={} profileId={}", systemId, profile.id());
@@ -149,8 +149,9 @@ public class AgentConfigurationService {
         requireOptionalProfile(state.profiles(), request.defaultProfileId());
         requireOptionalProfile(state.profiles(), request.prdProfileId());
         requireOptionalProfile(state.profiles(), request.planningProfileId());
+        requireOptionalProfile(state.profiles(), request.diffProfileId());
         state.setModelRouting(new ModelRouting(value(request.defaultProfileId()), value(request.prdProfileId()),
-                value(request.planningProfileId())));
+                value(request.planningProfileId()), value(request.diffProfileId())));
         save(state);
         log.info("模型阶段路由已更新 system={} defaultProfileId={}", systemId, request.defaultProfileId());
         return get(systemId);
@@ -170,7 +171,7 @@ public class AgentConfigurationService {
     }
 
     private State locked(String systemId) {
-        lock.lockBusinessModels(systemId);
+        lock.lockAgentConfiguration(systemId);
         return load(systemId);
     }
 
@@ -189,6 +190,10 @@ public class AgentConfigurationService {
         state.config().put("agentRoles", state.roles());
         state.config().put("defaultAgentRoleId", state.defaultRoleId());
         state.config().put("executionMode", state.executionMode());
+        // 旧业务模型字段已由 Flyway 搬入 Profile，后续保存时只保留唯一配置结构。
+        List.of("businessModels", "businessRouting", "provider", "model", "baseUrl", "base_url", "apiKey", "api_key",
+                "claudePreset", "claudeModel", "claudeBaseUrl", "claudeApiKey", "claudeReuseBusinessApiKey",
+                "claudeBusinessModelId").forEach(state.config()::remove);
         var current = state.profile();
         aggregate.update(new SystemProfile(current.systemId(), current.name(), current.description(), current.repoPath(),
                 current.ownerUserId(), current.allowedPaths(), current.forbiddenPaths(), current.testCommands(),
@@ -204,10 +209,10 @@ public class AgentConfigurationService {
     }
 
     private ModelRouting readRouting(Object value) {
-        if (value == null) return new ModelRouting("", "", "");
+        if (value == null) return new ModelRouting("", "", "", "");
         var routing = objectMapper.convertValue(value, ModelRouting.class);
         return new ModelRouting(value(routing.defaultProfileId()), value(routing.prdProfileId()),
-                value(routing.planningProfileId()));
+                value(routing.planningProfileId()), value(routing.diffProfileId()));
     }
 
     private <T> List<T> convertList(Object value, Class<T> type) {
@@ -278,15 +283,18 @@ public class AgentConfigurationService {
     }
     public record ModelProfileView(String id, String name, String provider, String baseUrl, String model,
                                    boolean apiKeySet) {}
-    public record ModelRouting(String defaultProfileId, String prdProfileId, String planningProfileId) {
+    public record ModelRouting(String defaultProfileId, String prdProfileId, String planningProfileId,
+                               String diffProfileId) {
         boolean references(String profileId) {
-            return profileId.equals(defaultProfileId) || profileId.equals(prdProfileId) || profileId.equals(planningProfileId);
+            return profileId.equals(defaultProfileId) || profileId.equals(prdProfileId)
+                    || profileId.equals(planningProfileId) || profileId.equals(diffProfileId);
         }
 
         String resolve(String stage) {
             return switch (stage == null ? "default" : stage) {
                 case "prd" -> prdProfileId == null || prdProfileId.isBlank() ? defaultProfileId : prdProfileId;
                 case "planning" -> planningProfileId == null || planningProfileId.isBlank() ? defaultProfileId : planningProfileId;
+                case "diff" -> diffProfileId == null || diffProfileId.isBlank() ? defaultProfileId : diffProfileId;
                 case "default" -> defaultProfileId;
                 default -> "";
             };
@@ -295,7 +303,8 @@ public class AgentConfigurationService {
     public record AgentRole(String id, String name, String engine, String modelProfileRef, List<String> pathScope,
                             String prompt, Integer maxTurns, Integer timeoutSeconds) {}
     public record ModelProfileRequest(String name, String provider, String baseUrl, String apiKey, String model) {}
-    public record ModelRoutingRequest(String defaultProfileId, String prdProfileId, String planningProfileId) {}
+    public record ModelRoutingRequest(String defaultProfileId, String prdProfileId, String planningProfileId,
+                                      String diffProfileId) {}
     public record AgentRoleRequest(String name, String engine, String modelProfileRef, List<String> pathScope,
                                    String prompt, Integer maxTurns, Integer timeoutSeconds) {}
     public record DefaultRoleRequest(String roleId) {}

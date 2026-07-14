@@ -7,7 +7,7 @@ import { useCurrentSystem } from '../SystemContext';
 type ProfileDraft = { name: string; provider: string; model: string; baseUrl: string; apiKey: string };
 
 const emptyProfile: ProfileDraft = { name: '', provider: 'openai-compat', model: '', baseUrl: '', apiKey: '' };
-const emptyRouting: ModelRouting = { defaultProfileId: '', prdProfileId: '', planningProfileId: '' };
+const emptyRouting: ModelRouting = { defaultProfileId: '', prdProfileId: '', planningProfileId: '', diffProfileId: '' };
 
 export function ModelConfigPage() {
   const { systemId } = useCurrentSystem();
@@ -96,6 +96,9 @@ export function ModelConfigPage() {
           <option value="">跟随系统默认</option>{profileOptions(value?.modelProfiles)}
         </select></label>
         <label>方案规划<select value={routing.planningProfileId} onChange={(event) => setRouting({ ...routing, planningProfileId: event.target.value })}>
+          <option value="">跟随系统默认</option>{profileOptions(value?.modelProfiles)}
+        </select></label>
+        <label>代码 Diff<select value={routing.diffProfileId} onChange={(event) => setRouting({ ...routing, diffProfileId: event.target.value })}>
           <option value="">跟随系统默认</option>{profileOptions(value?.modelProfiles)}
         </select></label>
         <button type="button" disabled={saveRouting.isPending} onClick={() => saveRouting.mutate()}>保存阶段配置</button>

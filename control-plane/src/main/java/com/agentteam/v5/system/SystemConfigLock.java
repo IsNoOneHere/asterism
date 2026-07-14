@@ -11,9 +11,9 @@ public class SystemConfigLock {
         this.jdbc = jdbc;
     }
 
-    public void lockBusinessModels(String systemId) {
-        // 同一系统的模型池写操作串行执行，事务结束后 PostgreSQL 自动释放锁。
-        jdbc.sql("select pg_advisory_xact_lock(hashtext('v5-business-models'), hashtext(:systemId))")
+    public void lockAgentConfiguration(String systemId) {
+        // 同一系统的配置写操作串行执行，事务结束后 PostgreSQL 自动释放锁。
+        jdbc.sql("select pg_advisory_xact_lock(hashtext('asterism-agent-config'), hashtext(:systemId))")
                 .param("systemId", systemId)
                 .query((rs, rowNum) -> true)
                 .single();

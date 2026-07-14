@@ -26,17 +26,14 @@ public class SystemController {
     private final SystemAccessService access;
     private final JdbcAggregateTemplate aggregate;
     private final ObjectMapper objectMapper;
-    private final BusinessModelConfigService businessModels;
 
     public SystemController(SystemProfileRepository systems, SystemMembershipRepository memberships,
-                            SystemAccessService access, JdbcAggregateTemplate aggregate, ObjectMapper objectMapper,
-                            BusinessModelConfigService businessModels) {
+                            SystemAccessService access, JdbcAggregateTemplate aggregate, ObjectMapper objectMapper) {
         this.systems = systems;
         this.memberships = memberships;
         this.access = access;
         this.aggregate = aggregate;
         this.objectMapper = objectMapper;
-        this.businessModels = businessModels;
     }
 
     @GetMapping
@@ -77,14 +74,6 @@ public class SystemController {
         return maskProfile(saved);
     }
 
-    @PatchMapping("/{systemId}/model-config")
-    SystemProfile updateModelConfig(@PathVariable String systemId, @Valid @RequestBody ModelConfigRequest request, Authentication actor) {
-        access.requireOwnerOrAdmin(systemId, actor);
-        var saved = businessModels.updateLegacyDefault(systemId, request);
-        log.info("系统模型配置已更新 system={} preset={} actor={}", systemId, request.preset(), actor.getName());
-        return maskProfile(saved);
-    }
-
     @PatchMapping("/{systemId}/execution-config")
     SystemProfile updateExecutionConfig(@PathVariable String systemId, @Valid @RequestBody ExecutionConfigRequest request, Authentication actor) {
         access.requireOwnerOrAdmin(systemId, actor);
@@ -95,17 +84,6 @@ public class SystemController {
         config.put("executionTimeoutSeconds", request.executionTimeoutSeconds());
         var saved = aggregate.update(copy(existing, json(config), existing.modelProviderConfig()));
         log.info("系统执行配置已更新 system={} provider={} actor={}", systemId, request.executionProvider(), actor.getName());
-        return maskProfile(saved);
-    }
-
-    @PatchMapping("/{systemId}/claude-model-config")
-    SystemProfile updateClaudeModelConfig(@PathVariable String systemId,
-                                          @Valid @RequestBody ClaudeModelConfigRequest request,
-                                          Authentication actor) {
-        access.requireOwnerOrAdmin(systemId, actor);
-        var saved = businessModels.updateClaude(systemId, request);
-        log.info("系统 Claude 模型配置已更新 system={} preset={} reuseBusinessKey={} actor={}",
-                systemId, request.preset(), request.reuseBusinessApiKey(), actor.getName());
         return maskProfile(saved);
     }
 
@@ -258,13 +236,6 @@ public class SystemController {
     public record ProfileRequest(@NotBlank String name, String description, @NotBlank String repoPath,
                                  @NotBlank String ownerUserId, List<String> allowedPaths,
                                  List<String> forbiddenPaths, List<String> testCommands) {
-    }
-
-    public record ModelConfigRequest(@NotBlank String preset, @NotBlank String model, String baseUrl, String apiKey) {
-    }
-
-    public record ClaudeModelConfigRequest(@NotBlank String preset, @NotBlank String model, String baseUrl,
-                                           boolean reuseBusinessApiKey, String businessModelId, String apiKey) {
     }
 
     public record ExecutionConfigRequest(@NotBlank String executionProvider, Integer claudeMaxTurns,

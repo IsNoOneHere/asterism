@@ -100,7 +100,7 @@ beforeEach(() => {
   workItems = [];
   agentConfiguration = {
     modelProfiles: [{ id: 'mp-1', name: 'Claude 主模型', provider: 'anthropic', model: 'claude-sonnet', baseUrl: '', apiKeySet: true }],
-    modelRouting: { defaultProfileId: 'mp-1', prdProfileId: '', planningProfileId: 'mp-1' },
+    modelRouting: { defaultProfileId: 'mp-1', prdProfileId: '', planningProfileId: 'mp-1', diffProfileId: 'mp-1' },
     agentRoles: [{ id: 'role-1', name: '前端 Agent', engine: 'claude_sdk', modelProfileRef: 'mp-1', pathScope: ['web'], prompt: '只改前端', maxTurns: 40, timeoutSeconds: 900 }],
     defaultRoleId: 'role-1',
     executionMode: 'single',
@@ -210,7 +210,7 @@ test('renders workbench navigation after auth check', async () => {
   expect(await screen.findByText('工作项中心')).toBeInTheDocument();
   expect(await screen.findByLabelText('当前工作系统')).toBeInTheDocument();
   expect(document.querySelector('.sidebar [aria-label="当前工作系统"]')).not.toBeInTheDocument();
-  expect(document.querySelectorAll('.sidebar nav svg')).toHaveLength(6);
+  expect(document.querySelectorAll('.sidebar nav svg')).toHaveLength(5);
   expect(document.querySelectorAll('.page-tabs svg')).toHaveLength(2);
 });
 
@@ -327,7 +327,7 @@ test('work item detail shows drafted execution plan from event timeline', async 
   expect(screen.queryByText(/"steps"/)).not.toBeInTheDocument();
 });
 
-test('model and agent configuration are separate pages', async () => {
+test('model and agent configuration share one page and data source', async () => {
   renderApp('/models');
 
   expect(await screen.findByRole('heading', { name: '模型配置' })).toBeInTheDocument();
@@ -336,6 +336,8 @@ test('model and agent configuration are separate pages', async () => {
   expect((await screen.findAllByText('Claude 主模型')).length).toBeGreaterThan(0);
   expect(screen.getByText('Key 已配置')).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: '代码 Agent' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Agent 配置' }));
+  expect(await screen.findByRole('heading', { name: '代码 Agent' })).toBeInTheDocument();
 });
 
 test('model profile edit opens a centered dialog instead of an inline form', async () => {
@@ -365,6 +367,7 @@ test('model profile can be added without ever rendering its key', async () => {
 
 test('agent role can select deepagents profile and path scope', async () => {
   renderApp('/agents');
+  fireEvent.click(await screen.findByRole('button', { name: 'Agent 配置' }));
   await screen.findAllByText('前端 Agent');
   expect(screen.getByRole('heading', { name: '代码 Agent' })).toBeInTheDocument();
   expect(screen.getByLabelText('默认 Agent')).toHaveValue('role-1');
@@ -381,6 +384,7 @@ test('agent role can select deepagents profile and path scope', async () => {
 
 test('agent execution policy switches between single and planner selection', async () => {
   renderApp('/agents');
+  fireEvent.click(await screen.findByRole('button', { name: 'Agent 配置' }));
   await screen.findAllByText('前端 Agent');
 
   fireEvent.click(screen.getByRole('radio', { name: /Planner 选择/ }));

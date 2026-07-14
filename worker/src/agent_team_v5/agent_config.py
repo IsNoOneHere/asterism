@@ -101,8 +101,6 @@ async def resolve_agent_config(
 
     engine = legacy_engine or settings.default_engine
     profile = environment_model_profile(settings)
-    if engine == "claude_sdk":
-        profile = await _legacy_claude_profile(settings, system_id, client, profile)
     return ResolvedAgentConfig(
         engine=_engine(settings, engine, legacy_max_turns, legacy_timeout_seconds),
         model_profile=profile,
@@ -151,23 +149,6 @@ def environment_model_profile(settings: Settings) -> ModelProfile:
         api_key=settings.default_model_api_key,
         source="worker_env" if settings.default_model_api_key else "unconfigured",
     )
-
-
-async def _legacy_claude_profile(
-    settings: Settings, system_id: str, client: httpx.AsyncClient, fallback: ModelProfile,
-) -> ModelProfile:
-    try:
-        response = await client.get(
-            settings.control_plane_url.rstrip("/") + f"/api/v5/internal/systems/{system_id}/claude-model-config",
-            headers={"Authorization": f"Bearer {settings.worker_callback_token}"},
-        )
-        if response.status_code == 404:
-            return fallback
-        response.raise_for_status()
-        data = response.json()
-        return _profile(data, str(data.get("source", "legacy_system"))) if data.get("configured") else fallback
-    except httpx.HTTPError:
-        return fallback
 
 
 def _profile(data: dict[str, Any], source: str) -> ModelProfile:

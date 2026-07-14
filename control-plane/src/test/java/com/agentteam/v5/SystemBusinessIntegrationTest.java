@@ -130,13 +130,21 @@ class SystemBusinessIntegrationTest {
     void workerTokenCanReadUnmaskedModelConfig() throws Exception {
         var systemId = id("sys-model");
         createSystem(systemId, "e2e-owner").andExpect(status().isOk());
+        mockMvc.perform(post("/api/v5/systems/" + systemId + "/model-profiles")
+                        .with(httpBasic("e2e-owner", "agent-team"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"测试模型","provider":"openai-compat","model":"gpt-test",
+                                 "baseUrl":"https://llm.local","apiKey":"secret-key"}
+                                """))
+                .andExpect(status().isOk());
 
         mockMvc.perform(get("/api/v5/internal/systems/" + systemId + "/model-config"))
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get("/api/v5/internal/systems/" + systemId + "/model-config")
                         .header("Authorization", "Bearer test-worker-token"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.provider").value("openai"))
+                .andExpect(jsonPath("$.provider").value("openai-compat"))
                 .andExpect(jsonPath("$.model").value("gpt-test"))
                 .andExpect(jsonPath("$.base_url").value("https://llm.local"))
                 .andExpect(jsonPath("$.api_key").value("secret-key"));
