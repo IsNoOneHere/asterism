@@ -21,5 +21,11 @@ public class FakeTemporalCaseAdapter implements TemporalCasePort {
         log.info("fake Temporal signal caseId={} signal={} signalId={}",
                 command.caseId(), command.signalName(), command.signalId());
     }
-}
 
+    @Override
+    public String startRouteIndex(RouteIndexCommand command) {
+        var workflowId = "route-index-" + command.systemId();
+        log.info("fake Temporal 路由索引 system={} repoPath={}", command.systemId(), command.repoPath());
+        return workflowId;
+    }
+}

@@ -67,6 +67,8 @@ export function WorkItemDetailPage() {
               <dd>{workItem.waitingFor || '-'}</dd>
               <dt>执行权限</dt>
               <dd>{workItem.executionAllowed ? '允许' : '关闭'}</dd>
+              <dt>确认目标</dt>
+              <dd>{workItem.targets?.map((target) => `${target.title}${target.apiEndpoints?.length ? `（${target.apiEndpoints.join('、')}）` : ''}`).join('；') || '-'}</dd>
             </dl>
             {canAct && actions.length > 0 ? (
               <div className="button-row wrap">

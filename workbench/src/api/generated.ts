@@ -164,7 +164,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v5/systems/{systemId}/business-models": {
+    "/api/v5/systems/{systemId}/knowledge": {
         parameters: {
             query?: never;
             header?: never;
@@ -174,6 +174,22 @@ export interface paths {
         get: operations["list_3"];
         put?: never;
         post: operations["create_1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/knowledge/route-index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["start"];
         delete?: never;
         options?: never;
         head?: never;
@@ -206,6 +222,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["ingest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/prd-sessions/{prdId}/targets/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["confirmTargets"];
         delete?: never;
         options?: never;
         head?: never;
@@ -308,6 +340,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v5/internal/systems/{systemId}/knowledge/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["candidates"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v5/context-snapshots": {
         parameters: {
             query?: never;
@@ -318,6 +366,22 @@ export interface paths {
         get: operations["snapshot"];
         put?: never;
         post: operations["workerSnapshot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["upload"];
         delete?: never;
         options?: never;
         head?: never;
@@ -372,7 +436,7 @@ export interface paths {
         patch: operations["updateProfile_1"];
         trace?: never;
     };
-    "/api/v5/systems/{systemId}/model-config": {
+    "/api/v5/systems/{systemId}/knowledge/{entryId}/status": {
         parameters: {
             query?: never;
             header?: never;
@@ -385,7 +449,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch: operations["updateModelConfig"];
+        patch: operations["updateStatus"];
         trace?: never;
     };
     "/api/v5/systems/{systemId}/execution-policy": {
@@ -434,54 +498,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["updateDefaultRole"];
-        trace?: never;
-    };
-    "/api/v5/systems/{systemId}/claude-model-config": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch: operations["updateClaudeModelConfig"];
-        trace?: never;
-    };
-    "/api/v5/systems/{systemId}/business-models/{modelId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete: operations["delete"];
-        options?: never;
-        head?: never;
-        patch: operations["update_1"];
-        trace?: never;
-    };
-    "/api/v5/systems/{systemId}/business-model-routing": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch: operations["routing"];
         trace?: never;
     };
     "/api/v5/systems/{systemId}/agent-roles/{roleId}": {
@@ -676,22 +692,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v5/internal/systems/{systemId}/claude-model-config": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["claudeModelConfig"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v5/internal/execution-targets": {
         parameters: {
             query?: never;
@@ -732,6 +732,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["me"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/attachments/{attachmentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["download"];
         put?: never;
         post?: never;
         delete?: never;
@@ -820,7 +836,8 @@ export interface components {
         };
         PrdMessageRequest: {
             prdId?: string;
-            content: string;
+            content?: string;
+            attachmentIds?: string[];
         };
         PrdMessageResponse: {
             prdId?: string;
@@ -838,6 +855,7 @@ export interface components {
             baseUrl?: string;
             apiKey?: string;
             model?: string;
+            supportsVision?: boolean;
         };
         AgentConfigurationResponse: {
             modelProfiles?: components["schemas"]["ModelProfileView"][];
@@ -866,37 +884,44 @@ export interface components {
             baseUrl?: string;
             model?: string;
             apiKeySet?: boolean;
+            supportsVision?: boolean;
         };
         ModelRouting: {
             defaultProfileId?: string;
             prdProfileId?: string;
             planningProfileId?: string;
+            diffProfileId?: string;
         };
-        BusinessModelRequest: {
-            name: string;
-            preset: string;
-            model: string;
-            baseUrl?: string;
-            apiKey?: string;
+        CandidateRequest: {
+            kind?: string;
+            title?: string;
+            anchorTexts?: string[];
+            routePath?: string;
+            apiEndpoints?: string[];
+            codeRefs?: string[];
+            sourceRef?: string;
         };
-        BusinessModelPoolResponse: {
-            models?: components["schemas"]["BusinessModelView"][];
-            routing?: components["schemas"]["Routing"];
-            effectiveRouting?: components["schemas"]["Routing"];
+        KnowledgeView: {
+            entryId?: string;
+            systemId?: string;
+            kind?: string;
+            title?: string;
+            anchorTexts?: string[];
+            routePath?: string;
+            apiEndpoints?: string[];
+            codeRefs?: string[];
+            status?: string;
+            source?: string;
+            sourceRef?: string;
+            createdBy?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            approvedBy?: string;
+            /** Format: date-time */
+            approvedAt?: string;
         };
-        BusinessModelView: {
-            modelId?: string;
-            name?: string;
-            preset?: string;
-            model?: string;
-            baseUrl?: string;
-            apiKeyConfigured?: boolean;
-        };
-        Routing: {
-            defaultModelId?: string;
-            prdModelId?: string;
-            planningModelId?: string;
-            diffModelId?: string;
+        RouteIndexResponse: {
+            workflowId?: string;
         };
         AgentRoleRequest: {
             name?: string;
@@ -942,6 +967,14 @@ export interface components {
             /** Format: date-time */
             createdAt?: string;
         };
+        TargetConfirmationRequest: {
+            entryIds?: string[];
+        };
+        TargetConfirmationResponse: {
+            draft?: {
+                [key: string]: Record<string, never>;
+            };
+        };
         PrdConfirmResponse: {
             prdId?: string;
             workItemId?: string;
@@ -961,11 +994,6 @@ export interface components {
             createdAt?: string;
             /** Format: date-time */
             approvedAt?: string;
-        };
-        CandidateRequest: {
-            systemId: string;
-            content: string;
-            sourceEventId?: string;
         };
         TargetReadiness: {
             systemId?: string;
@@ -998,6 +1026,13 @@ export interface components {
             /** Format: date-time */
             receivedAt?: string;
         };
+        CandidateBatch: {
+            entries?: components["schemas"]["CandidateRequest"][];
+        };
+        CandidateResponse: {
+            /** Format: int32 */
+            created?: number;
+        };
         SnapshotRequest: {
             systemId: string;
             workItemId?: string;
@@ -1006,6 +1041,19 @@ export interface components {
             systemId?: string;
             manifestId?: string | null;
             approvedMemories?: Record<string, never>;
+        };
+        Attachment: {
+            attachmentId?: string;
+            systemId?: string;
+            uploader?: string;
+            filename?: string;
+            contentType?: string;
+            /** Format: int64 */
+            sizeBytes?: number;
+            sha256?: string;
+            storagePath?: string;
+            /** Format: date-time */
+            createdAt?: string;
         };
         ProfileRequest: {
             name: string;
@@ -1020,12 +1068,10 @@ export interface components {
             defaultProfileId?: string;
             prdProfileId?: string;
             planningProfileId?: string;
+            diffProfileId?: string;
         };
-        ModelConfigRequest: {
-            preset: string;
-            model: string;
-            baseUrl?: string;
-            apiKey?: string;
+        StatusRequest: {
+            status?: string;
         };
         ExecutionPolicyRequest: {
             mode?: string;
@@ -1041,19 +1087,15 @@ export interface components {
         DefaultRoleRequest: {
             roleId?: string;
         };
-        ClaudeModelConfigRequest: {
-            preset: string;
-            model: string;
-            baseUrl?: string;
-            reuseBusinessApiKey?: boolean;
-            businessModelId?: string;
-            apiKey?: string;
-        };
-        RoutingRequest: {
-            defaultModelId: string;
-            prdModelId?: string;
-            planningModelId?: string;
-            diffModelId?: string;
+        SuspectedTarget: {
+            entryId?: string;
+            kind?: string;
+            title?: string;
+            routePath?: string;
+            apiEndpoints?: string[];
+            codeRefs?: string[];
+            /** Format: double */
+            confidence?: number;
         };
         WorkItemView: {
             workItemId?: string;
@@ -1074,6 +1116,7 @@ export interface components {
             updatedAt?: string;
             canControl?: boolean;
             availableActions?: string[];
+            targets?: components["schemas"]["SuspectedTarget"][];
         };
         ReadinessIssue: {
             code?: string;
@@ -1410,7 +1453,9 @@ export interface operations {
     };
     list_3: {
         parameters: {
-            query?: never;
+            query?: {
+                status?: string;
+            };
             header?: never;
             path: {
                 systemId: string;
@@ -1425,7 +1470,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": components["schemas"]["BusinessModelPoolResponse"];
+                    "*/*": components["schemas"]["KnowledgeView"][];
                 };
             };
         };
@@ -1441,7 +1486,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BusinessModelRequest"];
+                "application/json": components["schemas"]["CandidateRequest"];
             };
         };
         responses: {
@@ -1451,7 +1496,29 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": components["schemas"]["BusinessModelPoolResponse"];
+                    "*/*": components["schemas"]["KnowledgeView"];
+                };
+            };
+        };
+    };
+    start: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["RouteIndexResponse"];
                 };
             };
         };
@@ -1502,6 +1569,32 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["DomainEventRecord"];
+                };
+            };
+        };
+    };
+    confirmTargets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                prdId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TargetConfirmationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["TargetConfirmationResponse"];
                 };
             };
         };
@@ -1640,6 +1733,32 @@ export interface operations {
             };
         };
     };
+    candidates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CandidateBatch"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["CandidateResponse"];
+                };
+            };
+        };
+    };
     snapshot: {
         parameters: {
             query: {
@@ -1682,6 +1801,35 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["ContextSnapshot"];
+                };
+            };
+        };
+    };
+    upload: {
+        parameters: {
+            query: {
+                systemId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["Attachment"];
                 };
             };
         };
@@ -1788,18 +1936,19 @@ export interface operations {
             };
         };
     };
-    updateModelConfig: {
+    updateStatus: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 systemId: string;
+                entryId: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ModelConfigRequest"];
+                "application/json": components["schemas"]["StatusRequest"];
             };
         };
         responses: {
@@ -1809,7 +1958,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": components["schemas"]["SystemProfile"];
+                    "*/*": components["schemas"]["KnowledgeView"];
                 };
             };
         };
@@ -1888,108 +2037,6 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["AgentConfigurationResponse"];
-                };
-            };
-        };
-    };
-    updateClaudeModelConfig: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ClaudeModelConfigRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["SystemProfile"];
-                };
-            };
-        };
-    };
-    delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-                modelId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["BusinessModelPoolResponse"];
-                };
-            };
-        };
-    };
-    update_1: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-                modelId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BusinessModelRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["BusinessModelPoolResponse"];
-                };
-            };
-        };
-    };
-    routing: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RoutingRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["BusinessModelPoolResponse"];
                 };
             };
         };
@@ -2296,30 +2343,6 @@ export interface operations {
             };
         };
     };
-    claudeModelConfig: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": {
-                        [key: string]: Record<string, never>;
-                    };
-                };
-            };
-        };
-    };
     targets: {
         parameters: {
             query?: never;
@@ -2378,6 +2401,28 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["CurrentUser"];
+                };
+            };
+        };
+    };
+    download: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attachmentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": string;
                 };
             };
         };

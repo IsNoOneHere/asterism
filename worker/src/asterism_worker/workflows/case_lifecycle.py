@@ -296,6 +296,7 @@ class AsterismCaseWorkflow:
             "branch": result.get("branch", ""),
             "commitHash": result.get("commit_hash", ""),
             "pushFailed": result.get("push_failed", ""),
+            "changedPaths": self._diff_paths(self.state.diff_patch),
         })
 
     async def _revert_if_needed(self, signal_id: str) -> None:

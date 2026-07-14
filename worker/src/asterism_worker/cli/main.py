@@ -18,9 +18,11 @@ from asterism_worker.activities.execution import (
     validate_plan_targets_activity,
 )
 from asterism_worker.activities.projections import fetch_context, send_projection_event
+from asterism_worker.activities.route_index import index_system_routes, send_knowledge_candidates
 from asterism_worker.config.settings import load_settings
 from asterism_worker.readiness import readiness_loop
 from asterism_worker.workflows.case_lifecycle import AsterismCaseWorkflow
+from asterism_worker.workflows.route_index import AsterismRouteIndexWorkflow
 
 app = typer.Typer()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -45,7 +47,7 @@ async def _worker() -> None:
     worker = Worker(
         client,
         task_queue=settings.temporal_task_queue,
-        workflows=[AsterismCaseWorkflow],
+        workflows=[AsterismCaseWorkflow, AsterismRouteIndexWorkflow],
         activities=[
             fetch_context,
             summarize_repo,
@@ -57,6 +59,8 @@ async def _worker() -> None:
             revert_patch,
             run_validation,
             send_projection_event,
+            index_system_routes,
+            send_knowledge_candidates,
         ],
     )
     heartbeat = asyncio.create_task(readiness_loop(settings))

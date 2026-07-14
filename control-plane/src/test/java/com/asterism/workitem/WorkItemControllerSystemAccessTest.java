@@ -26,7 +26,8 @@ class WorkItemControllerSystemAccessTest {
         when(workItems.findById("wi-b")).thenReturn(Optional.of(item()));
         doThrow(new AccessDeniedException("非系统 owner/admin 无权操作"))
                 .when(access).requireOwnerOrAdmin("system-b", actor);
-        var controller = new WorkItemController(workItems, temporal, events, access);
+        var controller = new WorkItemController(workItems, temporal, events, access,
+                mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper());
 
         assertThatThrownBy(() -> controller.ownerApproval("wi-b", actor))
                 .isInstanceOf(AccessDeniedException.class);
@@ -57,4 +58,3 @@ class WorkItemControllerSystemAccessTest {
                 now);
     }
 }
-

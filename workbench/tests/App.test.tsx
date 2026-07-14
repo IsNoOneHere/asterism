@@ -11,7 +11,7 @@ test('renders workbench navigation after auth check', async () => {
   expect(await screen.findByText('工作项中心')).toBeInTheDocument();
   expect(await screen.findByLabelText('当前工作系统')).toBeInTheDocument();
   expect(document.querySelector('.sidebar [aria-label="当前工作系统"]')).not.toBeInTheDocument();
-  expect(document.querySelectorAll('.sidebar nav svg')).toHaveLength(5);
+  expect(document.querySelectorAll('.sidebar nav svg')).toHaveLength(6);
   expect(document.querySelectorAll('.page-tabs svg')).toHaveLength(2);
 });
 

@@ -167,7 +167,9 @@ class PrdControllerTransactionBoundaryTest {
             }
         };
         return new PrdController(sessions, messages, productAgent, events, temporal, new ObjectMapper(), tx, access, systems,
-                mock(MemoryItemRepository.class), aggregate, workItemIds, readiness);
+                mock(MemoryItemRepository.class), aggregate, workItemIds, readiness,
+                mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
+                mock(com.asterism.knowledge.KnowledgeMatchService.class));
     }
 
     private PrdSession session(String status) {

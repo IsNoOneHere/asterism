@@ -2,6 +2,7 @@ package com.asterism.system;
 
 import com.asterism.identity.SystemAccessService;
 import com.asterism.identity.SystemMembershipRepository;
+import com.asterism.temporal.TemporalCasePort;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.constraints.NotBlank;
@@ -26,14 +27,17 @@ public class SystemController {
     private final SystemAccessService access;
     private final JdbcAggregateTemplate aggregate;
     private final ObjectMapper objectMapper;
+    private final TemporalCasePort temporal;
 
     public SystemController(SystemProfileRepository systems, SystemMembershipRepository memberships,
-                            SystemAccessService access, JdbcAggregateTemplate aggregate, ObjectMapper objectMapper) {
+                            SystemAccessService access, JdbcAggregateTemplate aggregate, ObjectMapper objectMapper,
+                            TemporalCasePort temporal) {
         this.systems = systems;
         this.memberships = memberships;
         this.access = access;
         this.aggregate = aggregate;
         this.objectMapper = objectMapper;
+        this.temporal = temporal;
     }
 
     @GetMapping
@@ -51,6 +55,7 @@ public class SystemController {
         }
         var saved = aggregate.insert(toProfile(request.systemId(), request, null, actor.getName()));
         memberships.upsertMembership(saved.systemId(), actor.getName(), "owner", actor.getName());
+        startRouteIndex(saved);
         return maskProfile(saved);
     }
 
@@ -59,6 +64,7 @@ public class SystemController {
         access.requireOwnerOrAdmin(systemId, actor);
         var existing = systems.findById(systemId).orElseThrow(() -> new IllegalArgumentException("系统不存在"));
         var saved = aggregate.update(toProfile(systemId, request, existing, existing.createdBy()));
+        if (!existing.repoPath().equals(saved.repoPath())) startRouteIndex(saved);
         return maskProfile(saved);
     }
 
@@ -71,6 +77,7 @@ public class SystemController {
                 json(request.allowedPaths()), json(request.forbiddenPaths()), json(request.testCommands()),
                 existing.agentConfig(), existing.modelProviderConfig(), existing.createdBy(), existing.createdAt(), Instant.now()));
         log.info("系统基础配置已更新 system={} actor={}", systemId, actor.getName());
+        if (!existing.repoPath().equals(saved.repoPath())) startRouteIndex(saved);
         return maskProfile(saved);
     }
 
@@ -163,6 +170,15 @@ public class SystemController {
         return new SystemProfile(existing.systemId(), existing.name(), existing.description(), existing.repoPath(),
                 existing.ownerUserId(), existing.allowedPaths(), existing.forbiddenPaths(), existing.testCommands(),
                 agentConfig, modelProviderConfig, existing.createdBy(), existing.createdAt(), Instant.now());
+    }
+
+    private void startRouteIndex(SystemProfile profile) {
+        try {
+            temporal.startRouteIndex(new TemporalCasePort.RouteIndexCommand(profile.systemId(), profile.repoPath()));
+        } catch (RuntimeException error) {
+            // 系统配置保存成功后索引可由管理员重试，不能反向回滚业务数据。
+            log.warn("系统路由索引启动失败 system={}", profile.systemId(), error);
+        }
     }
 
     private Map<String, Object> maskSecrets(Map<String, Object> config) {

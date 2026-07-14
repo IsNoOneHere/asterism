@@ -57,7 +57,11 @@ services:
       V5_WORKER_CALLBACK_TOKEN: ${V5_WORKER_CALLBACK_TOKEN:?必须设置 V5_WORKER_CALLBACK_TOKEN}
       V5_ADMIN_INITIAL_PASSWORD: ${V5_ADMIN_INITIAL_PASSWORD:-}
       V5_TEMPORAL_TARGET: temporal:7233
+      V5_TEMPORAL_NAMESPACE: ${V5_TEMPORAL_NAMESPACE:-default}
+      V5_TEMPORAL_TASK_QUEUE: ${V5_TEMPORAL_TASK_QUEUE:-asterism}
       V5_PRODUCT_AGENT_URL: http://agent-service:8090/prd-draft
+      V5_IMAGE_ANALYSIS_URL: http://agent-service:8090/analyze-image
+      V5_ATTACHMENT_ROOT: /app/runtime/attachments
       V5_PROFILE: prod
     depends_on:
       - postgres
@@ -65,6 +69,8 @@ services:
       - agent-service
     ports:
       - "8085:8085"
+    volumes:
+      - control-plane-attachments:/app/runtime/attachments
 
   worker:
     profiles: ["prod"]
@@ -73,6 +79,8 @@ services:
     environment:
       V5_PROFILE: prod
       V5_TEMPORAL_TARGET: temporal:7233
+      V5_TEMPORAL_NAMESPACE: ${V5_TEMPORAL_NAMESPACE:-default}
+      V5_TEMPORAL_TASK_QUEUE: ${V5_TEMPORAL_TASK_QUEUE:-asterism}
       V5_CONTROL_PLANE_URL: http://control-plane:8085
       V5_WORKER_CALLBACK_TOKEN: ${V5_WORKER_CALLBACK_TOKEN:?必须设置 V5_WORKER_CALLBACK_TOKEN}
       V5_EXECUTION_ENGINE: http
@@ -125,4 +133,5 @@ services:
 
 volumes:
   postgres-data:
+  control-plane-attachments:
   worker-artifacts:

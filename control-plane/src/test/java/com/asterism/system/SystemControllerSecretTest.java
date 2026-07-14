@@ -30,7 +30,7 @@ class SystemControllerSecretTest {
         });
         when(repo.existsById("sys-1")).thenReturn(false);
         var controller = new SystemController(repo, mock(SystemMembershipRepository.class), mock(SystemAccessService.class),
-                aggregate, new ObjectMapper());
+                aggregate, new ObjectMapper(), mock(com.asterism.temporal.TemporalCasePort.class));
 
         var response = controller.create(request(Map.of("provider", "openai", "apiKey", "secret-key")),
                 new UsernamePasswordAuthenticationToken("admin", "n/a"));
@@ -49,7 +49,7 @@ class SystemControllerSecretTest {
             return call.getArgument(0);
         });
         var controller = new SystemController(repo, mock(SystemMembershipRepository.class), mock(SystemAccessService.class),
-                aggregate, new ObjectMapper());
+                aggregate, new ObjectMapper(), mock(com.asterism.temporal.TemporalCasePort.class));
         var nested = Map.<String, Object>of("businessModels", List.of(Map.of(
                 "modelId", "bm-1", "name", "主模型", "apiKey", "nested-secret")));
 
@@ -70,7 +70,7 @@ class SystemControllerSecretTest {
             return call.getArgument(0);
         });
         var controller = new SystemController(repo, mock(SystemMembershipRepository.class), mock(SystemAccessService.class),
-                aggregate, new ObjectMapper());
+                aggregate, new ObjectMapper(), mock(com.asterism.temporal.TemporalCasePort.class));
 
         controller.update("sys-1", request(Map.of("provider", "openai")),
                 new UsernamePasswordAuthenticationToken("admin", "n/a"));
@@ -93,7 +93,7 @@ class SystemControllerSecretTest {
             return call.getArgument(0);
         });
         var controller = new SystemController(repo, mock(SystemMembershipRepository.class), mock(SystemAccessService.class),
-                aggregate, new ObjectMapper());
+                aggregate, new ObjectMapper(), mock(com.asterism.temporal.TemporalCasePort.class));
         var request = new SystemController.UpsertSystemRequest("sys-1", "Demo", "demo", "/repo", "owner",
                 List.of(), List.of(), List.of("git diff --check"), null, null);
 

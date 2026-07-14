@@ -3,6 +3,7 @@ package com.asterism.event;
 import com.asterism.projection.ProjectionService;
 import com.asterism.memory.MemoryItem;
 import com.asterism.memory.MemoryItemRepository;
+import com.asterism.knowledge.WorkItemKnowledgeLearningService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
@@ -32,14 +33,17 @@ public class DomainEventService {
     private final ObjectMapper objectMapper;
     private final MemoryItemRepository memories;
     private final JdbcAggregateTemplate aggregate;
+    private final WorkItemKnowledgeLearningService knowledgeLearning;
 
     public DomainEventService(DomainEventRepository events, ProjectionService projection, ObjectMapper objectMapper,
-                              MemoryItemRepository memories, JdbcAggregateTemplate aggregate) {
+                              MemoryItemRepository memories, JdbcAggregateTemplate aggregate,
+                              WorkItemKnowledgeLearningService knowledgeLearning) {
         this.events = events;
         this.projection = projection;
         this.objectMapper = objectMapper;
         this.memories = memories;
         this.aggregate = aggregate;
+        this.knowledgeLearning = knowledgeLearning;
     }
 
     @Transactional
@@ -55,6 +59,7 @@ public class DomainEventService {
         log.info("领域事件已入库 sequence={} type={} workItem={}", saved.sequence(), saved.eventType(), saved.workItemId());
         projection.apply(saved);
         createMemoryCandidate(saved);
+        knowledgeLearning.learn(saved);
         return saved;
     }
 

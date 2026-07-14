@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 CONTAINER_BIN="${V5_APPLE_CONTAINER_BIN:-container}"
 NETWORK="asterism"
 POSTGRES_VOLUME="asterism-postgres-data"
+ATTACHMENTS_VOLUME="asterism-control-plane-attachments"
 ARTIFACTS_VOLUME="asterism-worker-artifacts"
 SERVICES="postgres temporal agent-service control-plane worker workbench"
 
@@ -118,6 +119,8 @@ prepare_env() {
   V5_CLAUDE_MAX_TURNS="${V5_CLAUDE_MAX_TURNS:-50}"
   V5_RELEASE_PUSH="${V5_RELEASE_PUSH:-false}"
   V5_PROFILE="prod"
+  V5_TEMPORAL_NAMESPACE="${V5_TEMPORAL_NAMESPACE:-default}"
+  V5_TEMPORAL_TASK_QUEUE="${V5_TEMPORAL_TASK_QUEUE:-asterism}"
   V5_ARTIFACTS_ROOT="/app/runtime/artifacts"
   V5_WORKSPACE_ROOT="/tmp/asterism-workspaces"
   SPRING_PROFILES_ACTIVE="temporal,llm"
@@ -136,6 +139,7 @@ prepare_env() {
   export V5_CLAUDE_MAX_TURNS V5_RELEASE_PUSH V5_PROFILE
   export V5_ANTHROPIC_API_KEY V5_ANTHROPIC_BASE_URL V5_ANTHROPIC_MODEL
   export V5_CLAUDE_CODE_EFFORT_LEVEL
+  export V5_TEMPORAL_NAMESPACE V5_TEMPORAL_TASK_QUEUE
   export V5_ARTIFACTS_ROOT V5_WORKSPACE_ROOT SPRING_PROFILES_ACTIVE
 }
 
@@ -199,6 +203,7 @@ up_services() {
   prepare_env
   ensure_network
   ensure_volume "$POSTGRES_VOLUME"
+  ensure_volume "$ATTACHMENTS_VOLUME"
   ensure_volume "$ARTIFACTS_VOLUME"
   GATEWAY_IP="$(network_gateway)"
 
@@ -229,12 +234,17 @@ up_services() {
   V5_DB_URL="jdbc:postgresql://$POSTGRES_IP:5432/asterism?stringtype=unspecified&currentSchema=control_plane_v5,public"
   V5_TEMPORAL_TARGET="$TEMPORAL_IP:7233"
   V5_PRODUCT_AGENT_URL="http://$GATEWAY_IP:8090/prd-draft"
-  export V5_DB_URL V5_TEMPORAL_TARGET V5_PRODUCT_AGENT_URL
+  V5_IMAGE_ANALYSIS_URL="http://$GATEWAY_IP:8090/analyze-image"
+  V5_ATTACHMENT_ROOT="/app/runtime/attachments"
+  export V5_DB_URL V5_TEMPORAL_TARGET V5_PRODUCT_AGENT_URL V5_IMAGE_ANALYSIS_URL V5_ATTACHMENT_ROOT
 
   run_service control-plane \
     --env SPRING_PROFILES_ACTIVE --env V5_DB_URL --env V5_DB_USER --env V5_DB_PASSWORD \
-    --env V5_WORKER_CALLBACK_TOKEN --env V5_TEMPORAL_TARGET --env V5_PRODUCT_AGENT_URL --env V5_PROFILE --env V5_ADMIN_INITIAL_PASSWORD \
+    --env V5_WORKER_CALLBACK_TOKEN --env V5_TEMPORAL_TARGET --env V5_TEMPORAL_NAMESPACE --env V5_TEMPORAL_TASK_QUEUE \
+    --env V5_PRODUCT_AGENT_URL --env V5_IMAGE_ANALYSIS_URL \
+    --env V5_ATTACHMENT_ROOT --env V5_PROFILE --env V5_ADMIN_INITIAL_PASSWORD \
     --publish 8085:8085 \
+    --volume "$ATTACHMENTS_VOLUME:/app/runtime/attachments" \
     asterism-control-plane:local
   # HTTP 服务统一走宿主发布端口，避免 Apple Container 重启后动态 IP 变化。
   V5_AGENT_CONTROL_PLANE_URL="http://$GATEWAY_IP:8085"
@@ -260,7 +270,7 @@ up_services() {
   export V5_CONTROL_PLANE_URL V5_EXECUTION_HTTP_ENDPOINT V5_PLANNER_HTTP_ENDPOINT V5_AGENT_SERVICE_URL
 
   run_external_service worker \
-    --env V5_PROFILE --env V5_TEMPORAL_TARGET --env V5_CONTROL_PLANE_URL \
+    --env V5_PROFILE --env V5_TEMPORAL_TARGET --env V5_TEMPORAL_NAMESPACE --env V5_TEMPORAL_TASK_QUEUE --env V5_CONTROL_PLANE_URL \
     --env V5_WORKER_CALLBACK_TOKEN --env V5_EXECUTION_ENGINE --env V5_EXECUTION_HTTP_ENDPOINT \
     --env V5_MODEL_PROVIDER --env V5_MODEL_API_KEY --env V5_MODEL_BASE_URL --env V5_MODEL \
     --env V5_ENGINE_MAX_TURNS --env V5_ENGINE_TIMEOUT_SECONDS --env V5_ENGINE_EFFORT_LEVEL \

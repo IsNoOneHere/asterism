@@ -8,6 +8,8 @@ public interface TemporalCasePort {
 
     void signalCase(SignalCaseCommand command);
 
+    String startRouteIndex(RouteIndexCommand command);
+
     record StartCaseCommand(
             String caseId,
             String workItemId,
@@ -27,5 +29,8 @@ public interface TemporalCasePort {
     }
 
     record SignalCaseCommand(String caseId, String signalName, String signalId) {
+    }
+
+    record RouteIndexCommand(String systemId, String repoPath) {
     }
 }

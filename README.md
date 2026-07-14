@@ -39,6 +39,20 @@ make doctor
 
 旧 `businessModels` 和单模型 JSON 由 Flyway 一次性迁入 Model Profile，运行期不再维护第二套模型池。
 
+## 截图反馈
+
+业务用户只需三步：
+
+1. 在“创建工作项”中粘贴或选择截图，每条消息最多三张。
+2. 查看系统给出的页面、接口候选，并确认实际反馈的页面。
+3. 确认 PRD 后等待修改、验证和发布结果。
+
+管理员首次使用也只需三步：
+
+1. 在 Agent / 模型配置中勾选一个支持图片理解的 Model Profile。
+2. 在“系统知识”中运行路由索引。
+3. 审批 worker 提取的页面、路由和接口 candidate；只有 approved 条目参与截图匹配。
+
 ## 文档
 
 - [架构与三层配置](docs/architecture.md)

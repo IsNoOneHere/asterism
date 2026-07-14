@@ -171,3 +171,18 @@ class PlanRequest(BaseModel):
     allowed_paths: list[str] = Field(default_factory=list)
     context_manifest_id: str
     available_roles: list[AvailableRole] = Field(default_factory=list)
+
+
+class RouteIndexInput(BaseModel):
+    system_id: str
+    repo_path: str
+
+
+class KnowledgeCandidate(BaseModel):
+    kind: str
+    title: str
+    anchorTexts: list[str] = Field(default_factory=list)
+    routePath: str = ""
+    apiEndpoints: list[str] = Field(default_factory=list)
+    codeRefs: list[str] = Field(default_factory=list)
+    sourceRef: str = ""

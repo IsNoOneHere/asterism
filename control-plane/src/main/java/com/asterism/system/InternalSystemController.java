@@ -23,7 +23,15 @@ public class InternalSystemController {
                                     @RequestParam(defaultValue = "default") String stage,
                                     @RequestParam(name = "profile_id", defaultValue = "") String profileId) {
         var config = configurations.internal(systemId);
-        var selectedId = profileId.isBlank() ? config.modelRouting().resolve(stage) : profileId;
+        String selectedId;
+        if (profileId.isBlank() && "vision".equals(stage)) {
+            selectedId = config.modelProfiles().stream()
+                    .filter(AgentConfigurationService.ModelProfile::supportsVision)
+                    .map(AgentConfigurationService.ModelProfile::id)
+                    .findFirst().orElse("");
+        } else {
+            selectedId = profileId.isBlank() ? config.modelRouting().resolve(stage) : profileId;
+        }
         var selected = config.modelProfiles().stream()
                 .filter(profile -> profile.id().equals(selectedId))
                 .findFirst().orElse(null);
@@ -51,6 +59,7 @@ public class InternalSystemController {
         item.put("base_url", profile.baseUrl());
         item.put("api_key", profile.apiKey());
         item.put("model", profile.model());
+        item.put("supports_vision", profile.supportsVision());
         return item;
     }
 
@@ -74,5 +83,6 @@ public class InternalSystemController {
         response.put("model", profile.model());
         response.put("base_url", profile.baseUrl());
         response.put("api_key", profile.apiKey());
+        response.put("supports_vision", profile.supportsVision());
     }
 }

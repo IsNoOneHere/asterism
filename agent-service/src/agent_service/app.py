@@ -1,11 +1,12 @@
 import json
 from collections.abc import Callable
+from hmac import compare_digest
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 import httpx
 from pydantic import ValidationError
 
-from agent_service.contracts import DraftRequest, DraftResult, ExecutionPlan, ExecutionRequest, ExecutionResult, PlanRequest
+from agent_service.contracts import DraftRequest, DraftResult, ExecutionPlan, ExecutionRequest, ExecutionResult, PlanRequest, UiObservation
 from agent_service.llm import LlmClient, ModelConfig, OpenAIChatClient, default_model_config, merge_model_config
 from agent_service.settings import AgentSettings
 
@@ -39,6 +40,27 @@ def create_app(
     def prd_draft(request: DraftRequest) -> DraftResult:
         model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "prd")
         return _strict_json(llm, prd_draft_prompt(request), model_config, DraftResult, "prd draft did not return valid DraftResult JSON")
+
+    @app.post("/analyze-image")
+    async def analyze_image(system_id: str, request: Request) -> UiObservation:
+        # 视觉调用只能由控制面转发，避免绕过成员鉴权直接消耗模型额度。
+        if not compare_digest(
+            request.headers.get("authorization", ""),
+            f"Bearer {settings.worker_callback_token}",
+        ):
+            raise HTTPException(status_code=401, detail="invalid internal token")
+        model_config = resolve_model_config(settings, fetch_model_config, system_id, "vision")
+        if not model_config.supports_vision or not model_config.model or not model_config.api_key:
+            raise HTTPException(status_code=422, detail="请先为该系统配置支持 Vision 的模型 Profile")
+        content_type = request.headers.get("content-type", "").split(";", 1)[0]
+        if content_type not in {"image/png", "image/jpeg", "image/webp"}:
+            raise HTTPException(status_code=415, detail="unsupported image type")
+        image = await request.body()
+        try:
+            raw = llm.complete_vision(image_observation_prompt(), image, content_type, model_config)
+            return UiObservation.model_validate(json.loads(raw))
+        except (json.JSONDecodeError, ValidationError):
+            raise HTTPException(status_code=400, detail="vision model did not return valid UiObservation JSON")
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -119,6 +141,8 @@ def plan_prompt(request: PlanRequest) -> str:
         "{role,scope_paths,step_refs} using only listed role ids and path scopes.\n"
         "target_files must be real existing paths selected from the repo summary.\n"
         f"PRD: {request.prd.model_dump_json()}\n"
+        f"Confirmed target hints (疑似相关，以实际代码为准): "
+        f"{json.dumps(request.prd.draft_json.get('targets', []), ensure_ascii=False)}\n"
         f"Repo summary:\n{request.repo_summary}\n"
         f"Memories: {json.dumps(request.memories, ensure_ascii=False)}\n"
         f"Allowed paths: {request.allowed_paths}\n"
@@ -165,4 +189,14 @@ def prd_draft_prompt(request: DraftRequest) -> str:
         f"Missing fields: {request.missing_fields}\n"
         f"Conversation history: {json.dumps(request.conversation_history, ensure_ascii=False)}\n"
         f"Approved memories as constraints: {json.dumps(request.approved_memories, ensure_ascii=False)}\n"
+    )
+
+
+def image_observation_prompt() -> str:
+    # 视觉模型只做观察，不允许越过知识检索直接猜代码或接口。
+    return (
+        "Return strict JSON with keys page_title,text_anchors,ui_elements,error_messages,user_visible_summary.\n"
+        "Describe only visible UI facts from the screenshot. Keep text anchors exact when readable.\n"
+        "Never guess API endpoints, source files, implementation details, routes, or hidden behavior.\n"
+        "Write user_visible_summary in concise Chinese."
     )

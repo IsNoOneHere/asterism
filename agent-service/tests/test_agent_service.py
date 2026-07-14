@@ -24,6 +24,12 @@ class FakeLlmClient(LlmClient):
         self.json_modes.append(json_mode)
         return self.responses.pop(0)
 
+    def complete_vision(self, prompt: str, image: bytes, content_type: str, config: ModelConfig) -> str:
+        self.calls += 1
+        self.prompts.append(prompt)
+        self.configs.append(config)
+        return self.responses.pop(0)
+
 
 def test_plan_retries_once_when_llm_returns_invalid_json():
     llm = FakeLlmClient([
@@ -320,3 +326,69 @@ def test_each_endpoint_uses_its_stage_model():
 
     assert stages == ["prd", "planning", "diff"]
     assert [config.model for config in llm.configs] == ["prd-model", "planning-model", "diff-model"]
+
+
+def test_analyze_image_returns_observation_without_guessing_code():
+    llm = FakeLlmClient([json.dumps({
+        "page_title": "订单列表",
+        "text_anchors": ["待发货订单"],
+        "ui_elements": ["搜索按钮"],
+        "error_messages": [],
+        "user_visible_summary": "订单列表页显示待发货订单",
+    }, ensure_ascii=False)])
+    client = TestClient(create_app(
+        llm,
+        model_config_fetcher=lambda system_id, stage: ModelConfig(
+            managed=True, model="vision-model", api_key="secret", supports_vision=True,
+        ),
+    ))
+
+    response = client.post("/analyze-image?system_id=sys-1", content=b"image", headers={
+        "Content-Type": "image/png", "Authorization": "Bearer dev-worker-token",
+    })
+
+    assert response.status_code == 200
+    assert response.json()["page_title"] == "订单列表"
+    assert "Never guess API endpoints" in llm.prompts[0]
+
+
+def test_analyze_image_requires_vision_profile():
+    llm = FakeLlmClient([])
+    client = TestClient(create_app(
+        llm,
+        model_config_fetcher=lambda system_id, stage: ModelConfig(
+            managed=True, model="text-model", api_key="secret", supports_vision=False,
+        ),
+    ))
+
+    response = client.post("/analyze-image?system_id=sys-1", content=b"image", headers={
+        "Content-Type": "image/png", "Authorization": "Bearer dev-worker-token",
+    })
+
+    assert response.status_code == 422
+    assert "Vision" in response.text
+    assert llm.calls == 0
+
+
+def test_analyze_image_rejects_direct_unauthorized_call():
+    llm = FakeLlmClient([])
+    client = TestClient(create_app(llm))
+
+    response = client.post("/analyze-image?system_id=sys-1", content=b"image", headers={"Content-Type": "image/png"})
+
+    assert response.status_code == 401
+    assert llm.calls == 0
+
+
+def test_plan_prompt_marks_confirmed_targets_as_untrusted_hint():
+    llm = FakeLlmClient(['{"steps":[],"target_files":[],"test_plan":[],"risks":[]}'])
+    client = TestClient(create_app(llm))
+
+    response = client.post("/plan", json={
+        "system_id": "sys", "prd": {"goal": "g", "draft_json": {"targets": [{"title": "订单列表"}]}},
+        "context_manifest_id": "m",
+    })
+
+    assert response.status_code == 200
+    assert "疑似相关，以实际代码为准" in llm.prompts[0]
+    assert "订单列表" in llm.prompts[0]

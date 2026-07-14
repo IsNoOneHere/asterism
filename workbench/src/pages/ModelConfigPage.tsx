@@ -4,9 +4,9 @@ import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react';
 import { AgentConfiguration, api, ModelProfile, ModelRouting } from '../api/client';
 import { useCurrentSystem } from '../SystemContext';
 
-type ProfileDraft = { name: string; provider: string; model: string; baseUrl: string; apiKey: string };
+type ProfileDraft = { name: string; provider: string; model: string; baseUrl: string; apiKey: string; supportsVision: boolean };
 
-const emptyProfile: ProfileDraft = { name: '', provider: 'openai-compat', model: '', baseUrl: '', apiKey: '' };
+const emptyProfile: ProfileDraft = { name: '', provider: 'openai-compat', model: '', baseUrl: '', apiKey: '', supportsVision: false };
 const emptyRouting: ModelRouting = { defaultProfileId: '', prdProfileId: '', planningProfileId: '', diffProfileId: '' };
 
 export function ModelConfigPage() {
@@ -53,7 +53,7 @@ export function ModelConfigPage() {
   const openEditor = (item?: ModelProfile) => {
     setProfileId(item?.id ?? '');
     setProfile(item
-      ? { name: item.name, provider: item.provider, model: item.model, baseUrl: item.baseUrl, apiKey: '' }
+      ? { name: item.name, provider: item.provider, model: item.model, baseUrl: item.baseUrl, apiKey: '', supportsVision: Boolean(item.supportsVision) }
       : emptyProfile);
     // 原生 dialog 负责居中、焦点约束和遮罩，不引入额外弹窗库。
     dialogRef.current?.showModal();
@@ -77,7 +77,7 @@ export function ModelConfigPage() {
             <td><strong>{item.name || item.id}</strong></td>
             <td>{providerName(item.provider)} · {item.model}</td>
             <td>{item.baseUrl || '默认端点'}</td>
-            <td><span className={`key-status ${item.apiKeySet ? 'configured' : ''}`}><KeyRound size={14} aria-hidden="true" />{item.apiKeySet ? 'Key 已配置' : 'Key 未配置'}</span></td>
+            <td><span className={`key-status ${item.apiKeySet ? 'configured' : ''}`}><KeyRound size={14} aria-hidden="true" />{item.apiKeySet ? 'Key 已配置' : 'Key 未配置'}{item.supportsVision ? ' · Vision' : ''}</span></td>
             <td><div className="button-row compact-actions">
               <button type="button" className="icon-button" title="编辑 Profile" aria-label={`编辑 ${item.name || item.id}`} onClick={() => openEditor(item)}><Pencil size={16} /></button>
               <button type="button" className="icon-button danger" title="删除 Profile" aria-label={`删除 ${item.name || item.id}`} onClick={() => deleteProfile.mutate(item.id)}><Trash2 size={16} /></button>
@@ -125,6 +125,7 @@ export function ModelConfigPage() {
           <label>模型名称<input required value={profile.model} onChange={(event) => setProfile({ ...profile, model: event.target.value })} /></label>
           <label>Base URL<input value={profile.baseUrl} onChange={(event) => setProfile({ ...profile, baseUrl: event.target.value })} /></label>
           <label>API Key<input type="password" autoComplete="new-password" placeholder={profileId ? '留空保留现有 Key' : ''} value={profile.apiKey} onChange={(event) => setProfile({ ...profile, apiKey: event.target.value })} /></label>
+          <label><span><input type="checkbox" checked={profile.supportsVision} onChange={(event) => setProfile({ ...profile, supportsVision: event.target.checked })} /> 支持图片理解</span></label>
         </div>
         {saveProfile.error && <div className="error-text">{errorMessage(saveProfile.error)}</div>}
         <div className="button-row"><button type="button" className="secondary" onClick={() => dialogRef.current?.close()}>取消</button><button type="submit" disabled={saveProfile.isPending}>保存 Profile</button></div>

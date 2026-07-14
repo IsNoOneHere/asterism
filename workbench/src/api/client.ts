@@ -29,6 +29,7 @@ export type WorkItem = Schemas['WorkItemView'] & {
   availableActions: string[];
   createdAt?: string;
   updatedAt?: string;
+  targets?: SuspectedTarget[];
 };
 export type WorkItemEvent = Schemas['DomainEventRecord'] & {
   sequence: number;
@@ -61,6 +62,50 @@ export type ConversationMessage = {
   prdId: string;
   senderType: 'user' | 'assistant' | string;
   content: string;
+  attachmentIds: string[];
+  observations: UiObservation[];
+  createdAt?: string;
+};
+export type UiObservation = {
+  page_title?: string;
+  pageTitle?: string;
+  text_anchors?: string[];
+  textAnchors?: string[];
+  ui_elements?: string[];
+  uiElements?: string[];
+  error_messages?: string[];
+  errorMessages?: string[];
+  user_visible_summary?: string;
+  userVisibleSummary?: string;
+};
+export type SuspectedTarget = {
+  entryId: string;
+  kind: string;
+  title: string;
+  routePath: string;
+  apiEndpoints: string[];
+  codeRefs: string[];
+  confidence: number;
+};
+export type Attachment = {
+  attachmentId: string;
+  systemId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+};
+export type KnowledgeEntry = {
+  entryId: string;
+  systemId: string;
+  kind: 'route' | 'page' | 'api' | string;
+  title: string;
+  anchorTexts: string[];
+  routePath: string;
+  apiEndpoints: string[];
+  codeRefs: string[];
+  status: string;
+  source: string;
+  sourceRef: string;
   createdAt?: string;
 };
 export type PrdMessageResult = {
@@ -107,6 +152,7 @@ export type ModelProfile = {
   baseUrl: string;
   model: string;
   apiKeySet: boolean;
+  supportsVision: boolean;
 };
 
 export type ModelRouting = {
@@ -225,8 +271,19 @@ export const api = {
       method: 'PATCH', headers: jsonHeaders, body: JSON.stringify({ mode, defaultRoleId }),
     }),
   systemReadiness: (systemId: string) => request<SystemReadiness>('/api/v5/systems/' + encodeURIComponent(systemId) + '/readiness'),
-  sendPrdMessage: (systemId: string, body: { prdId?: string; content: string }) =>
+  uploadAttachment: (systemId: string, file: File) => {
+    const body = new FormData();
+    body.append('systemId', systemId);
+    body.append('file', file);
+    return request<Attachment>('/api/v5/attachments', { method: 'POST', body });
+  },
+  attachmentUrl: (attachmentId: string) => '/api/v5/attachments/' + encodeURIComponent(attachmentId),
+  sendPrdMessage: (systemId: string, body: { prdId?: string; content: string; attachmentIds?: string[] }) =>
     request<PrdMessageResult>('/api/v5/systems/' + systemId + '/prd/messages', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
+  confirmPrdTargets: (prdId: string, entryIds: string[]) =>
+    request<{ draft: Record<string, unknown> }>('/api/v5/prd-sessions/' + encodeURIComponent(prdId) + '/targets/confirm', {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ entryIds }),
+    }),
   confirmPrd: (prdId: string) =>
     request<PrdMessageResult>('/api/v5/prd-sessions/' + prdId + '/confirm', { method: 'POST' }),
   conversation: (conversationId: string) =>
@@ -272,4 +329,16 @@ export const api = {
   disableMemory: (memoryId: string) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/disable', { method: 'POST' }),
   contextSnapshot: (systemId: string) =>
     request<ContextSnapshot>('/api/v5/context-snapshots?systemId=' + encodeURIComponent(systemId)),
+  knowledge: (systemId: string, status: string) =>
+    request<KnowledgeEntry[]>('/api/v5/systems/' + encodeURIComponent(systemId) + '/knowledge?status=' + encodeURIComponent(status)),
+  createKnowledge: (systemId: string, body: unknown) =>
+    request<KnowledgeEntry>('/api/v5/systems/' + encodeURIComponent(systemId) + '/knowledge', {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),
+    }),
+  updateKnowledgeStatus: (systemId: string, entryId: string, status: string) =>
+    request<KnowledgeEntry>('/api/v5/systems/' + encodeURIComponent(systemId) + '/knowledge/' + encodeURIComponent(entryId) + '/status', {
+      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify({ status }),
+    }),
+  runRouteIndex: (systemId: string) =>
+    request<{ workflowId: string }>('/api/v5/systems/' + encodeURIComponent(systemId) + '/knowledge/route-index', { method: 'POST' }),
 };

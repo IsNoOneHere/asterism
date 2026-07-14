@@ -8,4 +8,6 @@ public interface ConversationMessageRepository extends CrudRepository<Conversati
     List<ConversationMessage> findByConversationIdOrderByCreatedAtAsc(String conversationId);
 
     long countByConversationIdAndSenderType(String conversationId, String senderType);
+
+    List<ConversationMessage> findByPrdIdOrderByCreatedAtAsc(String prdId);
 }

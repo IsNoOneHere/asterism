@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Component
 @Profile("temporal")
@@ -62,6 +63,19 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
     public void signalCase(SignalCaseCommand command) {
         client.newUntypedWorkflowStub(command.caseId()).signal(command.signalName(), command.signalId());
         log.info("Temporal signal 已提交 caseId={} signal={}", command.caseId(), command.signalName());
+    }
+
+    @Override
+    public String startRouteIndex(RouteIndexCommand command) {
+        var workflowId = "route-index-" + command.systemId() + "-" + UUID.randomUUID();
+        var options = WorkflowOptions.newBuilder()
+                .setWorkflowId(workflowId)
+                .setTaskQueue(settings.taskQueue())
+                .build();
+        var workflow = client.newUntypedWorkflowStub("AsterismRouteIndexWorkflow", options);
+        workflow.start(Map.of("system_id", command.systemId(), "repo_path", command.repoPath()));
+        log.info("Temporal 路由索引已启动 system={} workflowId={}", command.systemId(), workflowId);
+        return workflowId;
     }
 
     private Map<String, Object> payload(StartCaseCommand command) {

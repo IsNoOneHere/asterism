@@ -37,3 +37,28 @@ Workflow 在现有 `start_modification` 内顺序执行 assignments。每段收�
 - 已上线 workflow 的确定性分支保持 replay 兼容；老 history 没有 assignments 时走单 Agent 路径。
 - 对不兼容 workflow 修改使用 Temporal worker versioning / `workflow.patched`，补 replay 测试后再移除旧分支。
 - `domain_events.sequence` 与 `work_items.last_applied_sequence` 的投影机制不得绕过。
+
+## 多模态截图管线
+
+```mermaid
+flowchart LR
+    U["业务用户粘贴截图"] --> A["控制面鉴权附件"]
+    A --> V["agent-service 视觉观察"]
+    V --> O["UiObservation 可见锚点"]
+    O --> K["PostgreSQL pg_trgm\napproved-only 检索"]
+    K --> C["用户确认疑似页面"]
+    C --> P["PRD targets hint"]
+    P --> W["Temporal case / planner"]
+    R["worker 路由索引"] --> Q["system_knowledge candidate"]
+    Q --> K
+    W --> L["ReleaseCompleted changed paths"]
+    L --> Q
+```
+
+控制面负责附件鉴权、短暂转发图片字节、知识检索和确认；agent-service 是唯一调用 vision 模型的组件；worker 负责读取 repo 并通过专用 `AsterismRouteIndexWorkflow` 回写 candidate，控制面不读取源码目录。
+
+三条铁律：
+
+1. 图片本体不进入 Temporal payload、domain event payload 或 memory，只流转附件 ID 与派生文本。
+2. 接口和代码位置依赖系统知识检索与人工确认，视觉模型只描述画面，不直接猜测实现。
+3. `system_knowledge` 只有 `approved` 条目参与匹配，candidate、rejected、disabled 均不投喂。

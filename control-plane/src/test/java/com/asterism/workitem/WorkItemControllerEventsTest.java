@@ -26,7 +26,8 @@ class WorkItemControllerEventsTest {
         var event = event();
         when(workItems.findById("wi-1")).thenReturn(Optional.of(item()));
         when(events.findByWorkItemId("wi-1")).thenReturn(List.of(event));
-        var controller = new WorkItemController(workItems, mock(TemporalCasePort.class), events, access);
+        var controller = new WorkItemController(workItems, mock(TemporalCasePort.class), events, access,
+                mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper());
 
         var timeline = controller.events("wi-1", actor);
 

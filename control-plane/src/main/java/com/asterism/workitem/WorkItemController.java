@@ -4,9 +4,14 @@ import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventRecord;
 import com.asterism.event.DomainEventType;
 import com.asterism.identity.SystemAccessService;
+import com.asterism.knowledge.KnowledgeMatchService.SuspectedTarget;
 import com.asterism.projection.WorkItemProjection;
 import com.asterism.projection.WorkItemProjectionRepository;
 import com.asterism.temporal.TemporalCasePort;
+import com.asterism.prd.PrdSessionRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -25,12 +30,17 @@ public class WorkItemController {
     private final TemporalCasePort temporal;
     private final DomainEventService events;
     private final SystemAccessService access;
+    private final PrdSessionRepository prdSessions;
+    private final ObjectMapper objectMapper;
 
-    public WorkItemController(WorkItemProjectionRepository workItems, TemporalCasePort temporal, DomainEventService events, SystemAccessService access) {
+    public WorkItemController(WorkItemProjectionRepository workItems, TemporalCasePort temporal, DomainEventService events,
+                              SystemAccessService access, PrdSessionRepository prdSessions, ObjectMapper objectMapper) {
         this.workItems = workItems;
         this.temporal = temporal;
         this.events = events;
         this.access = access;
+        this.prdSessions = prdSessions;
+        this.objectMapper = objectMapper;
     }
 
     @GetMapping
@@ -173,7 +183,20 @@ public class WorkItemController {
         return new WorkItemView(item.workItemId(), item.systemId(), item.prdId(), item.caseId(), item.title(),
                 item.lifecycleStatus(), item.approvalStatus(), item.executionAllowed(), item.currentStage(), item.waitingFor(),
                 item.ownerUserId(), item.createdBy(), item.createdAt(), item.updatedAt(), canControl,
-                canControl ? actions(item.lifecycleStatus()) : List.of());
+                canControl ? actions(item.lifecycleStatus()) : List.of(), targets(item.prdId()));
+    }
+
+    private List<SuspectedTarget> targets(String prdId) {
+        if (prdId == null) return List.of();
+        var session = prdSessions.findById(prdId).orElse(null);
+        if (session == null) return List.of();
+        try {
+            var draft = objectMapper.readValue(session.draftJson(), new TypeReference<Map<String, Object>>() {});
+            return objectMapper.convertValue(draft.getOrDefault("targets", List.of()),
+                    new TypeReference<List<SuspectedTarget>>() {});
+        } catch (JsonProcessingException error) {
+            return List.of();
+        }
     }
 
     private List<String> actions(String status) {
@@ -191,6 +214,7 @@ public class WorkItemController {
     public record WorkItemView(String workItemId, String systemId, String prdId, String caseId, String title,
                                String lifecycleStatus, String approvalStatus, boolean executionAllowed,
                                String currentStage, String waitingFor, String ownerUserId, String createdBy,
-                               Instant createdAt, Instant updatedAt, boolean canControl, List<String> availableActions) {
+                               Instant createdAt, Instant updatedAt, boolean canControl, List<String> availableActions,
+                               List<SuspectedTarget> targets) {
     }
 }

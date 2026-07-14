@@ -1,7 +1,7 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { Bot, BrainCircuit, ClipboardList, Layers3, Settings2, Users } from 'lucide-react';
+import { Bot, BrainCircuit, ClipboardList, Layers3, Map, Settings2, Users } from 'lucide-react';
 import { api, CurrentUser } from './api/client';
 import { ConfigurationPage } from './pages/ConfigurationPage';
 import { LoginPage } from './pages/LoginPage';
@@ -13,6 +13,7 @@ import { WorkItemDetailPage } from './pages/WorkItemDetailPage';
 import { SystemsPage } from './pages/SystemsPage';
 import { MemoryPage } from './pages/MemoryPage';
 import { UsersPage } from './pages/UsersPage';
+import { KnowledgePage } from './pages/KnowledgePage';
 import { SystemProvider, useCurrentSystem } from './SystemContext';
 import { SystemSelect } from './components/SystemSelect';
 
@@ -21,6 +22,7 @@ const links = [
   { to: '/systems', label: '系统配置', icon: Settings2 },
   { to: '/agents', label: 'Agent / 模型配置', icon: Bot },
   { to: '/memory', label: '系统记忆', icon: BrainCircuit },
+  { to: '/knowledge', label: '系统知识', icon: Map },
   { to: '/users', label: '用户与成员', icon: Users, adminOnly: true },
 ];
 
@@ -105,6 +107,7 @@ function AuthenticatedShell({ user, visibleLinks, onLogout }: { user: CurrentUse
           <Route path="/models" element={<Navigate to="/agents" replace />} />
           <Route path="/agents" element={<ConfigurationPage />} />
           <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/users" element={isAdmin(user) ? <UsersPage /> : <Navigate to="/work-items" replace />} />
           </Routes>
         </main>

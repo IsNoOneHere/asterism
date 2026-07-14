@@ -5,14 +5,14 @@ import { ArrowLeft } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
-import { api, PrdMessageResult } from '../api/client';
+import { api, PrdMessageResult, SuspectedTarget, UiObservation } from '../api/client';
 import { StatusBadge } from '../components/Display';
 import { SystemSelect } from '../components/SystemSelect';
 import { useCurrentSystem } from '../SystemContext';
 
 const schema = z.object({
   systemId: z.string().min(1),
-  content: z.string().min(1),
+  content: z.string(),
 });
 
 type FormValue = z.infer<typeof schema>;
@@ -33,6 +33,7 @@ export function NewPrdPage() {
   const [prdId, setPrdId] = useState<string | undefined>(routePrdId);
   const [conversationId, setConversationId] = useState<string>();
   const [result, setResult] = useState<PrdMessageResult>({ status: 'waiting_input' });
+  const [files, setFiles] = useState<File[]>([]);
   const draftSession = useQuery({
     queryKey: ['prd-session', routePrdId],
     queryFn: () => api.prdSession(routePrdId!),
@@ -76,7 +77,10 @@ export function NewPrdPage() {
   }, [draftSession.data, form, setSystemId]);
 
   const send = useMutation({
-    mutationFn: (value: FormValue) => api.sendPrdMessage(value.systemId, { prdId, content: value.content }),
+    mutationFn: async (value: FormValue) => {
+      const uploaded = await Promise.all(files.map((file) => api.uploadAttachment(value.systemId, file)));
+      return api.sendPrdMessage(value.systemId, { prdId, content: value.content, attachmentIds: uploaded.map((item) => item.attachmentId) });
+    },
     onSuccess: (data) => {
       console.info('v5 workbench PRD 对话发送成功', { prdId: data.prdId });
       if (!prdId && data.prdId) navigate('/work-items/new/' + data.prdId, { replace: true });
@@ -84,8 +88,16 @@ export function NewPrdPage() {
       setConversationId(data.conversationId);
       setResult(data);
       form.resetField('content');
+      setFiles([]);
       queryClient.invalidateQueries({ queryKey: ['conversation', data.conversationId] });
       queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
+    },
+  });
+  const confirmTarget = useMutation({
+    mutationFn: (entryId: string) => api.confirmPrdTargets(prdId!, [entryId]),
+    onSuccess: (data) => {
+      setResult((current) => ({ ...current, draft: data.draft }));
+      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] });
     },
   });
   const confirm = useMutation({
@@ -97,7 +109,7 @@ export function NewPrdPage() {
   });
 
   useEffect(() => {
-    if (prdId || !content.trim()) return;
+    if (prdId || (!content.trim() && files.length === 0)) return;
     const beforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
@@ -117,7 +129,7 @@ export function NewPrdPage() {
       window.removeEventListener('beforeunload', beforeUnload);
       document.removeEventListener('click', guardLink, true);
     };
-  }, [content, prdId]);
+  }, [content, files.length, prdId]);
 
   function reset() {
     if (routePrdId) navigate('/work-items/new');
@@ -125,11 +137,19 @@ export function NewPrdPage() {
     setConversationId(undefined);
     setResult({ status: 'waiting_input' });
     form.reset({ systemId: selectedSystemId, content: '' });
+    setFiles([]);
   }
 
   function confirmPrd() {
     if (window.confirm('确认后将创建工作项并启动执行流程，是否继续？')) confirm.mutate();
   }
+
+  function addFiles(values: FileList | File[]) {
+    setFiles((current) => [...current, ...Array.from(values).filter((file) => file.type.startsWith('image/'))].slice(0, 3));
+  }
+
+  const suspectedTargets = targetList(result.draft?.suspectedTargets);
+  const confirmedTargets = targetList(result.draft?.targets);
 
   return (
     <section className="create-workspace">
@@ -152,19 +172,26 @@ export function NewPrdPage() {
         <div className="message-list">
           {(conversation.data ?? []).map((message) => (
             <div className={'bubble ' + (message.senderType === 'user' ? 'user' : 'assistant')} key={message.messageId}>
-              {message.content}
+              {message.content && <div>{message.content}</div>}
+              {message.attachmentIds?.length > 0 && <div className="message-images">{message.attachmentIds.map((id) => <img key={id} src={api.attachmentUrl(id)} alt="需求截图" />)}</div>}
+              {message.observations?.map((observation, index) => <small className="observation-summary" key={index}>{observationSummary(observation)}</small>)}
             </div>
           ))}
         </div>
         {Boolean(result.missingFields?.length) && (
           <div className="warning">AI 需要你补充：{result.missingFields?.map((field) => fieldNames[field] || field).join('、')}</div>
         )}
-        <form onSubmit={form.handleSubmit((value) => send.mutate(value))}>
+        <form onSubmit={form.handleSubmit((value) => { if (value.content.trim() || files.length) send.mutate(value); })}>
           <label>
             需求描述
-            <textarea rows={4} {...form.register('content')} />
+            <textarea rows={4} {...form.register('content')} onPaste={(event) => {
+              const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'));
+              if (images.length) addFiles(images);
+            }} />
           </label>
-          <button type="submit" disabled={send.isPending || !selectedSystemId}>发送</button>
+          <label className="secondary file-picker">选择图片<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={(event) => { if (event.target.files) addFiles(event.target.files); event.target.value = ''; }} /></label>
+          {files.length > 0 && <div className="pending-files">{files.map((file, index) => <button type="button" className="secondary" key={file.name + index} onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}>{file.name} ×</button>)}</div>}
+          <button type="submit" disabled={send.isPending || !selectedSystemId || (!content.trim() && files.length === 0)}>发送</button>
         </form>
       </div>
       <div className="panel">
@@ -179,6 +206,10 @@ export function NewPrdPage() {
           <dt>验收标准</dt>
           <dd>{arrayText(result.draft?.acceptanceCriteria)}</dd>
         </dl>
+        {suspectedTargets.length > 0 && <div className="suspected-targets"><h3>疑似相关页面</h3>{suspectedTargets.map((target) => <div className="list-item" key={target.entryId}>
+          <div><strong>{target.title}</strong><span>{target.apiEndpoints?.join('、') || target.routePath || target.kind} · 置信度 {Math.round((target.confidence || 0) * 100)}%</span></div>
+          <button type="button" disabled={confirmTarget.isPending || confirmedTargets.some((item) => item.entryId === target.entryId)} onClick={() => confirmTarget.mutate(target.entryId)}>{confirmedTargets.some((item) => item.entryId === target.entryId) ? '已确认' : '确认页面'}</button>
+        </div>)}</div>}
         <button type="button" className={confirmable ? 'primary-strong' : ''} onClick={confirmPrd} disabled={!prdId || !confirmable || !readiness.data?.ready || confirm.isPending}>
           确认并生成工作项
         </button>
@@ -191,6 +222,7 @@ export function NewPrdPage() {
         {prdId && <button type="button" className="secondary" onClick={reset}>创建另一项</button>}
         {send.isError && <div className="error-text">{String(send.error)}</div>}
         {confirm.isError && <div className="error-text">{String(confirm.error)}</div>}
+        {confirmTarget.isError && <div className="error-text">{String(confirmTarget.error)}</div>}
       </div>
       </div>}
     </section>
@@ -203,4 +235,12 @@ function text(value: unknown) {
 
 function arrayText(value: unknown) {
   return Array.isArray(value) && value.length ? value.map(String).join('；') : '未生成';
+}
+
+function targetList(value: unknown) {
+  return Array.isArray(value) ? value as SuspectedTarget[] : [];
+}
+
+function observationSummary(observation: UiObservation) {
+  return observation.user_visible_summary || observation.userVisibleSummary || [observation.page_title || observation.pageTitle, ...(observation.text_anchors || observation.textAnchors || [])].filter(Boolean).join(' · ');
 }

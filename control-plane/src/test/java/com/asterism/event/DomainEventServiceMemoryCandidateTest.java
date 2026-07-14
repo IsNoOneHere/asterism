@@ -56,7 +56,8 @@ class DomainEventServiceMemoryCandidateTest {
 
     private Fixture fixture(MemoryItemRepository memories, DomainEventRecord saved) {
         var aggregate = mock(JdbcAggregateTemplate.class);
-        var service = new DomainEventService(events(saved), mock(ProjectionService.class), new ObjectMapper(), memories, aggregate);
+        var service = new DomainEventService(events(saved), mock(ProjectionService.class), new ObjectMapper(), memories,
+                aggregate, mock(com.asterism.knowledge.WorkItemKnowledgeLearningService.class));
         return new Fixture(service, aggregate);
     }
 

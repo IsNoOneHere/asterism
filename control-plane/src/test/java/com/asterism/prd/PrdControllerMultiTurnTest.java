@@ -59,7 +59,9 @@ class PrdControllerMultiTurnTest {
             public <T> T execute(TransactionCallback<T> action) {
                 return action.doInTransaction(null);
             }
-        }, access, systems, memories, aggregate, mock(WorkItemIdGenerator.class), mock(ExecutionReadinessService.class));
+        }, access, systems, memories, aggregate, mock(WorkItemIdGenerator.class), mock(ExecutionReadinessService.class),
+                mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
+                mock(com.asterism.knowledge.KnowledgeMatchService.class));
         var actor = new UsernamePasswordAuthenticationToken("requester", "n/a");
 
         var first = controller.message("sys-1", new PrdController.PrdMessageRequest(null, "把登录页加错误提示"), actor);
@@ -91,12 +93,47 @@ class PrdControllerMultiTurnTest {
         var controller = new PrdController(sessions, mock(ConversationMessageRepository.class), mock(ProductAgentPort.class),
                 mock(DomainEventService.class), mock(TemporalCasePort.class), objectMapper, mock(TransactionOperations.class),
                 mock(SystemAccessService.class), mock(SystemProfileRepository.class), mock(MemoryItemRepository.class),
-                mock(JdbcAggregateTemplate.class), mock(WorkItemIdGenerator.class), mock(ExecutionReadinessService.class));
+                mock(JdbcAggregateTemplate.class), mock(WorkItemIdGenerator.class), mock(ExecutionReadinessService.class),
+                mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
+                mock(com.asterism.knowledge.KnowledgeMatchService.class));
 
         assertThatThrownBy(() -> controller.message("sys-2", new PrdController.PrdMessageRequest("prd-1", "继续"),
                 new UsernamePasswordAuthenticationToken("user", "n/a")))
                 .isInstanceOf(com.asterism.common.ApiException.class)
                 .extracting(error -> ((com.asterism.common.ApiException) error).code())
                 .isEqualTo("PRD_SYSTEM_MISMATCH");
+    }
+
+    @Test
+    void imageAnalysisFailureKeepsAttachmentAndContinuesTextConversation() {
+        var sessions = mock(PrdSessionRepository.class);
+        var messages = mock(ConversationMessageRepository.class);
+        var aggregate = mock(JdbcAggregateTemplate.class);
+        when(messages.countByConversationIdAndSenderType(anyString(), anyString())).thenReturn(0L);
+        when(aggregate.insert(any(PrdSession.class))).thenAnswer(call -> call.getArgument(0));
+        when(aggregate.insert(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
+        var memories = mock(MemoryItemRepository.class);
+        when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
+        var attachments = mock(com.asterism.attachment.AttachmentService.class);
+        var attachment = new com.asterism.attachment.Attachment("att-1", "sys-1", "user", "screen.png",
+                "image/png", 12, "hash", "aa/hash", java.time.Instant.now());
+        when(attachments.requireForSystem("att-1", "sys-1")).thenReturn(attachment);
+        when(attachments.read(attachment)).thenReturn(new byte[]{1, 2, 3});
+        var imageAnalysis = mock(com.asterism.vision.ImageAnalysisService.class);
+        when(imageAnalysis.analyze(org.mockito.ArgumentMatchers.eq("sys-1"),
+                org.mockito.ArgumentMatchers.eq(attachment), org.mockito.ArgumentMatchers.any(byte[].class)))
+                .thenThrow(new IllegalStateException("vision down"));
+        var controller = new PrdController(sessions, messages, new FakeProductAgentAdapter(),
+                mock(DomainEventService.class), mock(TemporalCasePort.class), objectMapper, mock(TransactionOperations.class),
+                mock(SystemAccessService.class), mock(SystemProfileRepository.class), memories, aggregate,
+                mock(WorkItemIdGenerator.class), mock(ExecutionReadinessService.class), attachments, imageAnalysis,
+                mock(com.asterism.knowledge.KnowledgeMatchService.class));
+
+        var response = controller.message("sys-1",
+                new PrdController.PrdMessageRequest(null, "验收：页面显示明确错误", List.of("att-1")),
+                new UsernamePasswordAuthenticationToken("user", "n/a"));
+
+        assertThat(response.status()).isEqualTo("waiting_user_confirm");
+        assertThat(response.assistantMessage()).contains("图片分析不可用", "不影响文字对话");
     }
 }

@@ -1,3 +1,4 @@
+import base64
 from typing import Protocol
 
 from openai import OpenAI
@@ -15,10 +16,14 @@ class ModelConfig(BaseModel):
     model: str = ""
     base_url: str = ""
     api_key: str = ""
+    supports_vision: bool = False
 
 
 class LlmClient(Protocol):
     def complete(self, prompt: str, config: ModelConfig, json_mode: bool = False) -> str:
+        ...
+
+    def complete_vision(self, prompt: str, image: bytes, content_type: str, config: ModelConfig) -> str:
         ...
 
 
@@ -41,6 +46,20 @@ class OpenAIChatClient:
         if json_mode:
             request["response_format"] = {"type": "json_object"}
         response = client.chat.completions.create(**request)
+        return response.choices[0].message.content or ""
+
+    def complete_vision(self, prompt: str, image: bytes, content_type: str, config: ModelConfig) -> str:
+        client = OpenAI(api_key=config.api_key, **({"base_url": config.base_url} if config.base_url else {}))
+        data_url = f"data:{content_type};base64,{base64.b64encode(image).decode()}"
+        response = client.chat.completions.create(
+            model=config.model or self.settings.model,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ]}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
         return response.choices[0].message.content or ""
 
 

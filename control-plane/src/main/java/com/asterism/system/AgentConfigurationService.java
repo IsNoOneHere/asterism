@@ -56,7 +56,7 @@ public class AgentConfigurationService {
         var state = locked(systemId);
         requireProvider(request.provider());
         var profile = new ModelProfile("mp-" + UUID.randomUUID(), value(request.name()), request.provider(),
-                value(request.baseUrl()), value(request.apiKey()), value(request.model()));
+                value(request.baseUrl()), value(request.apiKey()), value(request.model()), request.supportsVision());
         state.profiles().add(profile);
         if (state.modelRouting().defaultProfileId().isBlank()) {
             state.setModelRouting(new ModelRouting(profile.id(), "", "", ""));
@@ -74,7 +74,7 @@ public class AgentConfigurationService {
         var current = state.profiles().get(index);
         var apiKey = value(request.apiKey()).isBlank() ? current.apiKey() : request.apiKey();
         state.profiles().set(index, new ModelProfile(profileId, value(request.name()), request.provider(),
-                value(request.baseUrl()), apiKey, value(request.model())));
+                value(request.baseUrl()), apiKey, value(request.model()), request.supportsVision()));
         save(state);
         log.info("模型 Profile 已更新 system={} profileId={}", systemId, profileId);
         return get(systemId);
@@ -276,13 +276,14 @@ public class AgentConfigurationService {
         return value == null ? "" : String.valueOf(value);
     }
 
-    public record ModelProfile(String id, String name, String provider, String baseUrl, String apiKey, String model) {
+    public record ModelProfile(String id, String name, String provider, String baseUrl, String apiKey, String model,
+                               boolean supportsVision) {
         ModelProfileView masked() {
-            return new ModelProfileView(id, name, provider, baseUrl, model, apiKey != null && !apiKey.isBlank());
+            return new ModelProfileView(id, name, provider, baseUrl, model, apiKey != null && !apiKey.isBlank(), supportsVision);
         }
     }
     public record ModelProfileView(String id, String name, String provider, String baseUrl, String model,
-                                   boolean apiKeySet) {}
+                                   boolean apiKeySet, boolean supportsVision) {}
     public record ModelRouting(String defaultProfileId, String prdProfileId, String planningProfileId,
                                String diffProfileId) {
         boolean references(String profileId) {
@@ -302,7 +303,8 @@ public class AgentConfigurationService {
     }
     public record AgentRole(String id, String name, String engine, String modelProfileRef, List<String> pathScope,
                             String prompt, Integer maxTurns, Integer timeoutSeconds) {}
-    public record ModelProfileRequest(String name, String provider, String baseUrl, String apiKey, String model) {}
+    public record ModelProfileRequest(String name, String provider, String baseUrl, String apiKey, String model,
+                                      boolean supportsVision) {}
     public record ModelRoutingRequest(String defaultProfileId, String prdProfileId, String planningProfileId,
                                       String diffProfileId) {}
     public record AgentRoleRequest(String name, String engine, String modelProfileRef, List<String> pathScope,

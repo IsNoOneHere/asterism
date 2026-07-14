@@ -26,7 +26,8 @@ class WorkItemControllerSignalAttemptTest {
         var access = mock(SystemAccessService.class);
         when(workItems.findById("wi-1")).thenReturn(Optional.of(item()));
         when(events.countSubmittedSignals("wi-1", "rework")).thenReturn(0L, 1L);
-        var controller = new WorkItemController(workItems, temporal, events, access);
+        var controller = new WorkItemController(workItems, temporal, events, access,
+                mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper());
         var actor = new UsernamePasswordAuthenticationToken("owner", "n/a");
 
         controller.submitSignal("wi-1", "rework", actor);
@@ -52,7 +53,8 @@ class WorkItemControllerSignalAttemptTest {
         doThrow(new RuntimeException("temporal down"))
                 .doNothing()
                 .when(temporal).signalCase(any());
-        var controller = new WorkItemController(workItems, temporal, events, access);
+        var controller = new WorkItemController(workItems, temporal, events, access,
+                mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper());
         var actor = new UsernamePasswordAuthenticationToken("owner", "n/a");
 
         assertThatThrownBy(() -> controller.ownerApproval("wi-1", actor))

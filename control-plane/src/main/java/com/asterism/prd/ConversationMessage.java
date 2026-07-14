@@ -14,7 +14,8 @@ public record ConversationMessage(
         @Column("prd_id") String prdId,
         @Column("sender_type") String senderType,
         String content,
+        @Column("attachment_ids") String attachmentIds,
+        @Column("observations_json") String observationsJson,
         @Column("created_by") String createdBy,
         @Column("created_at") Instant createdAt) {
 }
-

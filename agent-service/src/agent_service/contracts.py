@@ -86,3 +86,11 @@ class DraftResult(BaseModel):
     draft: dict[str, Any]
     missing_fields: list[str] = Field(default_factory=list)
     assistant_message: str
+
+
+class UiObservation(BaseModel):
+    page_title: str = ""
+    text_anchors: list[str] = Field(default_factory=list)
+    ui_elements: list[str] = Field(default_factory=list)
+    error_messages: list[str] = Field(default_factory=list)
+    user_visible_summary: str = ""

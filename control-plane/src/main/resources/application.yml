@@ -28,6 +28,10 @@ asterism:
     task-queue: ${V5_TEMPORAL_TASK_QUEUE:asterism}
   product-agent:
     url: ${V5_PRODUCT_AGENT_URL:http://127.0.0.1:8090/prd-draft}
+  image-analysis:
+    url: ${V5_IMAGE_ANALYSIS_URL:http://127.0.0.1:8090/analyze-image}
+  storage:
+    root: ${V5_ATTACHMENT_ROOT:runtime/attachments}
 
 springdoc:
   api-docs:

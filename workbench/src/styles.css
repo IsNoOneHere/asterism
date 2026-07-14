@@ -1648,3 +1648,9 @@ label {
     justify-self: start;
   }
 }
+.message-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.message-images img { width: 140px; height: 96px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
+.observation-summary { display: block; margin-top: 8px; opacity: .8; }
+.pending-files { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.file-picker { display: inline-flex; width: auto; cursor: pointer; margin-right: 8px; }
+.suspected-targets { margin: 18px 0; }
