@@ -1,9 +1,9 @@
 import asyncio
 import subprocess
 
-from agent_team_v5.agent_config import EngineConfig, ModelProfile
-from agent_team_v5.contracts import ExecutionPlan, ExecutionRequest
-from agent_team_v5.providers.deepagents import DeepAgentsExecutionProvider
+from asterism_worker.agent_config import EngineConfig, ModelProfile
+from asterism_worker.contracts import ExecutionPlan, ExecutionRequest
+from asterism_worker.providers.deepagents import DeepAgentsExecutionProvider
 
 
 def test_deepagents_mock_runner_collects_workspace_diff(tmp_path):

@@ -6,4 +6,4 @@ COPY pyproject.toml ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 
-CMD ["agent-team-v5", "worker"]
+CMD ["asterism-worker", "worker"]

@@ -148,6 +148,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v5/systems/{systemId}/model-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/business-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_3"];
+        put?: never;
+        post: operations["create_1"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/agent-roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v5/projections": {
         parameters: {
             query?: never;
@@ -244,6 +292,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v5/internal/worker-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["report"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v5/context-snapshots": {
         parameters: {
             query?: never;
@@ -254,6 +318,198 @@ export interface paths {
         get: operations["snapshot"];
         put?: never;
         post: operations["workerSnapshot"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateProfile"];
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/model-routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateModelRouting"];
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/model-profiles/{profileId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteProfile"];
+        options?: never;
+        head?: never;
+        patch: operations["updateProfile_1"];
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/model-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateModelConfig"];
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/execution-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateExecutionPolicy"];
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/execution-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateExecutionConfig"];
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/default-agent-role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateDefaultRole"];
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/claude-model-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateClaudeModelConfig"];
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/business-models/{modelId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["delete"];
+        options?: never;
+        head?: never;
+        patch: operations["update_1"];
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/business-model-routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["routing"];
+        trace?: never;
+    };
+    "/api/v5/systems/{systemId}/agent-roles/{roleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteRole"];
+        options?: never;
+        head?: never;
+        patch: operations["updateRole"];
+        trace?: never;
+    };
+    "/healthz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["healthz"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -308,6 +564,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v5/systems/{systemId}/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["readiness"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v5/systems/{systemId}/members": {
         parameters: {
             query?: never;
@@ -324,6 +596,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v5/systems/{systemId}/agent-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/prd-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_4"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/prd-sessions/{prdId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["detail_1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v5/memory": {
         parameters: {
             query?: never;
@@ -331,7 +651,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: operations["list_3"];
+        get: operations["list_5"];
         put?: never;
         post?: never;
         delete?: never;
@@ -348,6 +668,38 @@ export interface paths {
             cookie?: never;
         };
         get: operations["modelConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/internal/systems/{systemId}/claude-model-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["claudeModelConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/internal/execution-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["targets"];
         put?: never;
         post?: never;
         delete?: never;
@@ -480,6 +832,83 @@ export interface components {
                 [key: string]: Record<string, never>;
             };
         };
+        ModelProfileRequest: {
+            name?: string;
+            provider?: string;
+            baseUrl?: string;
+            apiKey?: string;
+            model?: string;
+        };
+        AgentConfigurationResponse: {
+            modelProfiles?: components["schemas"]["ModelProfileView"][];
+            agentRoles?: components["schemas"]["AgentRole"][];
+            modelRouting?: components["schemas"]["ModelRouting"];
+            defaultRoleId?: string;
+            executionMode?: string;
+            engines?: string[];
+        };
+        AgentRole: {
+            id?: string;
+            name?: string;
+            engine?: string;
+            modelProfileRef?: string;
+            pathScope?: string[];
+            prompt?: string;
+            /** Format: int32 */
+            maxTurns?: number;
+            /** Format: int32 */
+            timeoutSeconds?: number;
+        };
+        ModelProfileView: {
+            id?: string;
+            name?: string;
+            provider?: string;
+            baseUrl?: string;
+            model?: string;
+            apiKeySet?: boolean;
+        };
+        ModelRouting: {
+            defaultProfileId?: string;
+            prdProfileId?: string;
+            planningProfileId?: string;
+        };
+        BusinessModelRequest: {
+            name: string;
+            preset: string;
+            model: string;
+            baseUrl?: string;
+            apiKey?: string;
+        };
+        BusinessModelPoolResponse: {
+            models?: components["schemas"]["BusinessModelView"][];
+            routing?: components["schemas"]["Routing"];
+            effectiveRouting?: components["schemas"]["Routing"];
+        };
+        BusinessModelView: {
+            modelId?: string;
+            name?: string;
+            preset?: string;
+            model?: string;
+            baseUrl?: string;
+            apiKeyConfigured?: boolean;
+        };
+        Routing: {
+            defaultModelId?: string;
+            prdModelId?: string;
+            planningModelId?: string;
+            diffModelId?: string;
+        };
+        AgentRoleRequest: {
+            name?: string;
+            engine?: string;
+            modelProfileRef?: string;
+            pathScope?: string[];
+            prompt?: string;
+            /** Format: int32 */
+            maxTurns?: number;
+            /** Format: int32 */
+            timeoutSeconds?: number;
+        };
         ProjectionEventRequest: {
             eventType: string;
             systemId: string;
@@ -538,6 +967,37 @@ export interface components {
             content: string;
             sourceEventId?: string;
         };
+        TargetReadiness: {
+            systemId?: string;
+            repositoryAccessible?: boolean;
+            gitRepository?: boolean;
+            modelReady?: boolean;
+            model?: string;
+            claudeReady?: boolean;
+            claudeModel?: string;
+            claudeConfigSource?: string;
+            prdModelReady?: boolean;
+            prdModel?: string;
+            planningModelReady?: boolean;
+            planningModel?: string;
+            diffModelReady?: boolean;
+            diffModel?: string;
+            deepagentsReady?: boolean;
+            deepagentsModel?: string;
+        };
+        WorkerReadinessReport: {
+            workerId?: string;
+            taskQueue?: string;
+            defaultExecutionProvider?: string;
+            capabilities?: string[];
+            httpProviderReachable?: boolean;
+            releasePush?: boolean;
+            /** Format: date-time */
+            checkedAt?: string;
+            targets?: components["schemas"]["TargetReadiness"][];
+            /** Format: date-time */
+            receivedAt?: string;
+        };
         SnapshotRequest: {
             systemId: string;
             workItemId?: string;
@@ -547,7 +1007,55 @@ export interface components {
             manifestId?: string | null;
             approvedMemories?: Record<string, never>;
         };
-        WorkItemProjection: {
+        ProfileRequest: {
+            name: string;
+            description?: string;
+            repoPath: string;
+            ownerUserId: string;
+            allowedPaths?: string[];
+            forbiddenPaths?: string[];
+            testCommands?: string[];
+        };
+        ModelRoutingRequest: {
+            defaultProfileId?: string;
+            prdProfileId?: string;
+            planningProfileId?: string;
+        };
+        ModelConfigRequest: {
+            preset: string;
+            model: string;
+            baseUrl?: string;
+            apiKey?: string;
+        };
+        ExecutionPolicyRequest: {
+            mode?: string;
+            defaultRoleId?: string;
+        };
+        ExecutionConfigRequest: {
+            executionProvider: string;
+            /** Format: int32 */
+            claudeMaxTurns?: number;
+            /** Format: int32 */
+            executionTimeoutSeconds?: number;
+        };
+        DefaultRoleRequest: {
+            roleId?: string;
+        };
+        ClaudeModelConfigRequest: {
+            preset: string;
+            model: string;
+            baseUrl?: string;
+            reuseBusinessApiKey?: boolean;
+            businessModelId?: string;
+            apiKey?: string;
+        };
+        RoutingRequest: {
+            defaultModelId: string;
+            prdModelId?: string;
+            planningModelId?: string;
+            diffModelId?: string;
+        };
+        WorkItemView: {
             workItemId?: string;
             systemId?: string;
             prdId?: string;
@@ -559,18 +1067,56 @@ export interface components {
             currentStage?: string;
             waitingFor?: string;
             ownerUserId?: string;
-            deleted?: boolean;
-            /** Format: int64 */
-            lastAppliedSequence?: number;
-            /** Format: date-time */
-            activatedAt?: string;
-            /** Format: date-time */
-            completedAt?: string;
             createdBy?: string;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
             updatedAt?: string;
+            canControl?: boolean;
+            availableActions?: string[];
+        };
+        ReadinessIssue: {
+            code?: string;
+            severity?: string;
+            message?: string;
+        };
+        ReadinessStage: {
+            name?: string;
+            ready?: boolean;
+            detail?: string;
+        };
+        SystemReadiness: {
+            systemId?: string;
+            ready?: boolean;
+            /** Format: date-time */
+            checkedAt?: string;
+            effectiveExecutionProvider?: string;
+            stages?: components["schemas"]["ReadinessStage"][];
+            issues?: components["schemas"]["ReadinessIssue"][];
+        };
+        PrdSessionView: {
+            prdId?: string;
+            systemId?: string;
+            conversationId?: string;
+            workItemId?: string;
+            caseId?: string;
+            title?: string;
+            goal?: string;
+            draft?: {
+                [key: string]: Record<string, never>;
+            };
+            missingFields?: string[];
+            status?: string;
+            createdBy?: string;
+            creatorDisplayName?: string;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        ExecutionTarget: {
+            systemId?: string;
+            repoPath?: string;
         };
         CurrentUser: {
             userId?: string;
@@ -836,6 +1382,106 @@ export interface operations {
             };
         };
     };
+    createProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    list_3: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["BusinessModelPoolResponse"];
+                };
+            };
+        };
+    };
+    create_1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BusinessModelRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["BusinessModelPoolResponse"];
+                };
+            };
+        };
+    };
+    createRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
     ingest: {
         parameters: {
             query?: never;
@@ -972,6 +1618,28 @@ export interface operations {
             };
         };
     };
+    report: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerReadinessReport"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     snapshot: {
         parameters: {
             query: {
@@ -1018,10 +1686,394 @@ export interface operations {
             };
         };
     };
+    updateProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["SystemProfile"];
+                };
+            };
+        };
+    };
+    updateModelRouting: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelRoutingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    deleteProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+                profileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    updateProfile_1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+                profileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    updateModelConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["SystemProfile"];
+                };
+            };
+        };
+    };
+    updateExecutionPolicy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutionPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    updateExecutionConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutionConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["SystemProfile"];
+                };
+            };
+        };
+    };
+    updateDefaultRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DefaultRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    updateClaudeModelConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClaudeModelConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["SystemProfile"];
+                };
+            };
+        };
+    };
+    delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+                modelId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["BusinessModelPoolResponse"];
+                };
+            };
+        };
+    };
+    update_1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+                modelId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BusinessModelRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["BusinessModelPoolResponse"];
+                };
+            };
+        };
+    };
+    routing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["BusinessModelPoolResponse"];
+                };
+            };
+        };
+    };
+    deleteRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+                roleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    updateRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+                roleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    healthz: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": {
+                        [key: string]: Record<string, never>;
+                    };
+                };
+            };
+        };
+    };
     list: {
         parameters: {
-            query: {
-                systemId: string;
+            query?: {
+                systemId?: string;
+                scope?: string;
+                status?: string;
+                q?: string;
+                sort?: string;
             };
             header?: never;
             path?: never;
@@ -1035,7 +2087,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": Record<string, never>;
+                    "*/*": components["schemas"]["WorkItemView"][];
                 };
             };
         };
@@ -1057,7 +2109,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": components["schemas"]["WorkItemProjection"];
+                    "*/*": components["schemas"]["WorkItemView"];
                 };
             };
         };
@@ -1084,6 +2136,28 @@ export interface operations {
             };
         };
     };
+    readiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["SystemReadiness"];
+                };
+            };
+        };
+    };
     members: {
         parameters: {
             query?: never;
@@ -1106,7 +2180,73 @@ export interface operations {
             };
         };
     };
-    list_3: {
+    get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    list_4: {
+        parameters: {
+            query: {
+                systemId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["PrdSessionView"][];
+                };
+            };
+        };
+    };
+    detail_1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                prdId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["PrdSessionView"];
+                };
+            };
+        };
+    };
+    list_5: {
         parameters: {
             query: {
                 systemId: string;
@@ -1131,6 +2271,33 @@ export interface operations {
     };
     modelConfig: {
         parameters: {
+            query?: {
+                stage?: string;
+                profile_id?: string;
+            };
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": {
+                        [key: string]: Record<string, never>;
+                    };
+                };
+            };
+        };
+    };
+    claudeModelConfig: {
+        parameters: {
             query?: never;
             header?: never;
             path: {
@@ -1149,6 +2316,26 @@ export interface operations {
                     "*/*": {
                         [key: string]: Record<string, never>;
                     };
+                };
+            };
+        };
+    };
+    targets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ExecutionTarget"][];
                 };
             };
         };

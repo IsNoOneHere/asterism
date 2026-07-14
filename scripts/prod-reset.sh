@@ -8,7 +8,7 @@ if [ "${CONFIRM:-}" != "yes" ]; then
   exit 2
 fi
 
-docker compose --profile prod exec -T postgres psql -U "${V5_DB_USER:-agent_team}" -d agent_team_v5 <<'SQL'
+docker compose --profile prod exec -T postgres psql -U "${V5_DB_USER:-asterism}" -d asterism <<'SQL'
 drop schema if exists control_plane_v5 cascade;
 create schema control_plane_v5;
 SQL

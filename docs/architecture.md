@@ -1,5 +1,9 @@
 # 架构
 
+## 兼容标识
+
+Java 包、Python 模块、CLI 和容器均使用 Asterism 命名。PostgreSQL schema `control_plane_v5` 为避免迁移生产数据继续保留；Temporal workflow type `AgentTeamV5CaseWorkflow` 为兼容已有 history 继续保留，代码类名已改为 `AsterismCaseWorkflow`。
+
 ## 三层配置模型
 
 - **Model Profile**：`id/provider/baseUrl/apiKey/model`，只描述如何访问模型，不知道调用者。公开 API 删除 `apiKey` 字段，只返回 `apiKeySet`。

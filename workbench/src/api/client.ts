@@ -15,7 +15,7 @@ export type SystemProfile = Schemas['SystemProfile'] & {
   agentConfig?: string;
   modelProviderConfig?: string;
 };
-export type WorkItem = Schemas['WorkItemProjection'] & {
+export type WorkItem = Schemas['WorkItemView'] & {
   workItemId: string;
   systemId: string;
   prdId: string;

@@ -125,12 +125,12 @@ def test_execute_prompt_includes_file_contents_and_previous_attempt():
         "memories": [],
         "context_manifest_id": "manifest-1",
         "file_listing": "README.md",
-        "file_contents": {"README.md": "agent-team\n"},
+        "file_contents": {"README.md": "asterism\n"},
         "previous_attempt": {"diff": "bad", "apply_error": "patch failed"},
     })
 
     assert response.status_code == 200
-    assert "agent-team" in llm.prompts[0]
+    assert "asterism" in llm.prompts[0]
     assert "patch failed" in llm.prompts[0]
 
 

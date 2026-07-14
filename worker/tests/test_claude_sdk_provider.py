@@ -6,15 +6,15 @@ import subprocess
 
 from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUseBlock
 
-from agent_team_v5.agent_config import EngineConfig, ModelProfile
-from agent_team_v5.activities.execution import apply_patch_to_repo
-from agent_team_v5.contracts import ExecutionPlan, ExecutionRequest
-from agent_team_v5.providers.claude_sdk import CLAUDE_DISALLOWED_TOOLS, CLAUDE_TOOLS, ClaudeSdkExecutionProvider
+from asterism_worker.agent_config import EngineConfig, ModelProfile
+from asterism_worker.activities.execution import apply_patch_to_repo
+from asterism_worker.contracts import ExecutionPlan, ExecutionRequest
+from asterism_worker.providers.claude_sdk import CLAUDE_DISALLOWED_TOOLS, CLAUDE_TOOLS, ClaudeSdkExecutionProvider
 
 
 def init_repo(path):
     path.mkdir()
-    (path / "README.md").write_text("agent-team\n")
+    (path / "README.md").write_text("asterism\n")
     subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"],
@@ -72,7 +72,7 @@ def test_claude_sdk_collects_diff_and_writes_transcript(tmp_path, monkeypatch):
         assert "更新 README" in prompt
         assert "保留现有入口" in (repo / "CLAUDE.md").read_text()
         assert not (repo / ".claude").exists()
-        (repo / "README.md").write_text("agent-team v5\n")
+        (repo / "README.md").write_text("Asterism\n")
         (repo / "src").mkdir()
         (repo / "src" / "app.py").write_text("print('v5')\n")
         yield AssistantMessage(
@@ -106,7 +106,7 @@ def test_claude_sdk_collects_diff_and_writes_transcript(tmp_path, monkeypatch):
     assert result.token_usage == {"input_tokens": 120, "output_tokens": 30}
     subprocess.run(["git", "apply", "--check"], cwd=repo, input=result.diff_patch, text=True,
                    check=True, capture_output=True)
-    assert (repo / "README.md").read_text() == "agent-team\n"
+    assert (repo / "README.md").read_text() == "asterism\n"
     assert not (repo / "src").exists()
     assert len(heartbeats) == 2
     records = [json.loads(line) for line in (artifacts / "wi-1" / "agent-transcript.jsonl").read_text().splitlines()]

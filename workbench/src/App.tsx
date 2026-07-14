@@ -67,7 +67,7 @@ function AuthenticatedShell({ user, visibleLinks, onLogout }: { user: CurrentUse
   return (
     <div className="shell">
       <aside className="sidebar">
-        <div className="brand">agent-team v5</div>
+        <div className="brand">Asterism</div>
         <div className="user-chip">{user.userId}</div>
         <nav>
           {visibleLinks.map((link) => {

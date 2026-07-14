@@ -19,7 +19,7 @@ def create_app(
     if llm is None:
         llm = OpenAIChatClient(settings)
     fetch_model_config = model_config_fetcher or control_plane_model_config(settings)
-    app = FastAPI(title="agent-team v5 agent-service")
+    app = FastAPI(title="Asterism agent-service")
 
     @app.post("/plan")
     def plan(request: PlanRequest) -> ExecutionPlan:

@@ -7,12 +7,12 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from agent_team_v5.contracts import CaseInput, ExecutionPlan, ExecutionResult, PatchApplyResult, PrdSpec
-from agent_team_v5.workflows.case_lifecycle import AgentTeamV5CaseWorkflow
-from agent_team_v5.activities.execution import validate_patch_paths
+from asterism_worker.contracts import CaseInput, ExecutionPlan, ExecutionResult, PatchApplyResult, PrdSpec
+from asterism_worker.workflows.case_lifecycle import AsterismCaseWorkflow
+from asterism_worker.activities.execution import validate_patch_paths
 
 
-TASK_QUEUE = "agent-team-v5-test"
+TASK_QUEUE = "asterism-test"
 
 
 def test_workflow_runs_legal_full_lifecycle():
@@ -466,7 +466,7 @@ async def _run_workflow(
         async with Worker(
             env.client,
             task_queue=TASK_QUEUE,
-            workflows=[AgentTeamV5CaseWorkflow],
+            workflows=[AsterismCaseWorkflow],
             activities=[
                 fake_fetch_context,
                 fake_summarize_repo,
@@ -481,7 +481,7 @@ async def _run_workflow(
             ],
         ):
             handle = await env.client.start_workflow(
-                AgentTeamV5CaseWorkflow.run,
+                AsterismCaseWorkflow.run,
                 _case_input(test_commands, repo_path),
                 id=f"case-{uuid4()}",
                 task_queue=TASK_QUEUE,

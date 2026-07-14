@@ -3,10 +3,10 @@ server:
 
 spring:
   application:
-    name: agent-team-v5-control-plane
+    name: asterism-control-plane
   datasource:
-    url: ${V5_DB_URL:jdbc:postgresql://localhost:5432/agent_team_v5?stringtype=unspecified&currentSchema=control_plane_v5,public}
-    username: ${V5_DB_USER:agent_team}
+    url: ${V5_DB_URL:jdbc:postgresql://localhost:5432/asterism?stringtype=unspecified&currentSchema=control_plane_v5,public}
+    username: ${V5_DB_USER:asterism}
     password: ${V5_DB_PASSWORD:}
   flyway:
     schemas: control_plane_v5
@@ -15,7 +15,7 @@ spring:
     virtual:
       enabled: true
 
-agent-team:
+asterism:
   initial-admin-password: ${V5_ADMIN_INITIAL_PASSWORD:}
   seed-demo-data: ${V5_SEED_DEMO_DATA:false}
   demo-password: ${V5_DEMO_PASSWORD:}
@@ -25,7 +25,7 @@ agent-team:
   temporal:
     target: ${V5_TEMPORAL_TARGET:127.0.0.1:7233}
     namespace: ${V5_TEMPORAL_NAMESPACE:default}
-    task-queue: ${V5_TEMPORAL_TASK_QUEUE:agent-team-v5}
+    task-queue: ${V5_TEMPORAL_TASK_QUEUE:asterism}
   product-agent:
     url: ${V5_PRODUCT_AGENT_URL:http://127.0.0.1:8090/prd-draft}
 

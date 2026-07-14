@@ -64,7 +64,7 @@ def make_repo(name: str) -> tuple[Path, str]:
     if host_repo.exists():
         shutil.rmtree(host_repo)
     host_repo.mkdir(parents=True)
-    (host_repo / "README.md").write_text("agent-team\n", encoding="utf-8")
+    (host_repo / "README.md").write_text("asterism\n", encoding="utf-8")
     (host_repo / "app.py").write_text("print('hello')\n", encoding="utf-8")
     sh(["git", "init"], host_repo)
     sh(["git", "add", "."], host_repo)
@@ -135,7 +135,7 @@ def main() -> int:
 
     suffix = str(int(time.time()))
     system_id = f"smoke-system-{suffix}"
-    repo_name = f"agent-team-v5-smoke-{suffix}"
+    repo_name = f"asterism-smoke-{suffix}"
     host_repo, repo_path = make_repo(repo_name)
     model = os.getenv("V5_AGENT_MODEL", "gpt-4.1-mini")
     base_url = os.getenv("V5_AGENT_BASE_URL", "")
@@ -150,7 +150,7 @@ def main() -> int:
         "allowedPaths": ["README.md", "app.py"],
         "forbiddenPaths": [],
         "testCommands": [
-            "python -c \"from pathlib import Path; assert 'agent-team v5 smoke' in Path('README.md').read_text()\""
+            "python -c \"from pathlib import Path; assert 'Asterism smoke' in Path('README.md').read_text()\""
         ],
         "agentConfig": {
             "executionProvider": EXECUTION_PROVIDER,
@@ -167,7 +167,7 @@ def main() -> int:
     log("系统已创建")
 
     first = request("POST", f"/api/v5/systems/{system_id}/prd/messages", {
-        "content": "把 README 里的 agent-team 改成 agent-team v5 smoke",
+        "content": "把 README 里的 asterism 改成 Asterism smoke",
     })
     if "acceptance_criteria" not in first.get("missingFields", []):
         raise RuntimeError(f"第一轮未追问验收标准: {first}")
@@ -175,7 +175,7 @@ def main() -> int:
 
     second = request("POST", f"/api/v5/systems/{system_id}/prd/messages", {
         "prdId": first["prdId"],
-        "content": "验收标准：README 必须包含 agent-team v5 smoke。",
+        "content": "验收标准：README 必须包含 Asterism smoke。",
     })
     if second.get("status") != "waiting_user_confirm":
         raise RuntimeError(f"第二轮未进入确认态: {second}")
@@ -213,7 +213,7 @@ def main() -> int:
     branches = sh(["git", "branch", "--list", branch], host_repo)
     if branch not in branches:
         raise RuntimeError(f"repo 未出现分支 {branch}")
-    if "agent-team v5 smoke" not in (host_repo / "README.md").read_text(encoding="utf-8"):
+    if "Asterism smoke" not in (host_repo / "README.md").read_text(encoding="utf-8"):
         raise RuntimeError("README 未包含真实改动")
     log(f"真实 smoke 通过: {branch} {commit_hash}")
     return 0

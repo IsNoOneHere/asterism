@@ -2,8 +2,8 @@ import asyncio
 import json
 import subprocess
 
-from agent_team_v5.config.settings import Settings
-from agent_team_v5 import readiness
+from asterism_worker.config.settings import Settings
+from asterism_worker import readiness
 
 
 class Response:

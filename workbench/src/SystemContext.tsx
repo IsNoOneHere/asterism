@@ -1,7 +1,7 @@
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from 'react';
 import { SystemProfile } from './api/client';
 
-const STORAGE_KEY = 'agent-team-v5-system';
+const STORAGE_KEY = 'asterism-system';
 
 type SystemContextValue = {
   systems: SystemProfile[];

@@ -4,9 +4,9 @@ set -eu
 cd "$(dirname "$0")/.."
 
 CONTAINER_BIN="${V5_APPLE_CONTAINER_BIN:-container}"
-NETWORK="agent-team-v5"
-POSTGRES_VOLUME="agent-team-v5-postgres-data"
-ARTIFACTS_VOLUME="agent-team-v5-worker-artifacts"
+NETWORK="asterism"
+POSTGRES_VOLUME="asterism-postgres-data"
+ARTIFACTS_VOLUME="asterism-worker-artifacts"
 SERVICES="postgres temporal agent-service control-plane worker workbench"
 
 fail() {
@@ -92,9 +92,9 @@ prepare_env() {
   [ -d "$V5_REPO_ROOT" ] || fail "V5_REPO_ROOT 不存在: $V5_REPO_ROOT"
 
   # 只导出到当前进程树，container run 按变量名继承，不把密钥写入参数或文件。
-  V5_DB_USER="${V5_DB_USER:-agent_team}"
+  V5_DB_USER="${V5_DB_USER:-asterism}"
   : "${V5_DB_PASSWORD:?必须设置 V5_DB_PASSWORD}"
-  POSTGRES_DB="agent_team_v5"
+  POSTGRES_DB="asterism"
   POSTGRES_USER="$V5_DB_USER"
   POSTGRES_PASSWORD="$V5_DB_PASSWORD"
   # Apple volume 根目录包含 lost+found，数据库数据放到独立子目录。
@@ -119,7 +119,7 @@ prepare_env() {
   V5_RELEASE_PUSH="${V5_RELEASE_PUSH:-false}"
   V5_PROFILE="prod"
   V5_ARTIFACTS_ROOT="/app/runtime/artifacts"
-  V5_WORKSPACE_ROOT="/tmp/agent-team-v5-workspaces"
+  V5_WORKSPACE_ROOT="/tmp/asterism-workspaces"
   SPRING_PROFILES_ACTIVE="temporal,llm"
   if [ -n "${V5_APPLE_PROXY_URL:-}" ]; then
     HTTP_PROXY="$V5_APPLE_PROXY_URL"
@@ -153,10 +153,10 @@ build_image() {
 }
 
 build_images() {
-  build_image agent-team-v5-agent-service:local ./agent-service
-  build_image agent-team-v5-control-plane:local ./control-plane
-  build_image agent-team-v5-worker:local ./worker
-  build_image agent-team-v5-workbench:local ./workbench
+  build_image asterism-agent-service:local ./agent-service
+  build_image asterism-control-plane:local ./control-plane
+  build_image asterism-worker:local ./worker
+  build_image asterism-workbench:local ./workbench
 }
 
 wait_postgres() {
@@ -185,7 +185,7 @@ wait_worker_poller() {
   until "$CONTAINER_BIN" exec temporal temporal task-queue describe \
     --address 127.0.0.1:7233 \
     --namespace "${V5_TEMPORAL_NAMESPACE:-default}" \
-    --task-queue "${V5_TEMPORAL_TASK_QUEUE:-agent-team-v5}" \
+    --task-queue "${V5_TEMPORAL_TASK_QUEUE:-asterism}" \
     --task-queue-type workflow \
     --output json 2>/dev/null | grep -q '"identity"'; do
     count=$((count + 1))
@@ -224,9 +224,9 @@ up_services() {
     --env V5_AGENT_WORKER_CALLBACK_TOKEN \
     --publish 8090:8090 \
     --entrypoint /bin/sh \
-    agent-team-v5-agent-service:local \
+    asterism-agent-service:local \
     -c 'while [ ! -s /tmp/control-plane-url ]; do sleep 1; done; export V5_AGENT_CONTROL_PLANE_URL="$(cat /tmp/control-plane-url)"; if [ -s /tmp/no-proxy ]; then export NO_PROXY="$(cat /tmp/no-proxy)"; export no_proxy="$NO_PROXY"; fi; exec uvicorn agent_service.app:create_app --factory --host 0.0.0.0 --port 8090'
-  V5_DB_URL="jdbc:postgresql://$POSTGRES_IP:5432/agent_team_v5?stringtype=unspecified&currentSchema=control_plane_v5,public"
+  V5_DB_URL="jdbc:postgresql://$POSTGRES_IP:5432/asterism?stringtype=unspecified&currentSchema=control_plane_v5,public"
   V5_TEMPORAL_TARGET="$TEMPORAL_IP:7233"
   V5_PRODUCT_AGENT_URL="http://$GATEWAY_IP:8090/prd-draft"
   export V5_DB_URL V5_TEMPORAL_TARGET V5_PRODUCT_AGENT_URL
@@ -235,7 +235,7 @@ up_services() {
     --env SPRING_PROFILES_ACTIVE --env V5_DB_URL --env V5_DB_USER --env V5_DB_PASSWORD \
     --env V5_WORKER_CALLBACK_TOKEN --env V5_TEMPORAL_TARGET --env V5_PRODUCT_AGENT_URL --env V5_PROFILE --env V5_ADMIN_INITIAL_PASSWORD \
     --publish 8085:8085 \
-    agent-team-v5-control-plane:local
+    asterism-control-plane:local
   # HTTP 服务统一走宿主发布端口，避免 Apple Container 重启后动态 IP 变化。
   V5_AGENT_CONTROL_PLANE_URL="http://$GATEWAY_IP:8085"
   export V5_AGENT_CONTROL_PLANE_URL
@@ -270,12 +270,12 @@ up_services() {
     --volume "$V5_REPO_ROOT:/repos" \
     --volume "$V5_REPO_ROOT:$V5_REPO_ROOT" \
     --volume "$ARTIFACTS_VOLUME:/app/runtime/artifacts" \
-    agent-team-v5-worker:local
+    asterism-worker:local
   wait_worker_poller
 
   V5_CONTROL_PLANE_HOST="$GATEWAY_IP"
   export V5_CONTROL_PLANE_HOST
-  run_service workbench --env V5_CONTROL_PLANE_HOST --publish 8080:80 agent-team-v5-workbench:local
+  run_service workbench --env V5_CONTROL_PLANE_HOST --publish 8080:80 asterism-workbench:local
 }
 
 down_services() {

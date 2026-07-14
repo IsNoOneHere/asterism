@@ -47,5 +47,6 @@ jobs:
           cache: npm
           cache-dependency-path: workbench/package-lock.json
       - run: npm ci
+      - run: npm run check:api
       - run: npm test
       - run: npm run build

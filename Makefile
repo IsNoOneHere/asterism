@@ -15,7 +15,7 @@ AGENT_SERVICE_PYTHON ?= $(PYTHON)
 endif
 NPM ?= npm
 V5_CONTAINER_RUNTIME ?= docker
-MAVEN_TEST_FLAGS ?= -Dapi.version=1.44 -Dv5.test.db.url=jdbc:postgresql://localhost:55432/agent_team_v5?stringtype=unspecified\&currentSchema=control_plane_v5,public -Dv5.test.db.user=agent_team -Dv5.test.db.password=agent_team
+MAVEN_TEST_FLAGS ?= -Dapi.version=1.44 -Dv5.test.db.url=jdbc:postgresql://localhost:55432/asterism?stringtype=unspecified\&currentSchema=control_plane_v5,public -Dv5.test.db.user=asterism -Dv5.test.db.password=asterism
 
 .PHONY: dev prod-up prod-reset doctor smoke-real test test-java test-python test-web test-agent-service gen-client
 

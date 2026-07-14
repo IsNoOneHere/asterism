@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_team_v5.activities import execution as execution_activities
-from agent_team_v5.agent_config import AgentConstraints, EngineConfig, ModelProfile, ResolvedAgentConfig
-from agent_team_v5.activities.execution import (
+from asterism_worker.activities import execution as execution_activities
+from asterism_worker.agent_config import AgentConstraints, EngineConfig, ModelProfile, ResolvedAgentConfig
+from asterism_worker.activities.execution import (
     collect_file_context,
     git_apply_check,
     plan_execution,
@@ -19,13 +19,13 @@ from agent_team_v5.activities.execution import (
     validate_plan_targets,
     validate_patch_paths,
 )
-from agent_team_v5.config.settings import Settings
-from agent_team_v5.contracts import AgentAssignment, ExecutionPlan, ExecutionResult, PlanRequest, PrdSpec
-from agent_team_v5.providers.factory import build_execution_provider, build_planner_provider
-from agent_team_v5.providers.claude_sdk import ClaudeSdkExecutionProvider
-from agent_team_v5.providers.fake import FakeExecutionProvider
-from agent_team_v5.providers.http import HttpExecutionProvider, HttpPlannerProvider
-from agent_team_v5.providers.planner import FakePlannerProvider
+from asterism_worker.config.settings import Settings
+from asterism_worker.contracts import AgentAssignment, ExecutionPlan, ExecutionResult, PlanRequest, PrdSpec
+from asterism_worker.providers.factory import build_execution_provider, build_planner_provider
+from asterism_worker.providers.claude_sdk import ClaudeSdkExecutionProvider
+from asterism_worker.providers.fake import FakeExecutionProvider
+from asterism_worker.providers.http import HttpExecutionProvider, HttpPlannerProvider
+from asterism_worker.providers.planner import FakePlannerProvider
 
 
 def test_execution_provider_comes_from_settings():
@@ -135,7 +135,7 @@ diff --git a/docs/readme.md b/docs/readme.md
 def test_run_execution_cleans_temporary_workspace(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "README.md").write_text("agent-team\n")
+    (repo / "README.md").write_text("asterism\n")
     workspace_root = tmp_path / "workspaces"
     monkeypatch.setenv("V5_WORKSPACE_ROOT", str(workspace_root))
     monkeypatch.setenv("V5_EXECUTION_PROVIDER", "fake")
@@ -162,7 +162,7 @@ def test_run_execution_cleans_temporary_workspace(tmp_path, monkeypatch):
 def test_run_execution_sends_file_context_and_retries_bad_diff(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "README.md").write_text("agent-team\n")
+    (repo / "README.md").write_text("asterism\n")
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
@@ -194,8 +194,8 @@ def test_run_execution_sends_file_context_and_retries_bad_diff(tmp_path, monkeyp
                     "--- a/README.md\n"
                     "+++ b/README.md\n"
                     "@@ -1 +1 @@\n"
-                    "-agent-team\n"
-                    "+agent-team v5\n"
+                    "-asterism\n"
+                    "+Asterism\n"
                 ),
             )
 
@@ -215,7 +215,7 @@ def test_run_execution_sends_file_context_and_retries_bad_diff(tmp_path, monkeyp
 
     assert result["summary"] == "good"
     assert "README.md" in provider.requests[0].file_listing
-    assert provider.requests[0].file_contents["README.md"].startswith("agent-team")
+    assert provider.requests[0].file_contents["README.md"].startswith("asterism")
     assert provider.requests[1].previous_attempt is not None
     assert "missing.md" in provider.requests[1].previous_attempt.apply_error
 
@@ -255,12 +255,12 @@ def test_validate_plan_targets_blocks_unsafe_paths(tmp_path):
 def test_release_repo_commits_to_work_item_branch(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "README.md").write_text("agent-team\n")
+    (repo / "README.md").write_text("asterism\n")
     (repo / "unrelated.txt").write_text("keep\n")
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "add", "README.md", "unrelated.txt"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
-    (repo / "README.md").write_text("agent-team v5\n")
+    (repo / "README.md").write_text("Asterism\n")
     (repo / "unrelated.txt").write_text("user change\n")
     (repo / "untracked.txt").write_text("user file\n")
 
@@ -289,7 +289,7 @@ def test_summarize_repo_includes_tree_and_manifest_heads(tmp_path):
     (repo / ".git").mkdir()
     (repo / "node_modules").mkdir()
     (repo / "src" / "app.py").write_text("print('hi')\n")
-    (repo / "README.md").write_text("agent-team\n" + "line\n" * 40)
+    (repo / "README.md").write_text("asterism\n" + "line\n" * 40)
 
     summary = summarize_repo_path(str(repo))
 
@@ -298,7 +298,7 @@ def test_summarize_repo_includes_tree_and_manifest_heads(tmp_path):
     assert ".git" not in summary
     assert "node_modules" not in summary
     assert "README.md" in summary
-    assert "agent-team" in summary
+    assert "asterism" in summary
 
 
 def test_summarize_repo_truncates_large_output(tmp_path):
@@ -363,7 +363,7 @@ def test_claude_provider_without_key_fails_fast():
 def test_run_execution_returns_empty_diff_to_state_machine(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "README.md").write_text("agent-team\n")
+    (repo / "README.md").write_text("asterism\n")
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"],

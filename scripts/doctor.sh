@@ -42,10 +42,10 @@ case "$RUNTIME" in
 esac
 
 checking "DB 连接"
-runtime_exec postgres pg_isready -U "${V5_DB_USER:-agent_team}" >/dev/null 2>&1 && ok "DB 可连" || fail "DB 不可连"
+runtime_exec postgres pg_isready -U "${V5_DB_USER:-asterism}" >/dev/null 2>&1 && ok "DB 可连" || fail "DB 不可连"
 # 生产 JDBC 固定使用 control_plane_v5 schema，doctor 也按真实 schema 检查。
 checking "迁移表"
-runtime_exec postgres psql -U "${V5_DB_USER:-agent_team}" -d agent_team_v5 -tAc "select count(*) from control_plane_v5.flyway_schema_history" >/dev/null 2>&1 && ok "迁移表可读" || fail "迁移表不可读"
+runtime_exec postgres psql -U "${V5_DB_USER:-asterism}" -d asterism -tAc "select count(*) from control_plane_v5.flyway_schema_history" >/dev/null 2>&1 && ok "迁移表可读" || fail "迁移表不可读"
 checking "Temporal 容器"
 runtime_running temporal && ok "Temporal 容器运行中" || fail "Temporal 未运行"
 checking "control-plane 健康检查"
@@ -58,17 +58,17 @@ checking "worker poller"
 if runtime_exec temporal temporal task-queue describe \
   --address "$TEMPORAL_ADDRESS" \
   --namespace "${V5_TEMPORAL_NAMESPACE:-default}" \
-  --task-queue "${V5_TEMPORAL_TASK_QUEUE:-agent-team-v5}" \
+  --task-queue "${V5_TEMPORAL_TASK_QUEUE:-asterism}" \
   --task-queue-type workflow \
-  --output json >/tmp/agent-team-v5-task-queue.json 2>/tmp/agent-team-v5-task-queue.err \
-  && grep -q '"identity"' /tmp/agent-team-v5-task-queue.json; then
+  --output json >/tmp/asterism-task-queue.json 2>/tmp/asterism-task-queue.err \
+  && grep -q '"identity"' /tmp/asterism-task-queue.json; then
   ok "worker poller 已注册"
 elif runtime_exec temporal temporal task-queue describe \
   --address "$TEMPORAL_ADDRESS" \
   --namespace "${V5_TEMPORAL_NAMESPACE:-default}" \
-  --task-queue "${V5_TEMPORAL_TASK_QUEUE:-agent-team-v5}" \
-  --task-queue-type workflow >/tmp/agent-team-v5-task-queue.txt 2>/tmp/agent-team-v5-task-queue.err \
-  && grep -q "Identity" /tmp/agent-team-v5-task-queue.txt; then
+  --task-queue "${V5_TEMPORAL_TASK_QUEUE:-asterism}" \
+  --task-queue-type workflow >/tmp/asterism-task-queue.txt 2>/tmp/asterism-task-queue.err \
+  && grep -q "Identity" /tmp/asterism-task-queue.txt; then
   ok "worker poller 已注册"
 else
   fail "worker poller 未注册"

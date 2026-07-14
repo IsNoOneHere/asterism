@@ -4,8 +4,8 @@ import json
 import httpx
 import pytest
 
-from agent_team_v5.agent_config import available_role_metadata, resolve_agent_config
-from agent_team_v5.config.settings import Settings
+from asterism_worker.agent_config import available_role_metadata, resolve_agent_config
+from asterism_worker.config.settings import Settings
 
 
 def client_for(data: dict) -> httpx.AsyncClient:

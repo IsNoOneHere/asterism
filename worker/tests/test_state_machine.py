@@ -1,6 +1,6 @@
-from agent_team_v5.contracts import ExecutionResult, LifecycleStatus
-from agent_team_v5.context.snapshot import approved_memory_only
-from agent_team_v5.workflows.state_machine import CaseState, TERMINAL_STATUSES, TRANSITIONS
+from asterism_worker.contracts import ExecutionResult, LifecycleStatus
+from asterism_worker.context.snapshot import approved_memory_only
+from asterism_worker.workflows.state_machine import CaseState, TERMINAL_STATUSES, TRANSITIONS
 import json
 from pathlib import Path
 

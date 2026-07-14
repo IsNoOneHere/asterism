@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-DEST=${1:-"$(dirname "$ROOT")/agent-team"}
+DEST=${1:-"$(dirname "$ROOT")/asterism"}
 
 if [ -d "$DEST" ] && [ "$(find "$DEST" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
   echo "导出目标必须为空: $DEST" >&2
@@ -33,6 +33,6 @@ fi
 
 git -C "$DEST" init
 git -C "$DEST" add .
-git -C "$DEST" -c user.name=agent-team -c user.email=maintainers@example.invalid \
+git -C "$DEST" -c user.name=asterism -c user.email=maintainers@example.invalid \
   -c commit.gpgsign=false commit -m "Initial open-source release"
 echo "已导出独立仓库: $DEST"

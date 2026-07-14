@@ -1,5 +1,5 @@
 {
-  "name": "agent-team-v5-workbench",
+  "name": "asterism-workbench",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "vitest run",
-    "gen:api": "openapi-typescript http://localhost:8085/api/v5/openapi.json -o src/api/generated.ts"
+    "gen:api": "openapi-typescript ../docs/openapi.json -o src/api/generated.ts",
+    "check:api": "npm run gen:api && git diff --exit-code -- src/api/generated.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",
