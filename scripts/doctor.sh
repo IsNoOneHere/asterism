@@ -50,8 +50,20 @@ checking "Temporal 容器"
 runtime_running temporal && ok "Temporal 容器运行中" || fail "Temporal 未运行"
 checking "control-plane 健康检查"
 curl -fsS http://127.0.0.1:8085/healthz >/dev/null && ok "control-plane /healthz" || fail "control-plane /healthz 失败"
+checking "agent-service 健康检查"
+AGENT_HEALTH="$(curl -fsS http://127.0.0.1:8090/healthz)"
+echo "$AGENT_HEALTH" | grep -q '"ok":true' && ok "agent-service /healthz" || fail "agent-service /healthz 失败"
 checking "agent-service 模型配置"
-curl -fsS http://127.0.0.1:8090/healthz | grep -q '"model_config_available":true' && ok "agent-service model config 可用" || fail "agent-service model config 不可用"
+# 系统 ModelProfile 是主配置源；仅在没有系统配置时检查旧环境回落。
+MODEL_SYSTEM_ID="$(runtime_exec postgres psql -U "${V5_DB_USER:-asterism}" -d asterism -tAc \
+  "select system_id from control_plane_v5.systems s where exists (select 1 from jsonb_array_elements(coalesce(model_provider_config->'modelProfiles','[]'::jsonb)) p where coalesce(p->>'model','')<>'' and coalesce(p->>'apiKey','')<>'') limit 1")"
+if [ -n "$MODEL_SYSTEM_ID" ]; then
+  curl -fsS "http://127.0.0.1:8090/readiness?system_id=$MODEL_SYSTEM_ID" | grep -q '"ready":true' \
+    && ok "系统 ModelProfile 可用" || fail "系统 ModelProfile 不可用"
+else
+  echo "$AGENT_HEALTH" | grep -q '"model_config_available":true' \
+    && ok "旧环境模型配置可用" || fail "未配置系统 ModelProfile 或旧环境模型"
+fi
 checking "worker 容器"
 runtime_running worker && ok "worker 容器运行中" || fail "worker 未运行"
 checking "worker poller"
