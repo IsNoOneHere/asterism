@@ -100,8 +100,10 @@ beforeEach(() => {
   workItems = [];
   agentConfiguration = {
     modelProfiles: [{ id: 'mp-1', name: 'Claude 主模型', provider: 'anthropic', model: 'claude-sonnet', baseUrl: '', apiKeySet: true }],
+    modelRouting: { defaultProfileId: 'mp-1', prdProfileId: '', planningProfileId: 'mp-1' },
     agentRoles: [{ id: 'role-1', name: '前端 Agent', engine: 'claude_sdk', modelProfileRef: 'mp-1', pathScope: ['web'], prompt: '只改前端', maxTurns: 40, timeoutSeconds: 900 }],
     defaultRoleId: 'role-1',
+    executionMode: 'single',
     engines: ['claude_sdk', 'deepagents', 'http', 'fake'],
   };
   prdPostCount = 0;
@@ -121,6 +123,15 @@ beforeEach(() => {
     }
     if (path === '/api/v5/systems/alpha-system/default-agent-role' && init?.method === 'PATCH') {
       agentConfiguration = { ...agentConfiguration, defaultRoleId: JSON.parse(String(init.body)).roleId };
+      return jsonResponse(agentConfiguration);
+    }
+    if (path === '/api/v5/systems/alpha-system/model-routing' && init?.method === 'PATCH') {
+      agentConfiguration = { ...agentConfiguration, modelRouting: JSON.parse(String(init.body)) };
+      return jsonResponse(agentConfiguration);
+    }
+    if (path === '/api/v5/systems/alpha-system/execution-policy' && init?.method === 'PATCH') {
+      const body = JSON.parse(String(init.body));
+      agentConfiguration = { ...agentConfiguration, executionMode: body.mode, defaultRoleId: body.defaultRoleId };
       return jsonResponse(agentConfiguration);
     }
     if (path.endsWith('/readiness')) return jsonResponse({ ready: true, stages: [], issues: [], effectiveExecutionProvider: 'claude_sdk' });
@@ -199,11 +210,11 @@ test('renders workbench navigation after auth check', async () => {
   expect(await screen.findByText('工作项中心')).toBeInTheDocument();
   expect(await screen.findByLabelText('当前工作系统')).toBeInTheDocument();
   expect(document.querySelector('.sidebar [aria-label="当前工作系统"]')).not.toBeInTheDocument();
-  expect(document.querySelectorAll('.sidebar nav svg')).toHaveLength(5);
+  expect(document.querySelectorAll('.sidebar nav svg')).toHaveLength(6);
   expect(document.querySelectorAll('.page-tabs svg')).toHaveLength(2);
 });
 
-test.each(['/work-items/drafts', '/systems', '/agents', '/memory', '/users'])('shows global system context on %s', async (path) => {
+test.each(['/work-items/drafts', '/systems', '/models', '/agents', '/memory', '/users'])('shows global system context on %s', async (path) => {
   renderApp(path);
 
   expect(await screen.findByLabelText('当前工作系统')).toBeInTheDocument();
@@ -316,25 +327,37 @@ test('work item detail shows drafted execution plan from event timeline', async 
   expect(screen.queryByText(/"steps"/)).not.toBeInTheDocument();
 });
 
-test('agent config shows three layer model and masked key state', async () => {
-  renderApp('/agents');
+test('model and agent configuration are separate pages', async () => {
+  renderApp('/models');
 
-  expect(await screen.findByRole('heading', { name: '三层关系' })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: 'Model Profiles' })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: 'Agent Roles' })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: '模型配置' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '模型连接' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '阶段默认模型' })).toBeInTheDocument();
   expect((await screen.findAllByText('Claude 主模型')).length).toBeGreaterThan(0);
-  expect(screen.getByText('已配置')).toBeInTheDocument();
-  expect(screen.getAllByText('前端 Agent').length).toBeGreaterThan(0);
-  expect(screen.getByLabelText('默认角色')).toHaveValue('role-1');
+  expect(screen.getByText('Key 已配置')).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: '代码 Agent' })).not.toBeInTheDocument();
+});
+
+test('model profile edit opens a centered dialog instead of an inline form', async () => {
+  renderApp('/models');
+  await screen.findAllByText('Claude 主模型');
+  fireEvent.click(screen.getByRole('button', { name: '编辑 Claude 主模型' }));
+
+  expect(screen.getByRole('dialog')).toHaveAttribute('open');
+  expect(screen.getByRole('heading', { name: '编辑 Model Profile' })).toBeInTheDocument();
+  expect(screen.getByLabelText('Profile 名称')).toHaveValue('Claude 主模型');
+  expect(screen.getByLabelText('API Key')).toHaveAttribute('placeholder', '留空保留现有 Key');
 });
 
 test('model profile can be added without ever rendering its key', async () => {
-  renderApp('/agents');
+  renderApp('/models');
   await screen.findAllByText('Claude 主模型');
+  fireEvent.click(screen.getByRole('button', { name: '新增 Profile' }));
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('Profile 名称'), { target: { value: 'OpenAI 兼容模型' } });
   fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: 'gpt-4.1' } });
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'new-secret' } });
-  fireEvent.click(screen.getByRole('button', { name: '添加 Profile' }));
+  fireEvent.click(screen.getByRole('button', { name: '保存 Profile' }));
   expect((await screen.findAllByText('OpenAI 兼容模型')).length).toBeGreaterThan(0);
   expect(screen.queryByText('new-secret')).not.toBeInTheDocument();
   expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/model-profiles', expect.objectContaining({ method: 'POST' }));
@@ -343,15 +366,29 @@ test('model profile can be added without ever rendering its key', async () => {
 test('agent role can select deepagents profile and path scope', async () => {
   renderApp('/agents');
   await screen.findAllByText('前端 Agent');
-  fireEvent.change(screen.getByLabelText('角色名称'), { target: { value: '后端 Agent' } });
+  expect(screen.getByRole('heading', { name: '代码 Agent' })).toBeInTheDocument();
+  expect(screen.getByLabelText('默认 Agent')).toHaveValue('role-1');
+  fireEvent.change(screen.getByLabelText('Agent 名称'), { target: { value: '后端 Agent' } });
   fireEvent.change(screen.getByLabelText('执行内核'), { target: { value: 'deepagents' } });
   fireEvent.change(screen.getByLabelText('Model Profile'), { target: { value: 'mp-1' } });
   fireEvent.change(screen.getByLabelText(/Path Scope/), { target: { value: 'api\ndb' } });
-  fireEvent.click(screen.getByRole('button', { name: '添加角色' }));
+  fireEvent.click(screen.getByRole('button', { name: '添加 Agent' }));
 
   expect((await screen.findAllByText('后端 Agent')).length).toBeGreaterThan(0);
   const call = vi.mocked(fetch).mock.calls.find(([path]) => path === '/api/v5/systems/alpha-system/agent-roles');
   expect(JSON.parse(String(call?.[1]?.body)).pathScope).toEqual(['api', 'db']);
+});
+
+test('agent execution policy switches between single and planner selection', async () => {
+  renderApp('/agents');
+  await screen.findAllByText('前端 Agent');
+
+  fireEvent.click(screen.getByRole('radio', { name: /Planner 选择/ }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+    '/api/v5/systems/alpha-system/execution-policy',
+    expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ mode: 'planner_select', defaultRoleId: 'role-1' }) }),
+  ));
 });
 
 test('work item detail shows execution provider and token summary', async () => {

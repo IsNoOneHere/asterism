@@ -131,6 +131,12 @@ export type ModelProfile = {
   apiKeySet: boolean;
 };
 
+export type ModelRouting = {
+  defaultProfileId: string;
+  prdProfileId: string;
+  planningProfileId: string;
+};
+
 export type AgentRole = {
   id: string;
   name: string;
@@ -144,8 +150,10 @@ export type AgentRole = {
 
 export type AgentConfiguration = {
   modelProfiles: ModelProfile[];
+  modelRouting: ModelRouting;
   agentRoles: AgentRole[];
   defaultRoleId: string;
+  executionMode: 'single' | 'planner_select';
   engines: string[];
 };
 
@@ -250,6 +258,14 @@ export const api = {
   updateDefaultAgentRole: (systemId: string, roleId: string) =>
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/default-agent-role', {
       method: 'PATCH', headers: jsonHeaders, body: JSON.stringify({ roleId }),
+    }),
+  updateModelRouting: (systemId: string, body: ModelRouting) =>
+    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-routing', {
+      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
+    }),
+  updateExecutionPolicy: (systemId: string, mode: 'single' | 'planner_select', defaultRoleId: string) =>
+    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/execution-policy', {
+      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify({ mode, defaultRoleId }),
     }),
   systemReadiness: (systemId: string) => request<SystemReadiness>('/api/v5/systems/' + encodeURIComponent(systemId) + '/readiness'),
   sendPrdMessage: (systemId: string, body: { prdId?: string; content: string }) =>

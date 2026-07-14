@@ -48,18 +48,36 @@ class AgentConfigurationApiIntegrationTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.modelProfiles[0].apiKeySet").value(true))
+                .andExpect(jsonPath("$.modelRouting.defaultProfileId").exists())
                 .andExpect(content().string(not(containsString("profile-secret"))))
                 .andExpect(content().string(not(containsString("\"apiKey\":"))))
                 .andReturn().getResponse().getContentAsString();
         var profileId = objectMapper.readTree(profileResponse).get("modelProfiles").get(0).get("id").asText();
 
-        mockMvc.perform(post("/api/v5/systems/" + systemId + "/agent-roles")
+        var roleResponse = mockMvc.perform(post("/api/v5/systems/" + systemId + "/agent-roles")
                         .contentType(MediaType.APPLICATION_JSON).content("""
                                 {"name":"前端 Agent","engine":"claude_sdk","modelProfileRef":"%s",
                                  "pathScope":["web"],"prompt":"只改前端","maxTurns":12,"timeoutSeconds":300}
                                 """.formatted(profileId)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.agentRoles[0].engine").value("claude_sdk"));
+                .andExpect(jsonPath("$.agentRoles[0].engine").value("claude_sdk"))
+                .andReturn().getResponse().getContentAsString();
+        var roleId = objectMapper.readTree(roleResponse).get("agentRoles").get(0).get("id").asText();
+
+        mockMvc.perform(patch("/api/v5/systems/" + systemId + "/model-routing")
+                        .contentType(MediaType.APPLICATION_JSON).content("""
+                                {"defaultProfileId":"%s","prdProfileId":"%s","planningProfileId":"%s"}
+                                """.formatted(profileId, profileId, profileId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.modelRouting.planningProfileId").value(profileId));
+
+        mockMvc.perform(patch("/api/v5/systems/" + systemId + "/execution-policy")
+                        .contentType(MediaType.APPLICATION_JSON).content("""
+                                {"mode":"single","defaultRoleId":"%s"}
+                                """.formatted(roleId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.executionMode").value("single"))
+                .andExpect(jsonPath("$.defaultRoleId").value(roleId));
 
         mockMvc.perform(get("/api/v5/systems"))
                 .andExpect(status().isOk())
@@ -71,6 +89,7 @@ class AgentConfigurationApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.configured").value(true))
                 .andExpect(jsonPath("$.model").value("claude-sonnet"))
+                .andExpect(jsonPath("$.execution_mode").value("single"))
                 .andExpect(jsonPath("$.model_profiles[0].api_key").value("profile-secret"))
                 .andExpect(jsonPath("$.agent_roles[0].model_profile_ref").value(profileId));
     }

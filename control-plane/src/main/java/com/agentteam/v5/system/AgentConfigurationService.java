@@ -23,6 +23,7 @@ public class AgentConfigurationService {
     private static final Logger log = LoggerFactory.getLogger(AgentConfigurationService.class);
     private static final List<String> ENGINES = List.of("fake", "http", "claude_sdk", "deepagents");
     private static final List<String> PROVIDERS = List.of("anthropic", "openai-compat");
+    private static final List<String> EXECUTION_MODES = List.of("single", "planner_select");
 
     private final SystemProfileRepository systems;
     private final JdbcAggregateTemplate aggregate;
@@ -41,12 +42,13 @@ public class AgentConfigurationService {
         var state = load(systemId);
         return new AgentConfigurationResponse(
                 state.profiles().stream().map(ModelProfile::masked).toList(),
-                state.roles(), state.defaultRoleId(), ENGINES);
+                state.roles(), state.modelRouting(), state.defaultRoleId(), state.executionMode(), ENGINES);
     }
 
     public InternalAgentConfiguration internal(String systemId) {
         var state = load(systemId);
-        return new InternalAgentConfiguration(state.profiles(), state.roles(), state.defaultRoleId());
+        return new InternalAgentConfiguration(state.profiles(), state.modelRouting(), state.roles(),
+                state.defaultRoleId(), state.executionMode());
     }
 
     @Transactional
@@ -56,6 +58,9 @@ public class AgentConfigurationService {
         var profile = new ModelProfile("mp-" + UUID.randomUUID(), value(request.name()), request.provider(),
                 value(request.baseUrl()), value(request.apiKey()), value(request.model()));
         state.profiles().add(profile);
+        if (state.modelRouting().defaultProfileId().isBlank()) {
+            state.setModelRouting(new ModelRouting(profile.id(), "", ""));
+        }
         save(state);
         log.info("模型 Profile 已新增 system={} profileId={}", systemId, profile.id());
         return get(systemId);
@@ -81,6 +86,9 @@ public class AgentConfigurationService {
         profileIndex(state.profiles(), profileId);
         if (state.roles().stream().anyMatch(role -> profileId.equals(role.modelProfileRef()))) {
             throw new ApiException(HttpStatus.CONFLICT, "MODEL_PROFILE_IN_USE", "模型 Profile 正在被 Agent 角色使用");
+        }
+        if (state.modelRouting().references(profileId)) {
+            throw new ApiException(HttpStatus.CONFLICT, "MODEL_PROFILE_IN_USE", "模型 Profile 正在被业务阶段使用");
         }
         state.profiles().removeIf(profile -> profile.id().equals(profileId));
         save(state);
@@ -134,6 +142,33 @@ public class AgentConfigurationService {
         return get(systemId);
     }
 
+    @Transactional
+    public AgentConfigurationResponse updateModelRouting(String systemId, ModelRoutingRequest request) {
+        // 内置业务阶段只保存 Profile 引用，模型连接仍由 Model Profile 统一维护。
+        var state = locked(systemId);
+        requireOptionalProfile(state.profiles(), request.defaultProfileId());
+        requireOptionalProfile(state.profiles(), request.prdProfileId());
+        requireOptionalProfile(state.profiles(), request.planningProfileId());
+        state.setModelRouting(new ModelRouting(value(request.defaultProfileId()), value(request.prdProfileId()),
+                value(request.planningProfileId())));
+        save(state);
+        log.info("模型阶段路由已更新 system={} defaultProfileId={}", systemId, request.defaultProfileId());
+        return get(systemId);
+    }
+
+    @Transactional
+    public AgentConfigurationResponse updateExecutionPolicy(String systemId, ExecutionPolicyRequest request) {
+        // 执行模式和默认 Agent 一次更新，避免前端分两次保存产生中间状态。
+        var state = locked(systemId);
+        if (!EXECUTION_MODES.contains(request.mode())) throw new IllegalArgumentException("不支持的执行模式: " + request.mode());
+        if (!value(request.defaultRoleId()).isBlank()) roleIndex(state.roles(), request.defaultRoleId());
+        state.setExecutionMode(request.mode());
+        state.setDefaultRoleId(value(request.defaultRoleId()));
+        save(state);
+        log.info("Agent 执行策略已更新 system={} mode={} roleId={}", systemId, request.mode(), request.defaultRoleId());
+        return get(systemId);
+    }
+
     private State locked(String systemId) {
         lock.lockBusinessModels(systemId);
         return load(systemId);
@@ -142,14 +177,18 @@ public class AgentConfigurationService {
     private State load(String systemId) {
         var profile = systems.findById(systemId).orElseThrow(() -> new IllegalArgumentException("系统不存在"));
         var config = new LinkedHashMap<>(readMap(profile.modelProviderConfig()));
+        var executionMode = value(config.get("executionMode"));
         return new State(profile, config, readProfiles(config.get("modelProfiles")),
-                readRoles(config.get("agentRoles")), value(config.get("defaultAgentRoleId")));
+                readRouting(config.get("modelRouting")), readRoles(config.get("agentRoles")),
+                value(config.get("defaultAgentRoleId")), executionMode.isBlank() ? "planner_select" : executionMode);
     }
 
     private void save(State state) {
         state.config().put("modelProfiles", state.profiles());
+        state.config().put("modelRouting", state.modelRouting());
         state.config().put("agentRoles", state.roles());
         state.config().put("defaultAgentRoleId", state.defaultRoleId());
+        state.config().put("executionMode", state.executionMode());
         var current = state.profile();
         aggregate.update(new SystemProfile(current.systemId(), current.name(), current.description(), current.repoPath(),
                 current.ownerUserId(), current.allowedPaths(), current.forbiddenPaths(), current.testCommands(),
@@ -162,6 +201,13 @@ public class AgentConfigurationService {
 
     private List<AgentRole> readRoles(Object value) {
         return convertList(value, AgentRole.class);
+    }
+
+    private ModelRouting readRouting(Object value) {
+        if (value == null) return new ModelRouting("", "", "");
+        var routing = objectMapper.convertValue(value, ModelRouting.class);
+        return new ModelRouting(value(routing.defaultProfileId()), value(routing.prdProfileId()),
+                value(routing.planningProfileId()));
     }
 
     private <T> List<T> convertList(Object value, Class<T> type) {
@@ -183,6 +229,10 @@ public class AgentConfigurationService {
 
     private void requireProvider(String provider) {
         if (!PROVIDERS.contains(provider)) throw new IllegalArgumentException("不支持的模型 provider: " + provider);
+    }
+
+    private void requireOptionalProfile(List<ModelProfile> profiles, String profileId) {
+        if (!value(profileId).isBlank()) profileIndex(profiles, profileId);
     }
 
     private AgentRole role(String id, AgentRoleRequest request) {
@@ -228,37 +278,62 @@ public class AgentConfigurationService {
     }
     public record ModelProfileView(String id, String name, String provider, String baseUrl, String model,
                                    boolean apiKeySet) {}
+    public record ModelRouting(String defaultProfileId, String prdProfileId, String planningProfileId) {
+        boolean references(String profileId) {
+            return profileId.equals(defaultProfileId) || profileId.equals(prdProfileId) || profileId.equals(planningProfileId);
+        }
+
+        String resolve(String stage) {
+            return switch (stage == null ? "default" : stage) {
+                case "prd" -> prdProfileId == null || prdProfileId.isBlank() ? defaultProfileId : prdProfileId;
+                case "planning" -> planningProfileId == null || planningProfileId.isBlank() ? defaultProfileId : planningProfileId;
+                case "default" -> defaultProfileId;
+                default -> "";
+            };
+        }
+    }
     public record AgentRole(String id, String name, String engine, String modelProfileRef, List<String> pathScope,
                             String prompt, Integer maxTurns, Integer timeoutSeconds) {}
     public record ModelProfileRequest(String name, String provider, String baseUrl, String apiKey, String model) {}
+    public record ModelRoutingRequest(String defaultProfileId, String prdProfileId, String planningProfileId) {}
     public record AgentRoleRequest(String name, String engine, String modelProfileRef, List<String> pathScope,
                                    String prompt, Integer maxTurns, Integer timeoutSeconds) {}
     public record DefaultRoleRequest(String roleId) {}
+    public record ExecutionPolicyRequest(String mode, String defaultRoleId) {}
     public record AgentConfigurationResponse(List<ModelProfileView> modelProfiles, List<AgentRole> agentRoles,
-                                             String defaultRoleId, List<String> engines) {}
-    public record InternalAgentConfiguration(List<ModelProfile> modelProfiles, List<AgentRole> agentRoles,
-                                             String defaultRoleId) {}
+                                             ModelRouting modelRouting, String defaultRoleId, String executionMode,
+                                             List<String> engines) {}
+    public record InternalAgentConfiguration(List<ModelProfile> modelProfiles, ModelRouting modelRouting,
+                                             List<AgentRole> agentRoles, String defaultRoleId, String executionMode) {}
 
     private static final class State {
         private final SystemProfile profile;
         private final LinkedHashMap<String, Object> config;
         private final List<ModelProfile> profiles;
+        private ModelRouting modelRouting;
         private final List<AgentRole> roles;
         private String defaultRoleId;
+        private String executionMode;
 
         State(SystemProfile profile, LinkedHashMap<String, Object> config, List<ModelProfile> profiles,
-              List<AgentRole> roles, String defaultRoleId) {
+              ModelRouting modelRouting, List<AgentRole> roles, String defaultRoleId, String executionMode) {
             this.profile = profile;
             this.config = config;
             this.profiles = profiles;
+            this.modelRouting = modelRouting;
             this.roles = roles;
             this.defaultRoleId = defaultRoleId;
+            this.executionMode = executionMode;
         }
         SystemProfile profile() { return profile; }
         LinkedHashMap<String, Object> config() { return config; }
         List<ModelProfile> profiles() { return profiles; }
+        ModelRouting modelRouting() { return modelRouting; }
+        void setModelRouting(ModelRouting value) { modelRouting = value; }
         List<AgentRole> roles() { return roles; }
         String defaultRoleId() { return defaultRoleId; }
         void setDefaultRoleId(String value) { defaultRoleId = value; }
+        String executionMode() { return executionMode; }
+        void setExecutionMode(String value) { executionMode = value; }
     }
 }

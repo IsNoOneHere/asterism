@@ -1,9 +1,10 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { Bot, BrainCircuit, ClipboardList, Layers3, Settings2, Users } from 'lucide-react';
+import { Bot, BrainCircuit, ClipboardList, Cpu, Layers3, Settings2, Users } from 'lucide-react';
 import { api, CurrentUser } from './api/client';
 import { AgentConfigPage } from './pages/AgentConfigPage';
+import { ModelConfigPage } from './pages/ModelConfigPage';
 import { LoginPage } from './pages/LoginPage';
 import { NewPrdPage } from './pages/NewPrdPage';
 import { PrdDraftsPage } from './pages/PrdDraftsPage';
@@ -19,6 +20,7 @@ import { SystemSelect } from './components/SystemSelect';
 const links = [
   { to: '/work-items', label: '工作项', icon: ClipboardList },
   { to: '/systems', label: '系统配置', icon: Settings2 },
+  { to: '/models', label: '模型配置', icon: Cpu },
   { to: '/agents', label: 'Agent 配置', icon: Bot },
   { to: '/memory', label: '系统记忆', icon: BrainCircuit },
   { to: '/users', label: '用户与成员', icon: Users, adminOnly: true },
@@ -102,6 +104,7 @@ function AuthenticatedShell({ user, visibleLinks, onLogout }: { user: CurrentUse
           <Route path="/work-items/:workItemId" element={<WorkItemDetailPage />} />
           <Route path="/new" element={<Navigate to="/work-items/new" replace />} />
           <Route path="/systems" element={<SystemsPage />} />
+          <Route path="/models" element={<ModelConfigPage />} />
           <Route path="/agents" element={<AgentConfigPage />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/users" element={isAdmin(user) ? <UsersPage /> : <Navigate to="/work-items" replace />} />

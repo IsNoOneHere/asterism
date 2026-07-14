@@ -64,3 +64,16 @@ def test_real_role_with_missing_profile_is_configuration_error():
 
     with pytest.raises(RuntimeError, match="缺少有效模型 Profile"):
         asyncio.run(resolve())
+
+
+def test_single_agent_mode_hides_roles_from_planner():
+    data = {
+        "execution_mode": "single",
+        "agent_roles": [{"id": "frontend", "name": "前端", "engine": "deepagents", "path_scope": ["web"]}],
+    }
+
+    async def resolve():
+        async with client_for(data) as client:
+            return await available_role_metadata(Settings(), "sys", client)
+
+    assert asyncio.run(resolve()) == []

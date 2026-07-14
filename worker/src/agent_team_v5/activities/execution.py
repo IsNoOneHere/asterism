@@ -119,6 +119,14 @@ async def plan_execution(request: dict) -> dict:
     parsed = parsed.model_copy(update={"available_roles": roles})
     log.info("执行 planner", extra={"provider": settings.planner_provider, "manifest_id": parsed.context_manifest_id})
     plan = await provider.plan(parsed)
+    # 无可选角色时清空模型自带的分配；有角色时只接受系统已发布的引用。
+    if not roles:
+        plan = plan.model_copy(update={"assignments": []})
+    else:
+        role_ids = {role["id"] for role in roles}
+        unknown_role = next((item.role for item in plan.assignments if item.role not in role_ids), "")
+        if unknown_role:
+            raise RuntimeError(f"Planner 返回了不可用的 Agent role: {unknown_role}")
     return plan.model_dump()
 
 

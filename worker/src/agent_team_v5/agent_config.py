@@ -125,7 +125,11 @@ async def available_role_metadata(settings: Settings, system_id: str, client: ht
         if response.status_code == 404:
             return []
         response.raise_for_status()
-        roles = response.json().get("agent_roles", [])
+        data = response.json()
+        # 单 Agent 模式不向 Planner 暴露角色，执行阶段会使用默认 Agent。
+        if data.get("execution_mode", "planner_select") == "single":
+            return []
+        roles = data.get("agent_roles", [])
         return [
             {
                 "id": str(role.get("id", "")),

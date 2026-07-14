@@ -71,4 +71,18 @@ public class AgentConfigurationController {
         access.requireOwnerOrAdmin(systemId, actor);
         return config.updateDefaultRole(systemId, request);
     }
+
+    @PatchMapping("/model-routing")
+    AgentConfigurationService.AgentConfigurationResponse updateModelRouting(@PathVariable String systemId,
+            @RequestBody AgentConfigurationService.ModelRoutingRequest request, Authentication actor) {
+        access.requireOwnerOrAdmin(systemId, actor);
+        return config.updateModelRouting(systemId, request);
+    }
+
+    @PatchMapping("/execution-policy")
+    AgentConfigurationService.AgentConfigurationResponse updateExecutionPolicy(@PathVariable String systemId,
+            @RequestBody AgentConfigurationService.ExecutionPolicyRequest request, Authentication actor) {
+        access.requireOwnerOrAdmin(systemId, actor);
+        return config.updateExecutionPolicy(systemId, request);
+    }
 }

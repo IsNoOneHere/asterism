@@ -62,8 +62,13 @@ public class InternalSystemController {
             return item;
         }).toList());
         response.put("default_role_id", agentConfig.defaultRoleId());
+        response.put("execution_mode", agentConfig.executionMode());
 
-        if (!model.managed() && profileId.isBlank()) {
+        var routedProfileId = agentConfig.modelRouting().resolve(stage);
+        if (profileId.isBlank() && !routedProfileId.isBlank()) {
+            agentConfig.modelProfiles().stream().filter(profile -> profile.id().equals(routedProfileId)).findFirst()
+                    .ifPresent(profile -> applyProfile(response, profile));
+        } else if (!model.managed() && profileId.isBlank()) {
             var defaultProfileId = agentConfig.agentRoles().stream()
                     .filter(role -> role.id().equals(agentConfig.defaultRoleId()))
                     .map(AgentConfigurationService.AgentRole::modelProfileRef).findFirst().orElse("");

@@ -10,6 +10,7 @@ from agent_team_v5.agent_config import AgentConstraints, EngineConfig, ModelProf
 from agent_team_v5.activities.execution import (
     collect_file_context,
     git_apply_check,
+    plan_execution,
     release_repo,
     run_execution,
     run_validation,
@@ -19,7 +20,7 @@ from agent_team_v5.activities.execution import (
     validate_patch_paths,
 )
 from agent_team_v5.config.settings import Settings
-from agent_team_v5.contracts import ExecutionResult, PlanRequest, PrdSpec
+from agent_team_v5.contracts import AgentAssignment, ExecutionPlan, ExecutionResult, PlanRequest, PrdSpec
 from agent_team_v5.providers.factory import build_execution_provider, build_planner_provider
 from agent_team_v5.providers.claude_sdk import ClaudeSdkExecutionProvider
 from agent_team_v5.providers.fake import FakeExecutionProvider
@@ -87,6 +88,26 @@ def test_fake_planner_uses_acceptance_criteria_for_deterministic_steps():
 
     assert plan.steps == ["按验收标准修改: 错误密码时显示提示"]
     assert plan.target_files == ["src"]
+
+
+def test_single_agent_mode_discards_planner_assignments(monkeypatch):
+    class AssignedPlanner:
+        async def plan(self, request):
+            return ExecutionPlan(assignments=[AgentAssignment(role="frontend")])
+
+    async def no_roles(settings, system_id):
+        return []
+
+    monkeypatch.setattr(execution_activities, "build_planner_provider", lambda settings: AssignedPlanner())
+    monkeypatch.setattr(execution_activities, "available_role_metadata", no_roles)
+
+    result = asyncio.run(plan_execution({
+        "system_id": "system-1",
+        "prd": {"goal": "改登录页"},
+        "context_manifest_id": "manifest-1",
+    }))
+
+    assert result["assignments"] == []
 
 
 def test_patch_path_gate_blocks_forbidden_path():
