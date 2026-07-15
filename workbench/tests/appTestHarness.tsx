@@ -174,6 +174,20 @@ export function resetAppTestState() {
         draft: { title: '登录页错误提示', goal: '改登录页', acceptanceCriteria: ['错误密码时提示'] },
       });
     }
+    if (path === '/api/v5/prd-sessions/prd-1/draft' && init?.method === 'PATCH') {
+      const body = JSON.parse(String(init.body));
+      return jsonResponse({
+        ...body,
+        draft: body,
+        missingFields: [],
+        status: 'waiting_user_confirm',
+      });
+    }
+    if (path === '/api/v5/prd-sessions/prd-1/targets/confirm' && init?.method === 'POST') {
+      const { entryIds, accepted } = JSON.parse(String(init.body));
+      const target = { entryId: entryIds[0], kind: 'page', title: '登录页', routePath: '/login', apiEndpoints: ['POST /api/login'], confidence: 0.9 };
+      return jsonResponse({ draft: accepted ? { suspectedTargets: [target], targets: [target] } : { suspectedTargets: [] } });
+    }
     if (path.startsWith('/api/v5/systems/alpha-system/') && init?.method === 'PATCH') {
       return jsonResponse((responses['/api/v5/systems'] as unknown[])[0]);
     }

@@ -516,6 +516,22 @@ export interface paths {
         patch: operations["updateRole"];
         trace?: never;
     };
+    "/api/v5/prd-sessions/{prdId}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateDraft"];
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -848,6 +864,7 @@ export interface components {
             draft?: {
                 [key: string]: Record<string, never>;
             };
+            assistantPending?: boolean;
         };
         ModelProfileRequest: {
             name?: string;
@@ -969,6 +986,7 @@ export interface components {
         };
         TargetConfirmationRequest: {
             entryIds?: string[];
+            accepted?: boolean;
         };
         TargetConfirmationResponse: {
             draft?: {
@@ -1087,6 +1105,20 @@ export interface components {
         DefaultRoleRequest: {
             roleId?: string;
         };
+        DraftUpdateRequest: {
+            title?: string;
+            goal?: string;
+            acceptanceCriteria?: string[];
+        };
+        DraftUpdateResponse: {
+            title?: string;
+            goal?: string;
+            draft?: {
+                [key: string]: Record<string, never>;
+            };
+            missingFields?: string[];
+            status?: string;
+        };
         SuspectedTarget: {
             entryId?: string;
             kind?: string;
@@ -1160,6 +1192,26 @@ export interface components {
         ExecutionTarget: {
             systemId?: string;
             repoPath?: string;
+        };
+        ConversationMessageView: {
+            messageId?: string;
+            conversationId?: string;
+            systemId?: string;
+            prdId?: string;
+            senderType?: string;
+            content?: string;
+            attachmentIds?: string[];
+            observations?: {
+                [key: string]: Record<string, never>;
+            }[];
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        ConversationResponse: {
+            messages?: components["schemas"]["ConversationMessageView"][];
+            pendingAssistant?: boolean;
+            /** Format: date-time */
+            pendingSince?: string;
         };
         CurrentUser: {
             userId?: string;
@@ -1414,8 +1466,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description OK */
-            200: {
+            /** @description Accepted */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2091,6 +2143,32 @@ export interface operations {
             };
         };
     };
+    updateDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                prdId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["DraftUpdateResponse"];
+                };
+            };
+        };
+    };
     healthz: {
         parameters: {
             query?: never;
@@ -2380,7 +2458,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": Record<string, never>;
+                    "*/*": components["schemas"]["ConversationResponse"];
                 };
             };
         };

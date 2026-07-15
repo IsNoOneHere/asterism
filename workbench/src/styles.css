@@ -1658,3 +1658,13 @@ label {
 .pending-files { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .file-picker { display: inline-flex; width: auto; cursor: pointer; margin-right: 8px; }
 .suspected-targets { margin: 18px 0; }
+.draft-editor { display: grid; gap: 12px; margin: 12px 0 18px; }
+.draft-acceptance { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.draft-acceptance.missing { border-color: #b7791f; background: #fff8e8; }
+.draft-field-tip { color: #8a5a12; font-size: .9rem; }
+.draft-criterion { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.target-confirmation-cards { display: grid; gap: 8px; margin-top: 10px; }
+.target-confirmation-card { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid #cbd5df; }
+.target-confirmation-card span { font-size: .88rem; color: var(--muted); }
+.target-confirmation-actions { display: flex; gap: 8px; }
+.chat-confirm-prd { justify-self: start; }

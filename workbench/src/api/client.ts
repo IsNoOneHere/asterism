@@ -125,6 +125,14 @@ export type PrdMessageResult = {
   assistantPending?: boolean;
 };
 
+export type PrdDraftUpdate = {
+  title?: string;
+  goal?: string;
+  draft: Record<string, unknown>;
+  missingFields: string[];
+  status: string;
+};
+
 export type PrdSession = {
   prdId: string;
   systemId: string;
@@ -286,9 +294,13 @@ export const api = {
   attachmentUrl: (attachmentId: string) => '/api/v5/attachments/' + encodeURIComponent(attachmentId),
   sendPrdMessage: (systemId: string, body: { prdId?: string; content: string; attachmentIds?: string[] }) =>
     request<PrdMessageResult>('/api/v5/systems/' + systemId + '/prd/messages', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
-  confirmPrdTargets: (prdId: string, entryIds: string[]) =>
+  confirmPrdTargets: (prdId: string, entryIds: string[], accepted = true) =>
     request<{ draft: Record<string, unknown> }>('/api/v5/prd-sessions/' + encodeURIComponent(prdId) + '/targets/confirm', {
-      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ entryIds }),
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ entryIds, accepted }),
+    }),
+  updatePrdDraft: (prdId: string, body: { title: string; goal: string; acceptanceCriteria: string[] }) =>
+    request<PrdDraftUpdate>('/api/v5/prd-sessions/' + encodeURIComponent(prdId) + '/draft', {
+      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
     }),
   confirmPrd: (prdId: string) =>
     request<PrdMessageResult>('/api/v5/prd-sessions/' + prdId + '/confirm', { method: 'POST' }),

@@ -16,6 +16,7 @@ const schema = z.object({
 });
 
 type FormValue = z.infer<typeof schema>;
+type DraftEditorValue = { title: string; goal: string; acceptanceCriteria: string[] };
 
 const fieldNames: Record<string, string> = {
   acceptanceCriteria: '验收标准',
@@ -35,6 +36,7 @@ export function NewPrdPage() {
   const [result, setResult] = useState<PrdMessageResult>({ status: 'waiting_input' });
   const [files, setFiles] = useState<File[]>([]);
   const [optimisticUser, setOptimisticUser] = useState<{ content: string; display: string }>();
+  const [draftEditor, setDraftEditor] = useState<DraftEditorValue>({ title: '', goal: '', acceptanceCriteria: [] });
   const completedAssistant = useRef<string>();
   const sessionPrdId = routePrdId || prdId;
   const draftSession = useQuery({
@@ -78,6 +80,7 @@ export function NewPrdPage() {
     setPrdId(session.prdId);
     setConversationId(session.conversationId);
     setResult({ status: session.status, draft: session.draft, missingFields: session.missingFields, workItemId: session.workItemId });
+    setDraftEditor(editorValue(session.draft, session.title, session.goal));
   }, [draftSession.data, form, setSystemId]);
 
   const send = useMutation({
@@ -99,10 +102,22 @@ export function NewPrdPage() {
     onError: () => setOptimisticUser(undefined),
   });
   const confirmTarget = useMutation({
-    mutationFn: (entryId: string) => api.confirmPrdTargets(prdId!, [entryId]),
+    mutationFn: ({ entryId, accepted }: { entryId: string; accepted: boolean }) =>
+      api.confirmPrdTargets(prdId!, [entryId], accepted),
     onSuccess: (data) => {
       setResult((current) => ({ ...current, draft: data.draft }));
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] });
+      queryClient.invalidateQueries({ queryKey: ['prd-session', prdId] });
+    },
+  });
+  const saveDraft = useMutation({
+    mutationFn: () => api.updatePrdDraft(prdId!, draftEditor),
+    onSuccess: (data) => {
+      setResult((current) => ({ ...current, status: data.status, draft: data.draft, missingFields: data.missingFields }));
+      setDraftEditor(editorValue(data.draft, data.title, data.goal));
+      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] });
+      queryClient.invalidateQueries({ queryKey: ['prd-session', prdId] });
+      queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
     },
   });
   const confirm = useMutation({
@@ -156,6 +171,7 @@ export function NewPrdPage() {
     setConversationId(undefined);
     setResult({ status: 'waiting_input' });
     setOptimisticUser(undefined);
+    setDraftEditor({ title: '', goal: '', acceptanceCriteria: [] });
     form.reset({ systemId: selectedSystemId, content: '' });
     setFiles([]);
   }
@@ -170,8 +186,14 @@ export function NewPrdPage() {
 
   const suspectedTargets = targetList(result.draft?.suspectedTargets);
   const confirmedTargets = targetList(result.draft?.targets);
+  const unconfirmedTargets = suspectedTargets.filter((target) =>
+    !confirmedTargets.some((confirmed) => confirmed.entryId === target.entryId));
   const pendingAssistant = send.isPending || Boolean(result.assistantPending) || Boolean(conversation.data?.pendingAssistant);
   const conversationMessages = conversation.data?.messages ?? [];
+  const latestAssistantId = [...conversationMessages].reverse()
+    .find((message) => message.senderType === 'assistant')?.messageId;
+  const acceptanceMissing = result.missingFields?.some((field) => ['acceptanceCriteria', 'acceptance_criteria'].includes(field));
+  const draftEditable = ['need_clarification', 'waiting_user_confirm'].includes(result.status || '');
 
   return (
     <section className="create-workspace">
@@ -197,11 +219,30 @@ export function NewPrdPage() {
               {message.content && <div>{message.content}</div>}
               {message.attachmentIds?.length > 0 && <div className="message-images">{message.attachmentIds.map((id) => <img key={id} src={api.attachmentUrl(id)} alt="需求截图" />)}</div>}
               {message.observations?.map((observation, index) => <small className="observation-summary" key={index}>{observationSummary(observation)}</small>)}
+              {message.messageId === latestAssistantId && unconfirmedTargets.length > 0 && (
+                <div className="target-confirmation-cards">
+                  {unconfirmedTargets.map((target) => (
+                    <div className="target-confirmation-card" key={target.entryId}>
+                      <strong>{target.title}</strong>
+                      <span>{target.apiEndpoints?.join('、') || target.routePath || target.kind}</span>
+                      <div className="target-confirmation-actions">
+                        <button type="button" disabled={confirmTarget.isPending} onClick={() => confirmTarget.mutate({ entryId: target.entryId, accepted: true })}>是这个</button>
+                        <button type="button" className="secondary" disabled={confirmTarget.isPending} onClick={() => confirmTarget.mutate({ entryId: target.entryId, accepted: false })}>不是</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
           {optimisticUser && !conversationMessages.some((message) => message.senderType === 'user' && message.content === optimisticUser.content)
             && <div className="bubble user">{optimisticUser.display}</div>}
           {pendingAssistant && <PendingAssistantBubble />}
+          {confirmable && !pendingAssistant && (
+            <button type="button" className="primary-strong chat-confirm-prd" onClick={confirmPrd} disabled={!readiness.data?.ready || confirm.isPending}>
+              确认 PRD
+            </button>
+          )}
         </div>
         {Boolean(result.missingFields?.length) && (
           <div className="warning">AI 需要你补充：{result.missingFields?.map((field) => fieldNames[field] || field).join('、')}</div>
@@ -229,16 +270,38 @@ export function NewPrdPage() {
         <dl className="summary-list">
           <dt>状态</dt>
           <dd><StatusBadge value={result.lifecycleStatus || result.status || 'waiting_input'} /></dd>
-          <dt>标题</dt>
-          <dd>{text(result.draft?.title)}</dd>
-          <dt>目标</dt>
-          <dd>{text(result.draft?.goal)}</dd>
-          <dt>验收标准</dt>
-          <dd>{arrayText(result.draft?.acceptanceCriteria)}</dd>
         </dl>
+        <div className="draft-editor">
+          <label>
+            标题
+            <input aria-label="PRD 标题" value={draftEditor.title} disabled={!draftEditable || pendingAssistant}
+              onChange={(event) => setDraftEditor((current) => ({ ...current, title: event.target.value }))} />
+          </label>
+          <label>
+            目标
+            <textarea aria-label="PRD 目标" rows={3} value={draftEditor.goal} disabled={!draftEditable || pendingAssistant}
+              onChange={(event) => setDraftEditor((current) => ({ ...current, goal: event.target.value }))} />
+          </label>
+          <div className={'draft-acceptance ' + (acceptanceMissing ? 'missing' : '')}>
+            <strong>验收标准</strong>
+            {acceptanceMissing && <div className="draft-field-tip">可以直接在这里填写，不用打字描述</div>}
+            {draftEditor.acceptanceCriteria.map((criterion, index) => (
+              <div className="draft-criterion" key={index}>
+                <input aria-label={`验收标准 ${index + 1}`} value={criterion} disabled={!draftEditable || pendingAssistant}
+                  onChange={(event) => setDraftEditor((current) => ({ ...current, acceptanceCriteria: current.acceptanceCriteria.map((item, itemIndex) => itemIndex === index ? event.target.value : item) }))} />
+                <button type="button" className="secondary" aria-label={`删除验收标准 ${index + 1}`} disabled={!draftEditable || pendingAssistant}
+                  onClick={() => setDraftEditor((current) => ({ ...current, acceptanceCriteria: current.acceptanceCriteria.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>
+              </div>
+            ))}
+            <button type="button" className="secondary" disabled={!draftEditable || pendingAssistant}
+              onClick={() => setDraftEditor((current) => ({ ...current, acceptanceCriteria: [...current.acceptanceCriteria, ''] }))}>添加验收标准</button>
+          </div>
+          <button type="button" onClick={() => saveDraft.mutate()}
+            disabled={!prdId || !draftEditable || pendingAssistant || saveDraft.isPending}>保存草稿</button>
+        </div>
         {suspectedTargets.length > 0 && <div className="suspected-targets"><h3>疑似相关页面</h3>{suspectedTargets.map((target) => <div className="list-item" key={target.entryId}>
           <div><strong>{target.title}</strong><span>{target.apiEndpoints?.join('、') || target.routePath || target.kind} · 置信度 {Math.round((target.confidence || 0) * 100)}%</span></div>
-          <button type="button" disabled={confirmTarget.isPending || confirmedTargets.some((item) => item.entryId === target.entryId)} onClick={() => confirmTarget.mutate(target.entryId)}>{confirmedTargets.some((item) => item.entryId === target.entryId) ? '已确认' : '确认页面'}</button>
+          <button type="button" disabled={confirmTarget.isPending || confirmedTargets.some((item) => item.entryId === target.entryId)} onClick={() => confirmTarget.mutate({ entryId: target.entryId, accepted: true })}>{confirmedTargets.some((item) => item.entryId === target.entryId) ? '已确认' : '确认页面'}</button>
         </div>)}</div>}
         <button type="button" className={confirmable ? 'primary-strong' : ''} onClick={confirmPrd} disabled={!prdId || !confirmable || pendingAssistant || !readiness.data?.ready || confirm.isPending}>
           确认并生成工作项
@@ -253,6 +316,7 @@ export function NewPrdPage() {
         {send.isError && <div className="error-text">{String(send.error)}</div>}
         {confirm.isError && <div className="error-text">{String(confirm.error)}</div>}
         {confirmTarget.isError && <div className="error-text">{String(confirmTarget.error)}</div>}
+        {saveDraft.isError && <div className="error-text">{String(saveDraft.error)}</div>}
       </div>
       </div>}
     </section>
@@ -263,12 +327,12 @@ export function PendingAssistantBubble() {
   return <div className="bubble assistant pending" role="status" aria-live="polite">正在分析…</div>;
 }
 
-function text(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value : '未生成';
-}
-
-function arrayText(value: unknown) {
-  return Array.isArray(value) && value.length ? value.map(String).join('；') : '未生成';
+function editorValue(draft: Record<string, unknown>, title?: string, goal?: string): DraftEditorValue {
+  return {
+    title: typeof draft.title === 'string' ? draft.title : title || '',
+    goal: typeof draft.goal === 'string' ? draft.goal : goal || '',
+    acceptanceCriteria: Array.isArray(draft.acceptanceCriteria) ? draft.acceptanceCriteria.map(String) : [],
+  };
 }
 
 function targetList(value: unknown) {

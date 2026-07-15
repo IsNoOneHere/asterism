@@ -112,7 +112,8 @@ public class PrdConversationService {
     }
 
     @Transactional
-    public Map<String, Object> confirmTargets(String prdId, List<String> entryIds, Authentication actor) {
+    public Map<String, Object> confirmTargets(String prdId, List<String> entryIds, boolean accepted,
+                                              Authentication actor) {
         var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
         access.requireMember(current.systemId(), actor);
         var draft = draftCodec.read(current.draftJson());
@@ -121,18 +122,71 @@ public class PrdConversationService {
                 .filter(target -> selectedIds.contains(target.entryId()))
                 .toList();
         if (selected.isEmpty()) throw new IllegalArgumentException("请选择待确认的页面");
-        // 多次确认时保留已有结果，同一知识条目只保留一次。
-        var merged = new LinkedHashMap<String, KnowledgeMatchService.SuspectedTarget>();
-        draft.targets().forEach(target -> merged.put(target.entryId(), target));
-        selected.forEach(target -> merged.put(target.entryId(), target));
-        var updated = draft.withTargets(List.copyOf(merged.values()));
+        PrdDraft updated;
+        if (accepted) {
+            // 多次确认时保留已有结果，同一知识条目只保留一次。
+            var merged = new LinkedHashMap<String, KnowledgeMatchService.SuspectedTarget>();
+            draft.targets().forEach(target -> merged.put(target.entryId(), target));
+            selected.forEach(target -> merged.put(target.entryId(), target));
+            updated = draft.withTargets(List.copyOf(merged.values()));
+        } else {
+            // 用户否认的候选直接移除，后续不再重复展示。
+            updated = draft.withSuspectedTargets(draft.suspectedTargets().stream()
+                    .filter(target -> !selectedIds.contains(target.entryId()))
+                    .toList());
+        }
         var now = Instant.now();
         aggregate.update(new PrdSession(current.prdId(), current.systemId(), current.conversationId(), current.workItemId(),
                 current.caseId(), current.title(), current.goal(), draftCodec.write(updated), current.missingFields(),
                 current.status(), current.createdBy(), current.confirmedBy(), current.confirmedAt(), current.createdAt(), now));
         aggregate.insert(new ConversationMessage("msg-" + UUID.randomUUID(), current.conversationId(), current.systemId(),
-                current.prdId(), "user", "已确认截图对应页面", "[]", "[]", actor.getName(), now));
+                current.prdId(), "user", accepted ? "已确认截图对应页面" : "不是这个页面", "[]", "[]", actor.getName(), now));
         return draftCodec.toMap(updated);
+    }
+
+    @Transactional
+    public DraftUpdateResponse updateDraft(String prdId, String title, String goal, List<String> acceptanceCriteria,
+                                           Authentication actor) {
+        var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
+        access.requireMember(current.systemId(), actor);
+        if (!List.of("need_clarification", "waiting_user_confirm").contains(current.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "PRD_DRAFT_NOT_EDITABLE", "当前状态不能编辑 PRD");
+        }
+        // 手工编辑与后台回合互斥，避免旧快照覆盖用户刚保存的内容。
+        if (messages.findFirstByConversationIdAndSenderTypeOrderByCreatedAtAsc(
+                current.conversationId(), PENDING_SENDER).isPresent()) {
+            throw new ApiException(HttpStatus.CONFLICT, "PRD_ASSISTANT_PENDING", "AI 正在分析，请稍候");
+        }
+        var currentDraft = draftCodec.read(current.draftJson());
+        var updatedTitle = title == null ? first(currentDraft.title(), current.title()) : title.trim();
+        var updatedGoal = goal == null ? first(currentDraft.goal(), current.goal()) : goal.trim();
+        var criteria = acceptanceCriteria == null ? null : acceptanceCriteria.stream()
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .toList();
+        var draft = currentDraft.withManualChanges(updatedTitle, updatedGoal, criteria);
+        var missing = new ArrayList<>(readList(current.missingFields()));
+        missing.removeIf(field -> List.of("title", "goal", "acceptanceCriteria", "acceptance_criteria").contains(field));
+        if (updatedTitle == null || updatedTitle.isBlank()) missing.add("title");
+        if (updatedGoal == null || updatedGoal.isBlank()) missing.add("goal");
+        if (draft.acceptanceCriteria().isEmpty()) missing.add("acceptance_criteria");
+        var status = missing.isEmpty() ? "waiting_user_confirm" : "need_clarification";
+        var now = Instant.now();
+        var messageId = "msg-" + UUID.randomUUID();
+        aggregate.update(new PrdSession(current.prdId(), current.systemId(), current.conversationId(), current.workItemId(),
+                current.caseId(), updatedTitle, updatedGoal, draftCodec.write(draft), json(missing), status,
+                current.createdBy(), current.confirmedBy(), current.confirmedAt(), current.createdAt(), now));
+        aggregate.insert(new ConversationMessage(messageId, current.conversationId(), current.systemId(), current.prdId(),
+                "system", "用户手动更新了验收标准", "[]", "[]", actor.getName(), now));
+        append(DomainEventType.PRDUpdated, current.systemId(), current.prdId(), actor.getName(),
+                "PRDUpdated:" + current.prdId() + ":manual:" + messageId,
+                Map.of("source", "manual_edit", "status", status));
+        log.info("PRD draft 已手工更新 prdId={} status={}", current.prdId(), status);
+        return new DraftUpdateResponse(updatedTitle, updatedGoal, draftCodec.toMap(draft), List.copyOf(missing), status);
+    }
+
+    private String first(String preferred, String fallback) {
+        return preferred == null ? fallback : preferred;
     }
 
     private void executeTurn(PreparedTurn turn) {
@@ -262,7 +316,7 @@ public class PrdConversationService {
             var target = match.targets().getFirst();
             message.append("\n你反馈的是不是【").append(target.title()).append("】页面？");
             if (!target.apiEndpoints().isEmpty()) message.append("对应接口 ").append(String.join("、", target.apiEndpoints())).append("。");
-            message.append("请在右侧确认。");
+            message.append("请确认。");
         } else if (match.knowledgeEmpty()) {
             message.append("\n系统知识库为空，可让管理员运行路由索引。");
         }
@@ -299,6 +353,10 @@ public class PrdConversationService {
 
     public record PrdMessageResponse(String prdId, String conversationId, String status, String assistantMessage,
                                      List<String> missingFields, Map<String, Object> draft, boolean assistantPending) {
+    }
+
+    public record DraftUpdateResponse(String title, String goal, Map<String, Object> draft,
+                                      List<String> missingFields, String status) {
     }
 
     private record PreparedTurn(PrdSession session, boolean newSession, ConversationMessage userMessage,

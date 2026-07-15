@@ -134,6 +134,66 @@ test('draft editor restores session in the independent creation workspace', asyn
   expect(screen.queryByRole('heading', { name: '需求记录' })).not.toBeInTheDocument();
 });
 
+test('draft editor highlights and saves missing acceptance criteria', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-1' && !init?.method) {
+      return jsonResponse({
+        prdId: 'prd-1', systemId: 'alpha-system', conversationId: 'conv-prd-1', title: '登录提示', goal: '说明失败原因',
+        status: 'need_clarification', createdBy: 'admin', draft: { title: '登录提示', goal: '说明失败原因', acceptanceCriteria: [] }, missingFields: ['acceptance_criteria'],
+      });
+    }
+    return fallback(input, init);
+  });
+  renderApp('/work-items/new/prd-1');
+
+  expect(await screen.findByText('可以直接在这里填写，不用打字描述')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '添加验收标准' }));
+  fireEvent.change(screen.getByLabelText('验收标准 1'), { target: { value: '错误密码时显示中文提示' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存草稿' }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/prd-sessions/prd-1/draft', expect.objectContaining({
+    method: 'PATCH',
+    body: JSON.stringify({ title: '登录提示', goal: '说明失败原因', acceptanceCriteria: ['错误密码时显示中文提示'] }),
+  })));
+});
+
+test.each([
+  ['是这个', true],
+  ['不是', false],
+])('target confirmation card sends %s decision', async (button, accepted) => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-1' && !init?.method) {
+      return jsonResponse({
+        prdId: 'prd-1', systemId: 'alpha-system', conversationId: 'conv-prd-1', status: 'need_clarification', createdBy: 'admin', missingFields: ['acceptance_criteria'],
+        draft: { suspectedTargets: [{ entryId: 'page-login', kind: 'page', title: '登录页', routePath: '/login', apiEndpoints: ['POST /api/login'], confidence: 0.9 }] },
+      });
+    }
+    if (path === '/api/v5/conversations/conv-prd-1') {
+      return jsonResponse({ messages: [{ messageId: 'assistant-target', conversationId: 'conv-prd-1', senderType: 'assistant', content: '请确认页面' }], pendingAssistant: false });
+    }
+    return fallback(input, init);
+  });
+  renderApp('/work-items/new/prd-1');
+
+  expect(await screen.findByText('POST /api/login')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: button }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/prd-sessions/prd-1/targets/confirm', expect.objectContaining({
+    method: 'POST',
+    body: JSON.stringify({ entryIds: ['page-login'], accepted }),
+  })));
+});
+
+test('waiting draft exposes inline PRD confirmation in chat', async () => {
+  renderApp('/work-items/new/prd-1');
+
+  expect(await screen.findByRole('button', { name: '确认 PRD' })).toBeInTheDocument();
+});
+
 test('legacy draft editor route opens the independent creation workspace', async () => {
   const fallback = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

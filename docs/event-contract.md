@@ -5,6 +5,7 @@
 | Event | 说明 |
 | --- | --- |
 | `ExecutionPlanDrafted` | 计划与 assignments 已生成，不改状态 |
+| `PRDUpdated` | PRD 草稿已更新；手工编辑时 payload 含 `source: manual_edit` 和最新 `status` |
 | `AgentStageCompleted` | 单个 role 完成，payload 含 role、engine、摘要、changedPaths、tokenUsage，不含 Key |
 | `ModificationCompleted` | 单 Agent diff 或多段无冲突合并 diff 完成 |
 | `WorkerBlocked` | 执行被阻塞 |

@@ -68,8 +68,10 @@ class PrdScreenshotFlowTest {
                 List.of("GET /api/orders"), List.of("src/orders.tsx"), 0.92);
         var secondTarget = new KnowledgeMatchService.SuspectedTarget("knowledge-2", "api", "订单详情", "/orders/{id}",
                 List.of("GET /api/orders/{id}"), List.of("src/orders.tsx"), 0.81);
+        var rejectedTarget = new KnowledgeMatchService.SuspectedTarget("knowledge-3", "page", "商品列表", "/products",
+                List.of("GET /api/products"), List.of("src/products.tsx"), 0.62);
         when(knowledge.match(eq("sys-1"), any())).thenReturn(
-                new KnowledgeMatchService.MatchResult(List.of(target, secondTarget), false));
+                new KnowledgeMatchService.MatchResult(List.of(target, secondTarget, rejectedTarget), false));
         var systems = mock(SystemProfileRepository.class);
         var now = Instant.now();
         var system = new SystemProfile("sys-1", "订单系统", "", "/repo", "owner", "[\"src\"]", "[]",
@@ -104,6 +106,9 @@ class PrdScreenshotFlowTest {
                 content.contains("你反馈的是不是【订单列表】") && content.contains("GET /api/orders")));
         assertThat(current.get().draftJson()).contains("suspectedTargets");
 
+        controller.confirmTargets(message.prdId(),
+                new PrdController.TargetConfirmationRequest(List.of("knowledge-3"), false), actor);
+        assertThat(current.get().draftJson()).doesNotContain("knowledge-3");
         controller.confirmTargets(message.prdId(), new PrdController.TargetConfirmationRequest(List.of("knowledge-1")), actor);
         controller.confirmTargets(message.prdId(), new PrdController.TargetConfirmationRequest(List.of("knowledge-2")), actor);
         controller.confirm(message.prdId(), actor);

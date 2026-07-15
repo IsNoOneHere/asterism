@@ -36,6 +36,12 @@ public record PrdDraft(
         return new PrdDraft(title, goal, scope, acceptanceCriteria, suspectedTargets, values, extras);
     }
 
+    public PrdDraft withManualChanges(String newTitle, String newGoal, List<String> newAcceptanceCriteria) {
+        return new PrdDraft(newTitle == null ? title : newTitle, newGoal == null ? goal : newGoal, scope,
+                newAcceptanceCriteria == null ? acceptanceCriteria : newAcceptanceCriteria,
+                suspectedTargets, targets, extras);
+    }
+
     public PrdDraft preserveTargets(PrdDraft current) {
         var mergedExtras = new LinkedHashMap<>(current.extras);
         mergedExtras.putAll(extras);
