@@ -86,13 +86,16 @@ class PrdScreenshotFlowTest {
                 return action.doInTransaction(null);
             }
         };
-        var controller = new PrdController(sessions, messages, new FakeProductAgentAdapter(),
-                mock(DomainEventService.class), temporal, objectMapper, transactions, mock(SystemAccessService.class),
-                systems, memories, aggregate, ids, readiness, attachments, imageAnalysis, knowledge);
+        var events = mock(DomainEventService.class);
+        var access = mock(SystemAccessService.class);
+        var conversations = new PrdConversationService(sessions, messages, new FakeProductAgentAdapter(), events,
+                objectMapper, transactions, access, memories, aggregate, attachments, imageAnalysis, knowledge);
+        var controller = new PrdController(conversations, sessions, events, temporal, objectMapper, transactions, access,
+                systems, aggregate, ids, readiness);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
 
         var message = controller.message("sys-1",
-                new PrdController.PrdMessageRequest(null, "验收：订单列表可搜索", List.of("att-1")), actor);
+                new PrdConversationService.PrdMessageRequest(null, "验收：订单列表可搜索", List.of("att-1")), actor);
         assertThat(message.assistantMessage()).contains("你反馈的是不是【订单列表】", "GET /api/orders");
         assertThat(message.draft().get("suspectedTargets")).isNotNull();
 

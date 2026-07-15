@@ -1,12 +1,16 @@
 package com.asterism.prd;
 
+import com.asterism.attachment.Attachment;
 import com.asterism.event.DomainEventService;
 import com.asterism.identity.SystemAccessService;
+import com.asterism.knowledge.KnowledgeMatchService;
 import com.asterism.memory.MemoryItemRepository;
 import com.asterism.system.SystemProfile;
 import com.asterism.system.SystemProfileRepository;
 import com.asterism.system.ExecutionReadinessService;
 import com.asterism.temporal.TemporalCasePort;
+import com.asterism.vision.ImageAnalysisService;
+import com.asterism.vision.UiObservation;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
@@ -17,7 +21,9 @@ import org.springframework.transaction.support.TransactionOperations;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -26,6 +32,75 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class PrdControllerTransactionBoundaryTest {
+    @Test
+    void messageRunsVisionKnowledgeAndLlmBetweenShortTransactions() {
+        var inTransaction = new AtomicBoolean();
+        var order = new ArrayList<String>();
+        var sessions = mock(PrdSessionRepository.class);
+        var messages = mock(ConversationMessageRepository.class);
+        var productAgent = mock(ProductAgentPort.class);
+        var memories = mock(MemoryItemRepository.class);
+        var aggregate = mock(JdbcAggregateTemplate.class);
+        var attachments = mock(com.asterism.attachment.AttachmentService.class);
+        var imageAnalysis = mock(ImageAnalysisService.class);
+        var knowledge = mock(KnowledgeMatchService.class);
+        var attachment = new Attachment("att-1", "sys-1", "user", "screen.png", "image/png", 1,
+                "hash", "ha/hash", Instant.now());
+        when(messages.countByConversationIdAndSenderType(any(), any())).thenReturn(0L);
+        when(memories.findBySystemIdAndStatus(any(), any())).thenReturn(List.of());
+        when(attachments.requireForSystem("att-1", "sys-1")).thenReturn(attachment);
+        when(attachments.read(attachment)).thenAnswer(call -> {
+            assertThat(inTransaction).isFalse();
+            order.add("image-read");
+            return new byte[]{1};
+        });
+        when(imageAnalysis.analyze(any(), any(), any())).thenAnswer(call -> {
+            assertThat(inTransaction).isFalse();
+            order.add("vision");
+            return new UiObservation("登录", List.of("错误提示"), List.of(), List.of(), "登录页");
+        });
+        when(knowledge.match(any(), any())).thenAnswer(call -> {
+            assertThat(inTransaction).isFalse();
+            order.add("knowledge");
+            return new KnowledgeMatchService.MatchResult(List.of(), false);
+        });
+        when(productAgent.updateDraft(any(), any(), any(), any(), any(), any())).thenAnswer(call -> {
+            assertThat(inTransaction).isFalse();
+            order.add("llm");
+            return new ProductAgentPort.DraftResult("登录提示", Map.of("title", "登录提示"), List.of(), "已完成");
+        });
+        when(aggregate.insert(any())).thenAnswer(call -> {
+            assertThat(inTransaction).isTrue();
+            return call.getArgument(0);
+        });
+        when(aggregate.update(any())).thenAnswer(call -> {
+            assertThat(inTransaction).isTrue();
+            return call.getArgument(0);
+        });
+        var transactions = new TransactionOperations() {
+            @Override
+            public <T> T execute(TransactionCallback<T> action) {
+                order.add("tx-start");
+                inTransaction.set(true);
+                try {
+                    return action.doInTransaction(null);
+                } finally {
+                    inTransaction.set(false);
+                    order.add("tx-end");
+                }
+            }
+        };
+        var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
+                new ObjectMapper(), transactions, mock(SystemAccessService.class), memories, aggregate, attachments,
+                imageAnalysis, knowledge);
+
+        service.message("sys-1", new PrdConversationService.PrdMessageRequest(null, "登录提示", List.of("att-1")),
+                new UsernamePasswordAuthenticationToken("user", "n/a"));
+
+        assertThat(order).containsExactly("tx-start", "tx-end", "image-read", "vision", "llm", "knowledge",
+                "tx-start", "tx-end");
+    }
+
     @Test
     void confirmStartsTemporalAfterDatabaseTransaction() {
         var order = new ArrayList<String>();
@@ -123,8 +198,6 @@ class PrdControllerTransactionBoundaryTest {
     private PrdController controller(List<String> order, RuntimeException startFailure, AtomicTemporalCommand holder,
                                      String visibleStatus, String lockedStatus) {
         var sessions = mock(PrdSessionRepository.class);
-        var messages = mock(ConversationMessageRepository.class);
-        var productAgent = mock(ProductAgentPort.class);
         var events = mock(DomainEventService.class);
         var temporal = mock(TemporalCasePort.class);
         var access = mock(SystemAccessService.class);
@@ -166,10 +239,8 @@ class PrdControllerTransactionBoundaryTest {
                 return result;
             }
         };
-        return new PrdController(sessions, messages, productAgent, events, temporal, new ObjectMapper(), tx, access, systems,
-                mock(MemoryItemRepository.class), aggregate, workItemIds, readiness,
-                mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
-                mock(com.asterism.knowledge.KnowledgeMatchService.class));
+        return new PrdController(mock(PrdConversationService.class), sessions, events, temporal, new ObjectMapper(), tx,
+                access, systems, aggregate, workItemIds, readiness);
     }
 
     private PrdSession session(String status) {
