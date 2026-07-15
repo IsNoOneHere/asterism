@@ -66,6 +66,7 @@ public class PrdController {
     }
 
     @PostMapping("/systems/{systemId}/prd/messages")
+    @ResponseStatus(HttpStatus.ACCEPTED)
     PrdConversationService.PrdMessageResponse message(
             @PathVariable String systemId,
             @Valid @RequestBody PrdConversationService.PrdMessageRequest request,

@@ -66,6 +66,11 @@ export type ConversationMessage = {
   observations: UiObservation[];
   createdAt?: string;
 };
+export type Conversation = {
+  messages: ConversationMessage[];
+  pendingAssistant: boolean;
+  pendingSince?: string;
+};
 export type UiObservation = {
   page_title?: string;
   pageTitle?: string;
@@ -117,6 +122,7 @@ export type PrdMessageResult = {
   draft?: Record<string, unknown>;
   workItemId?: string;
   lifecycleStatus?: string;
+  assistantPending?: boolean;
 };
 
 export type PrdSession = {
@@ -287,7 +293,7 @@ export const api = {
   confirmPrd: (prdId: string) =>
     request<PrdMessageResult>('/api/v5/prd-sessions/' + prdId + '/confirm', { method: 'POST' }),
   conversation: (conversationId: string) =>
-    request<ConversationMessage[]>('/api/v5/conversations/' + encodeURIComponent(conversationId)),
+    request<Conversation>('/api/v5/conversations/' + encodeURIComponent(conversationId)),
   prdSessions: (systemId: string) => request<PrdSession[]>('/api/v5/prd-sessions?systemId=' + encodeURIComponent(systemId)),
   prdSession: (prdId: string) => request<PrdSession>('/api/v5/prd-sessions/' + encodeURIComponent(prdId)),
   workItems: (options: { systemId?: string; scope?: string; status?: string; q?: string; sort?: string } | string) => {

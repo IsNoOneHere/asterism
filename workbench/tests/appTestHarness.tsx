@@ -168,6 +168,7 @@ export function resetAppTestState() {
       return jsonResponse({
         prdId: 'prd-1',
         conversationId: 'conv-prd-1',
+        assistantPending: true,
         status: prdPostCount === 1 ? 'need_clarification' : 'waiting_user_confirm',
         missingFields: prdPostCount === 1 ? ['acceptanceCriteria'] : [],
         draft: { title: '登录页错误提示', goal: '改登录页', acceptanceCriteria: ['错误密码时提示'] },
@@ -177,7 +178,7 @@ export function resetAppTestState() {
       return jsonResponse((responses['/api/v5/systems'] as unknown[])[0]);
     }
     if (path === '/api/v5/conversations/conv-prd-1') {
-      return jsonResponse(conversationMessages);
+      return jsonResponse({ messages: conversationMessages, pendingAssistant: false });
     }
     return jsonResponse(responses[path]);
   }));

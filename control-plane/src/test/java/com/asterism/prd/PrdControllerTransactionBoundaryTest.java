@@ -47,6 +47,7 @@ class PrdControllerTransactionBoundaryTest {
         var attachment = new Attachment("att-1", "sys-1", "user", "screen.png", "image/png", 1,
                 "hash", "ha/hash", Instant.now());
         when(messages.countByConversationIdAndSenderType(any(), any())).thenReturn(0L);
+        when(messages.completePending(any(), any())).thenReturn(1);
         when(memories.findBySystemIdAndStatus(any(), any())).thenReturn(List.of());
         when(attachments.requireForSystem("att-1", "sys-1")).thenReturn(attachment);
         when(attachments.read(attachment)).thenAnswer(call -> {
@@ -92,7 +93,7 @@ class PrdControllerTransactionBoundaryTest {
         };
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
                 new ObjectMapper(), transactions, mock(SystemAccessService.class), memories, aggregate, attachments,
-                imageAnalysis, knowledge);
+                imageAnalysis, knowledge, Runnable::run);
 
         service.message("sys-1", new PrdConversationService.PrdMessageRequest(null, "登录提示", List.of("att-1")),
                 new UsernamePasswordAuthenticationToken("user", "n/a"));

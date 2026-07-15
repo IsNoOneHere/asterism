@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
@@ -34,10 +34,13 @@ export function NewPrdPage() {
   const [conversationId, setConversationId] = useState<string>();
   const [result, setResult] = useState<PrdMessageResult>({ status: 'waiting_input' });
   const [files, setFiles] = useState<File[]>([]);
+  const [optimisticUser, setOptimisticUser] = useState<{ content: string; display: string }>();
+  const completedAssistant = useRef<string>();
+  const sessionPrdId = routePrdId || prdId;
   const draftSession = useQuery({
-    queryKey: ['prd-session', routePrdId],
-    queryFn: () => api.prdSession(routePrdId!),
-    enabled: Boolean(routePrdId),
+    queryKey: ['prd-session', sessionPrdId],
+    queryFn: () => api.prdSession(sessionPrdId!),
+    enabled: Boolean(sessionPrdId),
     retry: false,
   });
   const conversation = useQuery({
@@ -45,6 +48,7 @@ export function NewPrdPage() {
     queryFn: () => api.conversation(conversationId!),
     enabled: Boolean(conversationId),
     retry: false,
+    refetchInterval: (query) => query.state.data?.pendingAssistant ? 2_000 : false,
   });
   const form = useForm<FormValue>({
     resolver: zodResolver(schema),
@@ -92,6 +96,7 @@ export function NewPrdPage() {
       queryClient.invalidateQueries({ queryKey: ['conversation', data.conversationId] });
       queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
     },
+    onError: () => setOptimisticUser(undefined),
   });
   const confirmTarget = useMutation({
     mutationFn: (entryId: string) => api.confirmPrdTargets(prdId!, [entryId]),
@@ -107,6 +112,20 @@ export function NewPrdPage() {
       queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
     },
   });
+
+  useEffect(() => {
+    const data = conversation.data;
+    if (!data) return;
+    if (optimisticUser && data.messages.some((message) => message.senderType === 'user' && message.content === optimisticUser.content)) {
+      setOptimisticUser(undefined);
+    }
+    const latestAssistant = [...data.messages].reverse().find((message) => message.senderType === 'assistant');
+    if (!data.pendingAssistant && latestAssistant && completedAssistant.current !== latestAssistant.messageId) {
+      completedAssistant.current = latestAssistant.messageId;
+      setResult((current) => ({ ...current, assistantPending: false }));
+      if (prdId) queryClient.invalidateQueries({ queryKey: ['prd-session', prdId] });
+    }
+  }, [conversation.data, optimisticUser, prdId, queryClient]);
 
   useEffect(() => {
     if (prdId || (!content.trim() && files.length === 0)) return;
@@ -136,6 +155,7 @@ export function NewPrdPage() {
     setPrdId(undefined);
     setConversationId(undefined);
     setResult({ status: 'waiting_input' });
+    setOptimisticUser(undefined);
     form.reset({ systemId: selectedSystemId, content: '' });
     setFiles([]);
   }
@@ -150,6 +170,8 @@ export function NewPrdPage() {
 
   const suspectedTargets = targetList(result.draft?.suspectedTargets);
   const confirmedTargets = targetList(result.draft?.targets);
+  const pendingAssistant = send.isPending || Boolean(result.assistantPending) || Boolean(conversation.data?.pendingAssistant);
+  const conversationMessages = conversation.data?.messages ?? [];
 
   return (
     <section className="create-workspace">
@@ -170,18 +192,26 @@ export function NewPrdPage() {
         <h2>AI 需求沟通</h2>
         <SystemSelect systems={systems} value={selectedSystemId} label="所属系统" disabled={Boolean(prdId)} onChange={(value) => { setSystemId(value); form.setValue('systemId', value); }} />
         <div className="message-list">
-          {(conversation.data ?? []).map((message) => (
+          {conversationMessages.map((message) => (
             <div className={'bubble ' + (message.senderType === 'user' ? 'user' : 'assistant')} key={message.messageId}>
               {message.content && <div>{message.content}</div>}
               {message.attachmentIds?.length > 0 && <div className="message-images">{message.attachmentIds.map((id) => <img key={id} src={api.attachmentUrl(id)} alt="需求截图" />)}</div>}
               {message.observations?.map((observation, index) => <small className="observation-summary" key={index}>{observationSummary(observation)}</small>)}
             </div>
           ))}
+          {optimisticUser && !conversationMessages.some((message) => message.senderType === 'user' && message.content === optimisticUser.content)
+            && <div className="bubble user">{optimisticUser.display}</div>}
+          {pendingAssistant && <PendingAssistantBubble />}
         </div>
         {Boolean(result.missingFields?.length) && (
           <div className="warning">AI 需要你补充：{result.missingFields?.map((field) => fieldNames[field] || field).join('、')}</div>
         )}
-        <form onSubmit={form.handleSubmit((value) => { if (value.content.trim() || files.length) send.mutate(value); })}>
+        <form onSubmit={form.handleSubmit((value) => {
+          if (value.content.trim() || files.length) {
+            setOptimisticUser({ content: value.content.trim(), display: value.content.trim() || `已发送 ${files.length} 张图片` });
+            send.mutate(value);
+          }
+        })}>
           <label>
             需求描述
             <textarea rows={4} {...form.register('content')} onPaste={(event) => {
@@ -191,7 +221,7 @@ export function NewPrdPage() {
           </label>
           <label className="secondary file-picker">选择图片<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={(event) => { if (event.target.files) addFiles(event.target.files); event.target.value = ''; }} /></label>
           {files.length > 0 && <div className="pending-files">{files.map((file, index) => <button type="button" className="secondary" key={file.name + index} onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}>{file.name} ×</button>)}</div>}
-          <button type="submit" disabled={send.isPending || !selectedSystemId || (!content.trim() && files.length === 0)}>发送</button>
+          <button type="submit" disabled={pendingAssistant || !selectedSystemId || (!content.trim() && files.length === 0)}>发送</button>
         </form>
       </div>
       <div className="panel">
@@ -210,7 +240,7 @@ export function NewPrdPage() {
           <div><strong>{target.title}</strong><span>{target.apiEndpoints?.join('、') || target.routePath || target.kind} · 置信度 {Math.round((target.confidence || 0) * 100)}%</span></div>
           <button type="button" disabled={confirmTarget.isPending || confirmedTargets.some((item) => item.entryId === target.entryId)} onClick={() => confirmTarget.mutate(target.entryId)}>{confirmedTargets.some((item) => item.entryId === target.entryId) ? '已确认' : '确认页面'}</button>
         </div>)}</div>}
-        <button type="button" className={confirmable ? 'primary-strong' : ''} onClick={confirmPrd} disabled={!prdId || !confirmable || !readiness.data?.ready || confirm.isPending}>
+        <button type="button" className={confirmable ? 'primary-strong' : ''} onClick={confirmPrd} disabled={!prdId || !confirmable || pendingAssistant || !readiness.data?.ready || confirm.isPending}>
           确认并生成工作项
         </button>
         {!readiness.data?.ready && <div className="warning">系统尚未具备真实执行条件</div>}
@@ -227,6 +257,10 @@ export function NewPrdPage() {
       </div>}
     </section>
   );
+}
+
+export function PendingAssistantBubble() {
+  return <div className="bubble assistant pending" role="status" aria-live="polite">正在分析…</div>;
 }
 
 function text(value: unknown) {

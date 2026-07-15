@@ -5,9 +5,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.security.core.Authentication;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.time.Instant;
 
 @RestController
 @RequestMapping("/api/v5/conversations")
@@ -23,14 +25,28 @@ public class ConversationController {
     }
 
     @GetMapping("/{conversationId}")
-    Iterable<ConversationMessageView> messages(@PathVariable String conversationId, Authentication actor) {
-        List<ConversationMessage> result = messages.findByConversationIdOrderByCreatedAtAsc(conversationId);
+    @Transactional
+    ConversationResponse messages(@PathVariable String conversationId, Authentication actor) {
+        var result = messages.findByConversationIdOrderByCreatedAtAsc(conversationId);
         if (!result.isEmpty()) {
             access.requireMember(result.getFirst().systemId(), actor);
         }
-        return result.stream().map(message -> new ConversationMessageView(
+        var pending = result.stream()
+                .filter(message -> PrdConversationService.PENDING_SENDER.equals(message.senderType()))
+                .findFirst();
+        if (pending.isPresent()
+                && !pending.get().createdAt().isAfter(Instant.now().minusSeconds(PrdConversationService.PENDING_TIMEOUT_SECONDS))) {
+            messages.completePending(pending.get().messageId(), "AI 暂时不可用，请重试");
+            result = messages.findByConversationIdOrderByCreatedAtAsc(conversationId);
+            pending = java.util.Optional.empty();
+        }
+        var views = result.stream()
+                .filter(message -> !PrdConversationService.PENDING_SENDER.equals(message.senderType()))
+                .map(message -> new ConversationMessageView(
                 message.messageId(), message.conversationId(), message.systemId(), message.prdId(), message.senderType(),
-                message.content(), readList(message.attachmentIds()), readObjects(message.observationsJson()), message.createdAt())).toList();
+                message.content(), readList(message.attachmentIds()), readObjects(message.observationsJson()), message.createdAt()))
+                .toList();
+        return new ConversationResponse(views, pending.isPresent(), pending.map(ConversationMessage::createdAt).orElse(null));
     }
 
     private List<String> readList(String json) {
@@ -52,5 +68,9 @@ public class ConversationController {
     public record ConversationMessageView(String messageId, String conversationId, String systemId, String prdId,
                                           String senderType, String content, List<String> attachmentIds,
                                           List<java.util.Map<String, Object>> observations, java.time.Instant createdAt) {
+    }
+
+    public record ConversationResponse(List<ConversationMessageView> messages, boolean pendingAssistant,
+                                       Instant pendingSince) {
     }
 }

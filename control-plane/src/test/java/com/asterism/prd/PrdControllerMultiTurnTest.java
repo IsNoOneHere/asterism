@@ -7,6 +7,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionOperations;
@@ -47,12 +48,13 @@ class PrdControllerMultiTurnTest {
         });
         when(aggregate.insert(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
         when(messages.countByConversationIdAndSenderType(anyString(), anyString())).thenReturn(0L, 1L);
+        when(messages.completePending(anyString(), anyString())).thenReturn(1);
         var memories = mock(MemoryItemRepository.class);
         when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
         var service = new PrdConversationService(sessions, messages, new FakeProductAgentAdapter(), events,
                 objectMapper, directTransactions(), access, memories, aggregate,
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
-                mock(com.asterism.knowledge.KnowledgeMatchService.class));
+                mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
         var actor = new UsernamePasswordAuthenticationToken("requester", "n/a");
 
         var first = service.message("sys-1", new PrdConversationService.PrdMessageRequest(null, "把登录页加错误提示"), actor);
@@ -67,7 +69,8 @@ class PrdControllerMultiTurnTest {
         });
 
         assertThat(first.status()).isEqualTo("need_clarification");
-        assertThat(second.status()).isEqualTo("waiting_user_confirm");
+        assertThat(second.assistantPending()).isTrue();
+        assertThat(secondSession.status()).isEqualTo("waiting_user_confirm");
         assertThat(secondSession.title()).isEqualTo(firstSession.title());
         assertThat(secondSession.goal()).isEqualTo("把登录页加错误提示");
         assertThat(draft.get("goal")).isEqualTo("把登录页加错误提示");
@@ -85,7 +88,7 @@ class PrdControllerMultiTurnTest {
                 mock(DomainEventService.class), objectMapper, directTransactions(), mock(SystemAccessService.class),
                 mock(MemoryItemRepository.class), mock(JdbcAggregateTemplate.class),
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
-                mock(com.asterism.knowledge.KnowledgeMatchService.class));
+                mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
 
         assertThatThrownBy(() -> service.message("sys-2", new PrdConversationService.PrdMessageRequest("prd-1", "继续"),
                 new UsernamePasswordAuthenticationToken("user", "n/a")))
@@ -100,6 +103,7 @@ class PrdControllerMultiTurnTest {
         var messages = mock(ConversationMessageRepository.class);
         var aggregate = mock(JdbcAggregateTemplate.class);
         when(messages.countByConversationIdAndSenderType(anyString(), anyString())).thenReturn(0L);
+        when(messages.completePending(anyString(), anyString())).thenReturn(1);
         when(aggregate.insert(any(PrdSession.class))).thenAnswer(call -> call.getArgument(0));
         when(aggregate.insert(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
         var memories = mock(MemoryItemRepository.class);
@@ -116,14 +120,15 @@ class PrdControllerMultiTurnTest {
         var service = new PrdConversationService(sessions, messages, new FakeProductAgentAdapter(),
                 mock(DomainEventService.class), objectMapper, directTransactions(), mock(SystemAccessService.class), memories,
                 aggregate, attachments, imageAnalysis,
-                mock(com.asterism.knowledge.KnowledgeMatchService.class));
+                mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
 
         var response = service.message("sys-1",
                 new PrdConversationService.PrdMessageRequest(null, "验收：页面显示明确错误", List.of("att-1")),
                 new UsernamePasswordAuthenticationToken("user", "n/a"));
 
-        assertThat(response.status()).isEqualTo("waiting_user_confirm");
-        assertThat(response.assistantMessage()).contains("图片分析不可用", "不影响文字对话");
+        assertThat(response.assistantPending()).isTrue();
+        org.mockito.Mockito.verify(messages).completePending(anyString(),
+                org.mockito.ArgumentMatchers.contains("图片分析不可用"));
     }
 
     @Test
@@ -136,6 +141,7 @@ class PrdControllerMultiTurnTest {
         var savedMessages = new ArrayList<ConversationMessage>();
         when(sessions.findById(anyString())).thenAnswer(call -> Optional.ofNullable(savedSession.get()));
         when(messages.countByConversationIdAndSenderType(anyString(), anyString())).thenReturn(0L, 1L);
+        when(messages.completePending(anyString(), anyString())).thenReturn(1);
         when(messages.findByConversationIdOrderByCreatedAtAsc(anyString())).thenReturn(savedMessages);
         when(aggregate.insert(any(PrdSession.class))).thenAnswer(call -> {
             savedSession.set(call.getArgument(0));
@@ -158,17 +164,93 @@ class PrdControllerMultiTurnTest {
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
                 objectMapper, directTransactions(), mock(SystemAccessService.class), memories, aggregate,
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
-                mock(com.asterism.knowledge.KnowledgeMatchService.class));
+                mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
 
         var failed = service.message("sys-1", new PrdConversationService.PrdMessageRequest(null, "登录页报错"), actor);
         var retried = service.message("sys-1", new PrdConversationService.PrdMessageRequest(failed.prdId(), "请重试"), actor);
 
-        assertThat(failed.assistantMessage()).isEqualTo("AI 暂时不可用，请重试");
-        assertThat(retried.status()).isEqualTo("waiting_user_confirm");
+        assertThat(failed.assistantPending()).isTrue();
+        assertThat(retried.assistantPending()).isTrue();
         assertThat(savedMessages).extracting(ConversationMessage::senderType)
-                .containsExactly("user", "assistant", "user", "assistant");
+                .containsExactly("user", "assistant_pending", "user", "assistant_pending");
+        org.mockito.Mockito.verify(messages).completePending(anyString(),
+                org.mockito.ArgumentMatchers.eq("AI 暂时不可用，请重试"));
         assertThat(savedSession.get().draftJson()).contains("登录提示");
+    }
+
+    @Test
+    void pendingTurnReturnsImmediatelyAndRejectsSecondMessage() {
+        var sessions = mock(PrdSessionRepository.class);
+        var messages = mock(ConversationMessageRepository.class);
+        var aggregate = mock(JdbcAggregateTemplate.class);
+        var session = new AtomicReference<PrdSession>();
+        var pending = new AtomicReference<ConversationMessage>();
+        when(sessions.findById(anyString())).thenAnswer(call -> Optional.ofNullable(session.get()));
+        when(messages.findFirstByConversationIdAndSenderTypeOrderByCreatedAtAsc(anyString(), anyString()))
+                .thenAnswer(call -> Optional.ofNullable(pending.get()));
+        when(messages.countByConversationIdAndSenderType(anyString(), anyString())).thenReturn(0L);
+        when(aggregate.insert(any(PrdSession.class))).thenAnswer(call -> {
+            session.set(call.getArgument(0));
+            return call.getArgument(0);
+        });
+        when(aggregate.insert(any(ConversationMessage.class))).thenAnswer(call -> {
+            var value = (ConversationMessage) call.getArgument(0);
+            if (PrdConversationService.PENDING_SENDER.equals(value.senderType())) pending.set(value);
+            return value;
+        });
+        var memories = mock(MemoryItemRepository.class);
+        when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
+        var executor = new HoldingExecutor();
+        var productAgent = mock(ProductAgentPort.class);
+        var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
+                objectMapper, directTransactions(), mock(SystemAccessService.class), memories, aggregate,
+                mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
+                mock(com.asterism.knowledge.KnowledgeMatchService.class), executor);
+        var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
+
+        var accepted = service.message("sys-1", new PrdConversationService.PrdMessageRequest(null, "登录页报错"), actor);
+
+        assertThat(accepted.assistantPending()).isTrue();
+        assertThat(executor.task).isNotNull();
+        org.mockito.Mockito.verifyNoInteractions(productAgent);
+        assertThatThrownBy(() -> service.message("sys-1",
+                new PrdConversationService.PrdMessageRequest(accepted.prdId(), "重复发送"), actor))
+                .isInstanceOf(com.asterism.common.ApiException.class)
+                .extracting(error -> ((com.asterism.common.ApiException) error).code())
+                .isEqualTo("PRD_ASSISTANT_PENDING");
+    }
+
+    @Test
+    void expiredPendingBecomesErrorBeforeNextTurnIsAccepted() {
+        var sessions = mock(PrdSessionRepository.class);
+        var messages = mock(ConversationMessageRepository.class);
+        var aggregate = mock(JdbcAggregateTemplate.class);
+        var now = java.time.Instant.now();
+        var current = new PrdSession("prd-1", "sys-1", "conv-1", null, null, "标题", "目标", "{}", "[]",
+                "need_clarification", "user", null, null, now, now);
+        var expired = new ConversationMessage("pending-old", "conv-1", "sys-1", "prd-1", "assistant_pending", "",
+                "[]", "[]", "product-agent", now.minusSeconds(121));
+        when(sessions.findById("prd-1")).thenReturn(Optional.of(current));
+        when(messages.findFirstByConversationIdAndSenderTypeOrderByCreatedAtAsc("conv-1", "assistant_pending"))
+                .thenReturn(Optional.of(expired));
+        when(messages.countByConversationIdAndSenderType(anyString(), anyString())).thenReturn(1L);
+        when(messages.findByConversationIdOrderByCreatedAtAsc("conv-1")).thenReturn(List.of(expired));
+        when(messages.completePending(anyString(), anyString())).thenReturn(1);
+        when(aggregate.insert(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
+        var memories = mock(MemoryItemRepository.class);
+        when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
+        var service = new PrdConversationService(sessions, messages, mock(ProductAgentPort.class),
+                mock(DomainEventService.class), objectMapper, directTransactions(), mock(SystemAccessService.class),
+                memories, aggregate, mock(com.asterism.attachment.AttachmentService.class),
+                mock(com.asterism.vision.ImageAnalysisService.class), mock(com.asterism.knowledge.KnowledgeMatchService.class),
+                new HoldingExecutor());
+
+        var accepted = service.message("sys-1", new PrdConversationService.PrdMessageRequest("prd-1", "继续"),
+                new UsernamePasswordAuthenticationToken("user", "n/a"));
+
+        assertThat(accepted.assistantPending()).isTrue();
+        org.mockito.Mockito.verify(messages).completePending("pending-old", "AI 暂时不可用，请重试");
     }
 
     private TransactionOperations directTransactions() {
@@ -178,5 +260,14 @@ class PrdControllerMultiTurnTest {
                 return action.doInTransaction(null);
             }
         };
+    }
+
+    private static final class HoldingExecutor implements TaskExecutor {
+        private Runnable task;
+
+        @Override
+        public void execute(Runnable task) {
+            this.task = task;
+        }
     }
 }

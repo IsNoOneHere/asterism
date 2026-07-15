@@ -52,13 +52,19 @@ class LifecycleHappyPathIntegrationTest {
 
         var first = postJson("/api/v5/systems/" + systemId + "/prd/messages",
                 "{\"content\":\"给登录页加错误提示\"}", "e2e-user")
-                .andExpect(status().isOk())
+                .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.status").value("need_clarification"))
                 .andReturn().getResponse().getContentAsString();
-        var prdId = objectMapper.readTree(first).get("prdId").asText();
+        var firstResponse = objectMapper.readTree(first);
+        var prdId = firstResponse.get("prdId").asText();
+        var conversationId = firstResponse.get("conversationId").asText();
+        awaitAssistant(conversationId, "e2e-user");
 
         postJson("/api/v5/systems/" + systemId + "/prd/messages",
                 "{\"prdId\":\"" + prdId + "\",\"content\":\"错误密码时显示明确错误提示\"}", "e2e-user")
+                .andExpect(status().isAccepted());
+        awaitAssistant(conversationId, "e2e-user");
+        mockMvc.perform(get("/api/v5/prd-sessions/" + prdId).with(httpBasic("e2e-user", "asterism")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("waiting_user_confirm"));
 
@@ -111,6 +117,19 @@ class LifecycleHappyPathIntegrationTest {
                 .with(httpBasic(user, "asterism"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body));
+    }
+
+    private void awaitAssistant(String conversationId, String user) throws Exception {
+        // 集成测试按真实 202 回合轮询，避免依赖后台线程调度时序。
+        for (var attempt = 0; attempt < 100; attempt++) {
+            var response = mockMvc.perform(get("/api/v5/conversations/" + conversationId)
+                            .with(httpBasic(user, "asterism")))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+            if (!objectMapper.readTree(response).get("pendingAssistant").asBoolean()) return;
+            Thread.sleep(20);
+        }
+        throw new AssertionError("PRD assistant 回合未在 2 秒内完成");
     }
 
     private void createSystem(String systemId) throws Exception {

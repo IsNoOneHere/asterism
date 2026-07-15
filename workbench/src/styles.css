@@ -1453,6 +1453,10 @@ label {
   justify-self: start;
 }
 
+.bubble.pending {
+  color: var(--muted);
+}
+
 @media (max-width: 1080px) {
   .split,
   .split.wide-left {

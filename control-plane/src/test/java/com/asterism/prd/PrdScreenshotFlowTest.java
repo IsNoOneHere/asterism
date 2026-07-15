@@ -41,6 +41,7 @@ class PrdScreenshotFlowTest {
         var current = new AtomicReference<PrdSession>();
         when(sessions.findById(anyString())).thenAnswer(call -> Optional.ofNullable(current.get()));
         when(messages.countByConversationIdAndSenderType(anyString(), anyString())).thenReturn(0L);
+        when(messages.completePending(anyString(), anyString())).thenReturn(1);
         when(aggregate.insert(any(PrdSession.class))).thenAnswer(call -> {
             var value = (PrdSession) call.getArgument(0);
             current.set(value);
@@ -89,15 +90,18 @@ class PrdScreenshotFlowTest {
         var events = mock(DomainEventService.class);
         var access = mock(SystemAccessService.class);
         var conversations = new PrdConversationService(sessions, messages, new FakeProductAgentAdapter(), events,
-                objectMapper, transactions, access, memories, aggregate, attachments, imageAnalysis, knowledge);
+                objectMapper, transactions, access, memories, aggregate, attachments, imageAnalysis, knowledge,
+                Runnable::run);
         var controller = new PrdController(conversations, sessions, events, temporal, objectMapper, transactions, access,
                 systems, aggregate, ids, readiness);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
 
         var message = controller.message("sys-1",
                 new PrdConversationService.PrdMessageRequest(null, "验收：订单列表可搜索", List.of("att-1")), actor);
-        assertThat(message.assistantMessage()).contains("你反馈的是不是【订单列表】", "GET /api/orders");
-        assertThat(message.draft().get("suspectedTargets")).isNotNull();
+        assertThat(message.assistantPending()).isTrue();
+        verify(messages).completePending(anyString(), argThat(content ->
+                content.contains("你反馈的是不是【订单列表】") && content.contains("GET /api/orders")));
+        assertThat(current.get().draftJson()).contains("suspectedTargets");
 
         controller.confirmTargets(message.prdId(), new PrdController.TargetConfirmationRequest(List.of("knowledge-1")), actor);
         controller.confirmTargets(message.prdId(), new PrdController.TargetConfirmationRequest(List.of("knowledge-2")), actor);

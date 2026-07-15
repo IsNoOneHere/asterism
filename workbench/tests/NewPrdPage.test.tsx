@@ -1,8 +1,15 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
+import { PendingAssistantBubble } from '../src/pages/NewPrdPage';
 import { jsonResponse, renderApp, resetAppTestState } from './appTestHarness';
 
 beforeEach(resetAppTestState);
+
+test('pending assistant bubble announces analysis progress', () => {
+  render(<PendingAssistantBubble />);
+
+  expect(screen.getByRole('status')).toHaveTextContent('正在分析…');
+});
 
 test('new prd page renders two chat turns as four bubbles', async () => {
   renderApp('/work-items/new');
@@ -109,7 +116,7 @@ test('draft editor restores session in the independent creation workspace', asyn
       });
     }
     if (path === '/api/v5/conversations/conv-resume') {
-      return jsonResponse([{ messageId: 'resume-message', conversationId: 'conv-resume', senderType: 'assistant', content: '请补充验收标准' }]);
+      return jsonResponse({ messages: [{ messageId: 'resume-message', conversationId: 'conv-resume', senderType: 'assistant', content: '请补充验收标准' }], pendingAssistant: false });
     }
     return fallback(input, init);
   });
@@ -134,7 +141,7 @@ test('legacy draft editor route opens the independent creation workspace', async
     if (path === '/api/v5/prd-sessions/prd-legacy') {
       return jsonResponse({ prdId: 'prd-legacy', systemId: 'alpha-system', conversationId: 'conv-legacy', status: 'need_clarification', createdBy: 'admin', draft: {}, missingFields: [] });
     }
-    if (path === '/api/v5/conversations/conv-legacy') return jsonResponse([]);
+    if (path === '/api/v5/conversations/conv-legacy') return jsonResponse({ messages: [], pendingAssistant: false });
     return fallback(input, init);
   });
 
