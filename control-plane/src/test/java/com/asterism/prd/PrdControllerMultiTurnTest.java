@@ -52,7 +52,7 @@ class PrdControllerMultiTurnTest {
         var memories = mock(MemoryItemRepository.class);
         when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
         var service = new PrdConversationService(sessions, messages, new FakeProductAgentAdapter(), events,
-                objectMapper, directTransactions(), access, memories, aggregate,
+                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), access, memories, aggregate,
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
                 mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
         var actor = new UsernamePasswordAuthenticationToken("requester", "n/a");
@@ -85,7 +85,7 @@ class PrdControllerMultiTurnTest {
                 "need_clarification", "user", null, null, java.time.Instant.now(), java.time.Instant.now());
         when(sessions.findById("prd-1")).thenReturn(Optional.of(current));
         var service = new PrdConversationService(sessions, mock(ConversationMessageRepository.class), mock(ProductAgentPort.class),
-                mock(DomainEventService.class), objectMapper, directTransactions(), mock(SystemAccessService.class),
+                mock(DomainEventService.class), objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class),
                 mock(MemoryItemRepository.class), mock(JdbcAggregateTemplate.class),
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
                 mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
@@ -118,7 +118,7 @@ class PrdControllerMultiTurnTest {
                 org.mockito.ArgumentMatchers.eq(attachment), org.mockito.ArgumentMatchers.any(byte[].class)))
                 .thenThrow(new IllegalStateException("vision down"));
         var service = new PrdConversationService(sessions, messages, new FakeProductAgentAdapter(),
-                mock(DomainEventService.class), objectMapper, directTransactions(), mock(SystemAccessService.class), memories,
+                mock(DomainEventService.class), objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class), memories,
                 aggregate, attachments, imageAnalysis,
                 mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
 
@@ -162,7 +162,7 @@ class PrdControllerMultiTurnTest {
         var memories = mock(MemoryItemRepository.class);
         when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
-                objectMapper, directTransactions(), mock(SystemAccessService.class), memories, aggregate,
+                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class), memories, aggregate,
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
                 mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
@@ -204,7 +204,7 @@ class PrdControllerMultiTurnTest {
         var executor = new HoldingExecutor();
         var productAgent = mock(ProductAgentPort.class);
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
-                objectMapper, directTransactions(), mock(SystemAccessService.class), memories, aggregate,
+                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class), memories, aggregate,
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
                 mock(com.asterism.knowledge.KnowledgeMatchService.class), executor);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
@@ -241,7 +241,7 @@ class PrdControllerMultiTurnTest {
         var memories = mock(MemoryItemRepository.class);
         when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
         var service = new PrdConversationService(sessions, messages, mock(ProductAgentPort.class),
-                mock(DomainEventService.class), objectMapper, directTransactions(), mock(SystemAccessService.class),
+                mock(DomainEventService.class), objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class),
                 memories, aggregate, mock(com.asterism.attachment.AttachmentService.class),
                 mock(com.asterism.vision.ImageAnalysisService.class), mock(com.asterism.knowledge.KnowledgeMatchService.class),
                 new HoldingExecutor());

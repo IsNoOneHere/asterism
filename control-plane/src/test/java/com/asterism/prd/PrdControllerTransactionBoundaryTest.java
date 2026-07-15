@@ -92,7 +92,7 @@ class PrdControllerTransactionBoundaryTest {
             }
         };
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
-                new ObjectMapper(), transactions, mock(SystemAccessService.class), memories, aggregate, attachments,
+                new ObjectMapper(), new PrdDraftCodec(new ObjectMapper()), transactions, mock(SystemAccessService.class), memories, aggregate, attachments,
                 imageAnalysis, knowledge, Runnable::run);
 
         service.message("sys-1", new PrdConversationService.PrdMessageRequest(null, "登录提示", List.of("att-1")),
@@ -240,8 +240,10 @@ class PrdControllerTransactionBoundaryTest {
                 return result;
             }
         };
-        return new PrdController(mock(PrdConversationService.class), sessions, events, temporal, new ObjectMapper(), tx,
-                access, systems, aggregate, workItemIds, readiness);
+        var objectMapper = new ObjectMapper();
+        var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
+                new PrdDraftCodec(objectMapper), tx, access, systems, aggregate, workItemIds, readiness);
+        return new PrdController(mock(PrdConversationService.class), confirmations);
     }
 
     private PrdSession session(String status) {

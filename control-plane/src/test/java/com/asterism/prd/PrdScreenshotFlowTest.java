@@ -90,10 +90,11 @@ class PrdScreenshotFlowTest {
         var events = mock(DomainEventService.class);
         var access = mock(SystemAccessService.class);
         var conversations = new PrdConversationService(sessions, messages, new FakeProductAgentAdapter(), events,
-                objectMapper, transactions, access, memories, aggregate, attachments, imageAnalysis, knowledge,
+                objectMapper, new PrdDraftCodec(objectMapper), transactions, access, memories, aggregate, attachments, imageAnalysis, knowledge,
                 Runnable::run);
-        var controller = new PrdController(conversations, sessions, events, temporal, objectMapper, transactions, access,
-                systems, aggregate, ids, readiness);
+        var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
+                new PrdDraftCodec(objectMapper), transactions, access, systems, aggregate, ids, readiness);
+        var controller = new PrdController(conversations, confirmations);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
 
         var message = controller.message("sys-1",

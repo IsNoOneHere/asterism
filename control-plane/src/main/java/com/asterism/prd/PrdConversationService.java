@@ -21,6 +21,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Instant;
@@ -43,6 +44,7 @@ public class PrdConversationService {
     private final ProductAgentPort productAgent;
     private final DomainEventService events;
     private final ObjectMapper objectMapper;
+    private final PrdDraftCodec draftCodec;
     private final TransactionOperations transactions;
     private final SystemAccessService access;
     private final MemoryItemRepository memories;
@@ -58,6 +60,7 @@ public class PrdConversationService {
             ProductAgentPort productAgent,
             DomainEventService events,
             ObjectMapper objectMapper,
+            PrdDraftCodec draftCodec,
             TransactionOperations transactions,
             SystemAccessService access,
             MemoryItemRepository memories,
@@ -71,6 +74,7 @@ public class PrdConversationService {
         this.productAgent = productAgent;
         this.events = events;
         this.objectMapper = objectMapper;
+        this.draftCodec = draftCodec;
         this.transactions = transactions;
         this.access = access;
         this.memories = memories;
@@ -95,7 +99,7 @@ public class PrdConversationService {
             throw new ApiException(HttpStatus.CONFLICT, "PRD_ASSISTANT_PENDING", "AI 正在分析，请稍候");
         }
         var response = new PrdMessageResponse(turn.session().prdId(), turn.session().conversationId(),
-                turn.session().status(), null, turn.currentMissing(), turn.currentDraft(), true);
+                turn.session().status(), null, turn.currentMissing(), draftCodec.toMap(turn.currentDraft()), true);
         try {
             taskExecutor.execute(() -> executeTurn(turn));
         } catch (RuntimeException error) {
@@ -105,6 +109,30 @@ public class PrdConversationService {
                     response.missingFields(), response.draft(), false);
         }
         return response;
+    }
+
+    @Transactional
+    public Map<String, Object> confirmTargets(String prdId, List<String> entryIds, Authentication actor) {
+        var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
+        access.requireMember(current.systemId(), actor);
+        var draft = draftCodec.read(current.draftJson());
+        var selectedIds = entryIds == null ? List.<String>of() : entryIds;
+        var selected = draft.suspectedTargets().stream()
+                .filter(target -> selectedIds.contains(target.entryId()))
+                .toList();
+        if (selected.isEmpty()) throw new IllegalArgumentException("请选择待确认的页面");
+        // 多次确认时保留已有结果，同一知识条目只保留一次。
+        var merged = new LinkedHashMap<String, KnowledgeMatchService.SuspectedTarget>();
+        draft.targets().forEach(target -> merged.put(target.entryId(), target));
+        selected.forEach(target -> merged.put(target.entryId(), target));
+        var updated = draft.withTargets(List.copyOf(merged.values()));
+        var now = Instant.now();
+        aggregate.update(new PrdSession(current.prdId(), current.systemId(), current.conversationId(), current.workItemId(),
+                current.caseId(), current.title(), current.goal(), draftCodec.write(updated), current.missingFields(),
+                current.status(), current.createdBy(), current.confirmedBy(), current.confirmedAt(), current.createdAt(), now));
+        aggregate.insert(new ConversationMessage("msg-" + UUID.randomUUID(), current.conversationId(), current.systemId(),
+                current.prdId(), "user", "已确认截图对应页面", "[]", "[]", actor.getName(), now));
+        return draftCodec.toMap(updated);
     }
 
     private void executeTurn(PreparedTurn turn) {
@@ -162,22 +190,21 @@ public class PrdConversationService {
         append(DomainEventType.UserMessageReceived, systemId, prdId, actor.getName(),
                 "UserMessageReceived:" + prdId + ":" + turn, Map.of("content", content, "turn", turn));
         return new PreparedTurn(session, current == null, userMessage, pendingMessage, turn, history, approvedMemories,
-                validatedAttachments, readMap(session.draftJson()), readList(session.missingFields()), actor.getName());
+                validatedAttachments, draftCodec.read(session.draftJson()), readList(session.missingFields()), actor.getName());
     }
 
     private ProcessedTurn processTurn(PreparedTurn turn) {
         var analysis = analyze(turn.session().systemId(), turn.attachments());
         var agentContent = turn.userMessage().content() + (analysis.observations().isEmpty() ? "" : "\n截图观察："
                 + analysis.observations().stream().map(UiObservation::contextText).collect(Collectors.joining("\n")));
-        var result = productAgent.updateDraft(turn.session().systemId(), agentContent, turn.currentDraft(),
+        var result = productAgent.updateDraft(turn.session().systemId(), agentContent, draftCodec.toMap(turn.currentDraft()),
                 turn.currentMissing(), turn.history(), turn.approvedMemories());
-        var draft = new LinkedHashMap<>(result.draft());
-        preserveTargets(turn.currentDraft(), draft);
+        var draft = draftCodec.fromMap(result.draft()).withTitle(result.title()).preserveTargets(turn.currentDraft());
         var anchors = analysis.observations().stream().flatMap(observation -> observation.anchors().stream()).toList();
         var match = anchors.isEmpty() ? new KnowledgeMatchService.MatchResult(List.of(), false)
                 : knowledge.match(turn.session().systemId(), anchors);
-        if (!match.targets().isEmpty()) draft.put("suspectedTargets", match.targets());
-        return new ProcessedTurn(result, draft, analysis, match, agentContent,
+        if (!match.targets().isEmpty()) draft = draft.withSuspectedTargets(match.targets());
+        return new ProcessedTurn(result, draft, analysis,
                 assistantMessage(result.assistantMessage(), analysis.failed(), match));
     }
 
@@ -186,10 +213,10 @@ public class PrdConversationService {
         var result = processed.result();
         if (messages.completePending(turn.pendingMessage().messageId(), processed.assistantMessage()) == 0) return;
         var status = result.missingFields().isEmpty() ? "waiting_user_confirm" : "need_clarification";
-        var title = turn.newSession() || turn.session().title() == null ? result.title() : turn.session().title();
-        var goal = turn.newSession() ? processed.agentContent() : turn.session().goal();
+        var title = turn.newSession() || turn.session().title() == null ? processed.draft().title() : turn.session().title();
+        var goal = turn.newSession() ? processed.draft().goal() : turn.session().goal();
         var session = new PrdSession(turn.session().prdId(), turn.session().systemId(), turn.session().conversationId(),
-                turn.session().workItemId(), turn.session().caseId(), title, goal, json(processed.draft()),
+                turn.session().workItemId(), turn.session().caseId(), title, goal, draftCodec.write(processed.draft()),
                 json(result.missingFields()), status, turn.session().createdBy(), turn.session().confirmedBy(),
                 turn.session().confirmedAt(), turn.session().createdAt(), now);
         aggregate.update(session);
@@ -228,13 +255,6 @@ public class PrdConversationService {
         return new AnalysisResult(observations, failed);
     }
 
-    private void preserveTargets(Map<String, Object> current, Map<String, Object> draft) {
-        if (current.containsKey("targets")) draft.put("targets", current.get("targets"));
-        if (!draft.containsKey("suspectedTargets") && current.containsKey("suspectedTargets")) {
-            draft.put("suspectedTargets", current.get("suspectedTargets"));
-        }
-    }
-
     private String assistantMessage(String original, boolean analysisFailed, KnowledgeMatchService.MatchResult match) {
         var message = new StringBuilder(original == null ? "" : original);
         if (analysisFailed) message.append("\n图片分析不可用，已保留图片，不影响文字对话。");
@@ -253,14 +273,6 @@ public class PrdConversationService {
                         String idempotencyKey, Map<String, Object> payload) {
         events.append(new DomainEventService.AppendEvent(type, systemId, null, prdId, null, actorId,
                 "control-plane", payload, prdId, null, idempotencyKey));
-    }
-
-    private Map<String, Object> readMap(String json) {
-        try {
-            return objectMapper.readValue(json, new TypeReference<>() {});
-        } catch (JsonProcessingException error) {
-            throw new IllegalArgumentException("PRD draft 不是合法 JSON", error);
-        }
     }
 
     private List<String> readList(String json) {
@@ -292,13 +304,12 @@ public class PrdConversationService {
     private record PreparedTurn(PrdSession session, boolean newSession, ConversationMessage userMessage,
                                 ConversationMessage pendingMessage, long turn, List<ConversationMessage> history,
                                 List<String> approvedMemories,
-                                List<Attachment> attachments, Map<String, Object> currentDraft,
+                                List<Attachment> attachments, PrdDraft currentDraft,
                                 List<String> currentMissing, String actorId) {
     }
 
-    private record ProcessedTurn(ProductAgentPort.DraftResult result, Map<String, Object> draft,
-                                 AnalysisResult analysis, KnowledgeMatchService.MatchResult match,
-                                 String agentContent, String assistantMessage) {
+    private record ProcessedTurn(ProductAgentPort.DraftResult result, PrdDraft draft,
+                                 AnalysisResult analysis, String assistantMessage) {
     }
 
     private record AnalysisResult(List<UiObservation> observations, boolean failed) {
