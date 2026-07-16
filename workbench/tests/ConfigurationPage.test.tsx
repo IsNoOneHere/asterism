@@ -126,12 +126,20 @@ test('knowledge creation is disabled when repository configuration cannot load',
   expect(screen.getByRole('button', { name: '新增条目' })).toBeDisabled();
 });
 
+test('new system leaves MR target branch empty for per-repository defaults', async () => {
+  renderApp('/systems');
+  fireEvent.click(await screen.findByRole('button', { name: '新建系统' }));
+
+  expect(screen.getByLabelText('MR 目标分支')).toHaveValue('');
+});
+
 test('git publishing configuration edits multiple repositories without rendering token', async () => {
   renderApp('/systems');
   fireEvent.click((await screen.findAllByRole('button', { name: '编辑' }))[0]);
 
   const dialog = await screen.findByRole('dialog');
   expect(dialog).toHaveTextContent('Git 与发布');
+  expect(screen.getByLabelText('MR 目标分支')).toHaveValue('');
   expect(screen.getByLabelText('GitLab Token')).toHaveAttribute('placeholder', '留空保留现有 Token');
   fireEvent.change(screen.getByLabelText('发布模式'), { target: { value: 'gitlab' } });
   fireEvent.change(screen.getByLabelText('GitLab Token'), { target: { value: 'temporary-value' } });
@@ -144,6 +152,7 @@ test('git publishing configuration edits multiple repositories without rendering
   const call = vi.mocked(fetch).mock.calls.find(([path, init]) => path === '/api/v5/systems/alpha-system/profile' && init?.method === 'PATCH');
   const body = JSON.parse(String(call?.[1]?.body)).gitConfiguration;
   expect(body.releaseMode).toBe('gitlab');
+  expect(body.mrTargetBranch).toBe('');
   expect(body.repos).toHaveLength(2);
   expect(body.repos[1].gitlabProject).toBe('alpha/api');
   expect(vi.mocked(fetch).mock.calls.filter(([path, init]) => path === '/api/v5/systems/alpha-system/profile' && init?.method === 'PATCH')).toHaveLength(1);

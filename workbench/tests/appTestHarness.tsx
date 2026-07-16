@@ -116,7 +116,7 @@ export function resetAppTestState() {
     repos: [{ repoId: 'main', name: 'Alpha Web', kind: 'frontend', gitlabProject: 'alpha/web',
       defaultBranch: 'main', cloneMode: 'local', localPath: '/tmp/alpha', allowedPaths: ['src'],
       forbiddenPaths: ['secrets'], testCommands: ['npm test'] }],
-    releaseMode: 'local', validationMode: 'auto', mrTargetBranch: 'main', mrLabels: [],
+    releaseMode: 'local', validationMode: 'auto', mrTargetBranch: '', mrLabels: [],
     gitlabBaseUrl: '', effectiveGitlabBaseUrl: 'http://gitlab.internal', tokenSet: true, usingGlobalToken: true,
   };
   prdPostCount = 0;

@@ -32,7 +32,7 @@ const emptyRepo: FormValue['repos'][number] = {
 };
 const emptyForm: FormValue = {
   systemId: '', name: '', description: '', ownerUserId: '', releaseMode: 'local', validationMode: 'auto',
-  mrTargetBranch: 'main', mrLabels: '', gitlabBaseUrl: '', gitlabToken: '', repos: [emptyRepo],
+  mrTargetBranch: '', mrLabels: '', gitlabBaseUrl: '', gitlabToken: '', repos: [emptyRepo],
 };
 
 export function SystemsPage() {
