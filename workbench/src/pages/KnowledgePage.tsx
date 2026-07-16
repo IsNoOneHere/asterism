@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FormEvent, useRef, useState } from 'react';
+import { FormEvent, useMemo, useRef, useState } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
 import { api } from '../api/client';
 import { Pagination, usePagination } from '../components/Pagination';
+import { SearchField } from '../components/SearchField';
 import { useCurrentSystem } from '../SystemContext';
 
 type Status = 'candidate' | 'approved' | 'rejected';
@@ -17,14 +18,21 @@ export function KnowledgePage() {
   const [anchors, setAnchors] = useState('');
   const [routePath, setRoutePath] = useState('');
   const [apiEndpoints, setApiEndpoints] = useState('');
+  const [query, setQuery] = useState('');
   const entries = useQuery({
     queryKey: ['knowledge', systemId, status],
     queryFn: () => api.knowledge(systemId, status),
     enabled: Boolean(systemId),
   });
   const values = entries.data ?? [];
+  const filteredValues = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    if (!keyword) return values;
+    return values.filter((entry) => [entry.title, entry.kind, kindName(entry.kind), entry.routePath, entry.source, ...entry.anchorTexts, ...entry.apiEndpoints]
+      .some((value) => value?.toLowerCase().includes(keyword)));
+  }, [query, values]);
   // 知识库固定每页 10 条，切换状态时自动回到第一页。
-  const pagination = usePagination(values, `${systemId}:${status}`, 1, entries.isSuccess, 10);
+  const pagination = usePagination(filteredValues, `${systemId}:${status}:${query}`, 1, entries.isSuccess, 10);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['knowledge', systemId] });
   const create = useMutation({
     mutationFn: () => api.createKnowledge(systemId, {
@@ -70,9 +78,13 @@ export function KnowledgePage() {
 
     <div className="panel management-panel">
       <div className="tabs management-tabs" role="tablist" aria-label="知识条目状态">
-        <button type="button" role="tab" aria-selected={status === 'candidate'} className={status === 'candidate' ? 'active' : ''} onClick={() => setStatus('candidate')}>待审批</button>
-        <button type="button" role="tab" aria-selected={status === 'approved'} className={status === 'approved' ? 'active' : ''} onClick={() => setStatus('approved')}>已批准</button>
-        <button type="button" role="tab" aria-selected={status === 'rejected'} className={status === 'rejected' ? 'active' : ''} onClick={() => setStatus('rejected')}>已拒绝</button>
+        <button type="button" role="tab" aria-selected={status === 'candidate'} className={status === 'candidate' ? 'active' : ''} onClick={() => { setStatus('candidate'); setQuery(''); }}>待审批</button>
+        <button type="button" role="tab" aria-selected={status === 'approved'} className={status === 'approved' ? 'active' : ''} onClick={() => { setStatus('approved'); setQuery(''); }}>已批准</button>
+        <button type="button" role="tab" aria-selected={status === 'rejected'} className={status === 'rejected' ? 'active' : ''} onClick={() => { setStatus('rejected'); setQuery(''); }}>已拒绝</button>
+      </div>
+      <div className="management-toolbar">
+        <SearchField value={query} label="搜索知识条目" placeholder="搜索标题、路由、接口或锚点" onChange={setQuery} />
+        <span className="result-summary">显示 {filteredValues.length} / {values.length}</span>
       </div>
       <div className="table-frame"><table className="data-table management-table knowledge-table"><thead><tr><th>知识条目</th><th>类型</th><th>路由 / 接口</th><th>来源</th><th>操作</th></tr></thead><tbody>
         {pagination.pageItems.map((entry) => <tr key={entry.entryId}>
@@ -82,9 +94,9 @@ export function KnowledgePage() {
           <td>{entry.source || '手工录入'}</td>
           <td>{status === 'candidate' ? <div className="button-row compact-actions"><button type="button" onClick={() => update.mutate({ entryId: entry.entryId, next: 'approved' })}>批准</button><button type="button" className="secondary" onClick={() => update.mutate({ entryId: entry.entryId, next: 'rejected' })}>拒绝</button></div> : status === 'approved' ? <button type="button" className="danger-outline" onClick={() => update.mutate({ entryId: entry.entryId, next: 'disabled' })}>停用</button> : <span className="status-badge neutral">已归档</span>}</td>
         </tr>)}
-        {!values.length && <tr><td className="empty-cell" colSpan={5}>当前状态下暂无知识条目</td></tr>}
+        {!filteredValues.length && <tr><td className="empty-cell" colSpan={5}>{query ? '没有匹配的知识条目' : '当前状态下暂无知识条目'}</td></tr>}
       </tbody></table></div>
-      <Pagination total={values.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
+      <Pagination total={filteredValues.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
       {(entries.error || update.error) && <div className="error-text">知识条目加载或更新失败。</div>}
     </div>
 

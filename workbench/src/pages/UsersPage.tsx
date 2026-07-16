@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyRound, Pencil, Plus, Trash2, UserPlus } from 'lucide-react';
 import { api, UserAccount } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { Pagination, usePagination } from '../components/Pagination';
+import { SearchField } from '../components/SearchField';
 import { useCurrentSystem } from '../SystemContext';
 
 const emptyUser = { userId: '', displayName: '', email: '', password: '' };
@@ -25,6 +26,7 @@ export function UsersPage() {
   const [membership, setMembership] = useState({ systemId, userId: '', role: 'requester' });
   const [resetForm, setResetForm] = useState({ userId: '', password: '', confirm: '' });
   const [message, setMessage] = useState('');
+  const [query, setQuery] = useState('');
   const [confirmAction, setConfirmAction] = useState<UserConfirmAction | null>(null);
   const enabledUsers = (users.data ?? []).filter((user) => user.enabled);
   const members = useQuery({
@@ -35,8 +37,20 @@ export function UsersPage() {
   });
   const userValues = users.data ?? [];
   const memberValues = members.data ?? [];
-  const userPagination = usePagination(userValues, userValues.map((user) => user.userId).join(':'));
-  const memberPagination = usePagination(memberValues, systemId + ':' + memberValues.map((member) => member.userId + member.role).join(':'));
+  const filteredUsers = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    if (!keyword) return userValues;
+    return userValues.filter((user) => [user.userId, user.displayName, user.email]
+      .some((value) => value?.toLowerCase().includes(keyword)));
+  }, [query, userValues]);
+  const filteredMembers = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    if (!keyword) return memberValues;
+    return memberValues.filter((member) => [member.userId, member.displayName, member.role, roleName(member.role)]
+      .some((value) => value?.toLowerCase().includes(keyword)));
+  }, [query, memberValues]);
+  const userPagination = usePagination(filteredUsers, `${query}:${filteredUsers.map((user) => user.userId).join(':')}`);
+  const memberPagination = usePagination(filteredMembers, `${systemId}:${query}:${filteredMembers.map((member) => member.userId + member.role).join(':')}`);
 
   useEffect(() => {
     setMembership((value) => ({ ...value, systemId }));
@@ -144,18 +158,28 @@ export function UsersPage() {
     <section className="management-page">
       <header className="page-head management-head">
         <div><h1>用户与成员</h1><p>管理登录账号，以及当前系统中的成员角色。</p></div>
-        <div className="button-row">
-          <button type="button" className="secondary icon-text-button" disabled={!systemId} onClick={openMemberEditor}><UserPlus size={16} />添加成员</button>
+        {tab === 'users' ? (
           <button type="button" className="icon-text-button" onClick={() => openUserEditor()}><Plus size={16} />新增用户</button>
-        </div>
+        ) : (
+          <button type="button" className="icon-text-button" disabled={!systemId} onClick={openMemberEditor}><UserPlus size={16} />添加成员</button>
+        )}
       </header>
 
       {message && <div className="success-text" role="status">{message}</div>}
 
       <div className="panel management-panel">
         <div className="tabs management-tabs" role="tablist" aria-label="用户与成员列表">
-          <button type="button" role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>用户列表 <span>{userValues.length}</span></button>
-          <button type="button" role="tab" aria-selected={tab === 'members'} className={tab === 'members' ? 'active' : ''} onClick={() => setTab('members')}>当前系统成员 <span>{memberValues.length}</span></button>
+          <button type="button" role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'active' : ''} onClick={() => { setTab('users'); setQuery(''); }}>用户列表 <span>{userValues.length}</span></button>
+          <button type="button" role="tab" aria-selected={tab === 'members'} className={tab === 'members' ? 'active' : ''} onClick={() => { setTab('members'); setQuery(''); }}>当前系统成员 <span>{memberValues.length}</span></button>
+        </div>
+        <div className="management-toolbar">
+          <SearchField
+            value={query}
+            label={tab === 'users' ? '搜索用户' : '搜索成员'}
+            placeholder={tab === 'users' ? '搜索姓名、账号或邮箱' : '搜索姓名、账号或角色'}
+            onChange={setQuery}
+          />
+          <span className="result-summary">显示 {tab === 'users' ? filteredUsers.length : filteredMembers.length} / {tab === 'users' ? userValues.length : memberValues.length}</span>
         </div>
 
         {tab === 'users' ? <>
@@ -171,10 +195,10 @@ export function UsersPage() {
                 <button type="button" className="danger-outline icon-text-button" aria-label={`删除用户 ${user.userId}`} disabled={removeUser.isPending} onClick={() => openConfirmation({ type: 'delete', userId: user.userId, name: user.displayName || user.userId })}><Trash2 size={15} />删除</button>
               </div></td>
             </tr>)}
-            {!userValues.length && <tr><td className="empty-cell" colSpan={4}>暂无用户</td></tr>}
+            {!filteredUsers.length && <tr><td className="empty-cell" colSpan={4}>{query ? '没有匹配的用户' : '暂无用户'}</td></tr>}
           </tbody></table></div>
           {users.isError && <div className="empty">用户接口不可用或无管理员权限。</div>}
-          <Pagination total={userValues.length} page={userPagination.page} totalPages={userPagination.totalPages} onPageChange={userPagination.setPage} />
+          <Pagination total={filteredUsers.length} page={userPagination.page} totalPages={userPagination.totalPages} onPageChange={userPagination.setPage} />
         </> : <>
           <div className="table-frame"><table className="data-table management-table"><thead><tr><th>成员</th><th>角色</th><th>所属系统</th><th>操作</th></tr></thead><tbody>
             {memberPagination.pageItems.map((member) => <tr key={member.userId + member.role}>
@@ -183,9 +207,9 @@ export function UsersPage() {
               <td>{systemId}</td>
               <td><button type="button" className="danger-outline" onClick={() => openConfirmation({ type: 'remove-member', userId: member.userId, role: member.role })}>移除</button></td>
             </tr>)}
-            {!memberValues.length && <tr><td className="empty-cell" colSpan={4}>当前系统暂无成员</td></tr>}
+            {!filteredMembers.length && <tr><td className="empty-cell" colSpan={4}>{query ? '没有匹配的成员' : '当前系统暂无成员'}</td></tr>}
           </tbody></table></div>
-          <Pagination total={memberValues.length} page={memberPagination.page} totalPages={memberPagination.totalPages} onPageChange={memberPagination.setPage} />
+          <Pagination total={filteredMembers.length} page={memberPagination.page} totalPages={memberPagination.totalPages} onPageChange={memberPagination.setPage} />
         </>}
       </div>
 

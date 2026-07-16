@@ -1,12 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { api, SystemProfile } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { Pagination, usePagination } from '../components/Pagination';
+import { SearchField } from '../components/SearchField';
 import { useCurrentSystem } from '../SystemContext';
 
 const schema = z.object({
@@ -34,9 +35,16 @@ export function SystemsPage() {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [mode, setMode] = useState<'edit' | 'new'>('new');
   const [message, setMessage] = useState('');
+  const [query, setQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<SystemProfile | null>(null);
   const enabledUsers = (users.data ?? []).filter((user) => user.enabled);
-  const pagination = usePagination(systems, systems.map((system) => system.systemId).join(':'));
+  const filteredSystems = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    if (!keyword) return systems;
+    return systems.filter((system) => [system.name, system.systemId, system.description, system.repoPath, system.ownerUserId]
+      .some((value) => value?.toLowerCase().includes(keyword)));
+  }, [query, systems]);
+  const pagination = usePagination(filteredSystems, `${query}:${filteredSystems.map((system) => system.systemId).join(':')}`);
   const form = useForm<FormValue>({ resolver: zodResolver(schema), defaultValues: emptyForm });
 
   const save = useMutation({
@@ -92,6 +100,10 @@ export function SystemsPage() {
           <div><h2>系统列表</h2><p>选择系统只影响当前工作上下文，编辑配置请使用行内操作。</p></div>
           <span className="config-count">{systems.length} 个系统</span>
         </div>
+        <div className="management-toolbar">
+          <SearchField value={query} label="搜索系统" placeholder="搜索名称、编号、仓库或负责人" onChange={setQuery} />
+          <span className="result-summary">显示 {filteredSystems.length} / {systems.length}</span>
+        </div>
         <div className="table-frame"><table className="data-table management-table system-table"><thead><tr><th>系统</th><th>代码仓库</th><th>负责人</th><th>状态</th><th>操作</th></tr></thead><tbody>
           {pagination.pageItems.map((system) => <tr key={system.systemId}>
             <td><div className="table-title"><strong>{system.name}</strong><span>{system.systemId}{system.description ? ` · ${system.description}` : ''}</span></div></td>
@@ -103,9 +115,9 @@ export function SystemsPage() {
               <button type="button" className="danger-outline icon-text-button" aria-label={`删除系统 ${system.systemId}`} disabled={remove.isPending} onClick={() => openDelete(system)}><Trash2 size={15} />删除</button>
             </div></td>
           </tr>)}
-          {!systems.length && <tr><td className="empty-cell" colSpan={5}>还没有系统配置</td></tr>}
+          {!filteredSystems.length && <tr><td className="empty-cell" colSpan={5}>{query ? '没有匹配的系统' : '还没有系统配置'}</td></tr>}
         </tbody></table></div>
-        <Pagination total={systems.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
+        <Pagination total={filteredSystems.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
       </div>
 
       <ActionConfirmDialog
