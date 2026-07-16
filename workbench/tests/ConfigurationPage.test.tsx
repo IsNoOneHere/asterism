@@ -4,16 +4,15 @@ import { renderApp, resetAppTestState } from './appTestHarness';
 
 beforeEach(resetAppTestState);
 
-test('model and agent configuration share one page and data source', async () => {
-  renderApp('/models');
+test.each([
+  { path: '/models', title: '模型配置', list: '模型列表', absent: 'Agent 列表' },
+  { path: '/agents', title: 'Agent 配置', list: 'Agent 列表', absent: '模型列表' },
+])('$path only renders its own configuration list', async ({ path, title, list, absent }) => {
+  renderApp(path);
 
-  expect(await screen.findByRole('heading', { name: 'Agent / 模型配置' })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: '模型列表' })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: 'Agent 列表' })).toBeInTheDocument();
-  expect((await screen.findAllByText('Claude 主模型')).length).toBeGreaterThan(0);
-  expect(screen.getByText('Key 已配置')).toBeInTheDocument();
-  expect(screen.getByText('内置 · PRD 对话')).toBeInTheDocument();
-  expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: list })).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: absent })).not.toBeInTheDocument();
 });
 
 test('model profile edit opens a centered dialog instead of an inline form', async () => {
@@ -45,6 +44,8 @@ test('custom agent can select deepagents profile and path scope', async () => {
   renderApp('/agents');
   await screen.findAllByText('frontend-dev');
   expect(screen.getByRole('heading', { name: 'Agent 列表' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '新增 Agent' }));
+  expect(screen.getByRole('dialog')).toHaveAttribute('open');
   fireEvent.change(screen.getByLabelText('Agent 名称'), { target: { value: 'backend-dev' } });
   fireEvent.change(screen.getByLabelText('执行内核'), { target: { value: 'deepagents' } });
   fireEvent.change(screen.getByLabelText('Model Profile'), { target: { value: 'mp-1' } });
@@ -61,6 +62,7 @@ test('builtin product only edits its profile and cannot be deleted', async () =>
   await screen.findAllByText('product');
   expect(screen.queryByRole('button', { name: '删除 product' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '编辑 product' }));
+  expect(screen.getByRole('dialog')).toHaveAttribute('open');
   expect(screen.getByRole('heading', { name: '编辑 product' })).toBeInTheDocument();
   expect(screen.queryByLabelText('执行内核')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '保存 Agent' }));

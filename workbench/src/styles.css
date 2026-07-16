@@ -197,6 +197,18 @@ select {
   transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
 }
 
+/* 复选框不沿用文本输入框的整行尺寸。 */
+input[type="checkbox"] {
+  accent-color: var(--accent);
+  border-radius: 4px;
+  flex: 0 0 auto;
+  height: 16px;
+  margin: 0;
+  min-height: 0;
+  padding: 0;
+  width: 16px;
+}
+
 input:focus,
 textarea:focus,
 select:focus {
@@ -1324,7 +1336,7 @@ pre {
   display: inline-flex;
   font-size: 12px;
   gap: 4px;
-  margin-left: 6px;
+  margin-left: 0;
 }
 
 .key-status.configured {
@@ -1508,16 +1520,16 @@ button.danger-action:hover:not(:disabled) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.config-dialog-fields label:last-child,
+.checkbox-field,
 .agent-role-fields .wide-field {
   grid-column: 1 / -1;
 }
 
-.model-config-layout {
-  align-items: start;
-  display: grid;
-  gap: 18px;
-  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.55fr);
+.checkbox-field {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-height: 40px;
 }
 
 .config-count,
@@ -1540,14 +1552,35 @@ button.danger-action:hover:not(:disabled) {
   min-width: 820px;
 }
 
+.model-profile-table td:first-child strong,
+.model-profile-table td:first-child small {
+  display: block;
+}
+
+.model-profile-table td:first-child small {
+  color: var(--muted);
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
 .agent-role-table {
   min-width: 720px;
 }
 
-.agent-role-editor {
-  border-top: 1px solid var(--border);
-  margin-top: 20px;
-  padding-top: 18px;
+.model-profile-table th:last-child,
+.model-profile-table td:last-child,
+.agent-role-table th:last-child,
+.agent-role-table td:last-child {
+  text-align: right;
+  width: 120px;
+}
+
+.config-action-cell .button-row {
+  justify-content: flex-end;
+}
+
+.agent-dialog {
+  width: min(720px, calc(100vw - 32px));
 }
 
 h1,
@@ -2417,7 +2450,6 @@ label {
     grid-template-columns: 1fr;
   }
 
-  .model-config-layout,
   .agent-config-layout {
     grid-template-columns: 1fr;
   }

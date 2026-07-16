@@ -1,7 +1,7 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { Bot, BrainCircuit, ClipboardList, LogOut, Map, Settings2, Users } from 'lucide-react';
+import { Bot, BrainCircuit, ClipboardList, Cpu, LogOut, Map, Settings2, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { api, CurrentUser } from './api/client';
 import { BrandMark } from './components/BrandMark';
@@ -31,7 +31,8 @@ const navigationGroups: { label: string; items: NavigationItem[] }[] = [
   ] },
   { label: '系统管理', items: [
     { to: '/systems', label: '系统配置', icon: Settings2 },
-    { to: '/agents', label: 'Agent / 模型配置', icon: Bot },
+    { to: '/models', label: '模型配置', icon: Cpu },
+    { to: '/agents', label: 'Agent 配置', icon: Bot },
     { to: '/users', label: '用户与成员', icon: Users, adminOnly: true },
   ] },
 ];
@@ -135,8 +136,8 @@ function AuthenticatedShell({ user, visibleGroups, onLogout }: { user: CurrentUs
           <Route path="/work-items/:workItemId" element={<WorkItemDetailPage />} />
           <Route path="/new" element={<Navigate to="/work-items/new" replace />} />
           <Route path="/systems" element={<SystemsPage />} />
-          <Route path="/models" element={<Navigate to="/agents" replace />} />
-          <Route path="/agents" element={<AgentConfigPage />} />
+          <Route path="/models" element={<AgentConfigPage section="models" />} />
+          <Route path="/agents" element={<AgentConfigPage section="agents" />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/users" element={isAdmin(user) ? <UsersPage /> : <Navigate to="/work-items" replace />} />
@@ -158,7 +159,8 @@ function pageContext(pathname: string) {
   if (pathname === '/memory') return { group: '知识与上下文', title: '系统记忆' };
   if (pathname === '/knowledge') return { group: '知识与上下文', title: '系统知识库' };
   if (pathname === '/systems') return { group: '系统管理', title: '系统配置' };
-  if (pathname === '/agents' || pathname === '/models') return { group: '系统管理', title: 'Agent / 模型配置' };
+  if (pathname === '/models') return { group: '系统管理', title: '模型配置' };
+  if (pathname === '/agents') return { group: '系统管理', title: 'Agent 配置' };
   if (pathname === '/users') return { group: '系统管理', title: '用户与成员' };
   return { group: 'Asterism', title: 'Workbench' };
 }
