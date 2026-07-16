@@ -107,8 +107,7 @@ public class GitIntegrationService {
         if (!Set.of("auto", "skip").contains(validationMode)) throw new IllegalArgumentException("不支持的 validationMode");
         var ids = new HashSet<String>();
         var repos = request.repos().stream().map(repo -> normalizedRepo(repo, releaseMode, ids)).toList();
-        var target = text(request.mrTargetBranch());
-        if (target.isBlank()) target = repos.getFirst().defaultBranch();
+        var target = text(request.mrTargetBranch()).trim();
         return new UpdateGitConfiguration(repos, releaseMode, validationMode, target,
                 request.mrLabels() == null ? List.of() : request.mrLabels(), text(request.gitlabBaseUrl()),
                 text(request.gitlabToken()));
@@ -121,6 +120,10 @@ public class GitIntegrationService {
         var cloneMode = text(repo.cloneMode()).isBlank() ? "local" : repo.cloneMode();
         if (!KINDS.contains(kind)) throw new IllegalArgumentException("不支持的仓库类型: " + kind);
         if (!CLONE_MODES.contains(cloneMode)) throw new IllegalArgumentException("不支持的 cloneMode: " + cloneMode);
+        // local 发布会直接修改 localPath，不能使用只准备临时克隆的 GitLab 模式。
+        if ("local".equals(releaseMode) && "gitlab".equals(cloneMode)) {
+            throw new IllegalArgumentException("local 发布模式只能使用 local 克隆方式");
+        }
         if ("local".equals(cloneMode) && text(repo.localPath()).isBlank()) {
             throw new IllegalArgumentException("local 仓库必须配置 localPath");
         }

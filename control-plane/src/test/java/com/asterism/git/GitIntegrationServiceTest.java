@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -56,6 +57,37 @@ class GitIntegrationServiceTest {
 
         assertThat(result.ready()).isFalse();
         assertThat(result.unavailableProjects()).containsExactly("group/api");
+    }
+
+    @Test
+    void blankTargetBranchKeepsPerRepositoryDefaults() throws Exception {
+        when(systems.findById("sys-1")).thenReturn(Optional.of(system()));
+        when(configs.findById("sys-1")).thenReturn(Optional.of(record("stored-credential")));
+        var repositories = List.of(
+                new GitIntegrationService.RepoConfig("web", "Web", "frontend", "group/web", "main", "gitlab", "",
+                        List.of("src"), List.of(), List.of("npm test")),
+                new GitIntegrationService.RepoConfig("api", "API", "backend", "group/api", "develop", "gitlab", "",
+                        List.of("src"), List.of(), List.of("mvn test")));
+
+        service.update("sys-1", new GitIntegrationService.UpdateGitConfiguration(
+                repositories, "gitlab", "skip", "  ", List.of(), "", ""));
+
+        var saved = ArgumentCaptor.forClass(SystemGitConfig.class);
+        verify(aggregate).update(saved.capture());
+        assertThat(saved.getValue().mrTargetBranch()).isEmpty();
+    }
+
+    @Test
+    void localReleaseRejectsGitLabCloneMode() {
+        when(systems.findById("sys-1")).thenReturn(Optional.of(system()));
+        var repository = new GitIntegrationService.RepoConfig(
+                "web", "Web", "frontend", "group/web", "main", "gitlab", "",
+                List.of("src"), List.of(), List.of());
+
+        assertThatThrownBy(() -> service.update("sys-1", new GitIntegrationService.UpdateGitConfiguration(
+                List.of(repository), "local", "auto", "", List.of(), "", "")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("local 发布模式只能使用 local 克隆方式");
     }
 
     private SystemGitConfig record(String token) throws Exception {
