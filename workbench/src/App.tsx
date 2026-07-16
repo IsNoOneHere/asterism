@@ -56,7 +56,9 @@ export function App() {
     <SystemProvider systems={systems.data ?? []}>
       <AuthenticatedShell user={user} visibleLinks={visibleLinks} onLogout={async () => {
         await api.logout();
-        queryClient.clear();
+        // 保留未登录状态，清理其余用户数据，避免退出后仍停留在旧页面。
+        queryClient.setQueryData(['auth', 'me'], null);
+        queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'auth' });
       }} />
     </SystemProvider>
   );

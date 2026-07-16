@@ -86,6 +86,18 @@ public class SystemMembershipRepository {
                 .update();
     }
 
+    public void deleteMembershipsForSystem(String systemId) {
+        jdbc.sql("delete from system_memberships where system_id = :systemId")
+                .param("systemId", systemId)
+                .update();
+    }
+
+    public void deleteMembershipsForUser(String userId) {
+        jdbc.sql("delete from system_memberships where user_id = :userId")
+                .param("userId", userId)
+                .update();
+    }
+
     public long countOwners(String systemId) {
         return jdbc.sql("""
                         select count(*)

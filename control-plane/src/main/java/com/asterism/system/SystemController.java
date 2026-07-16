@@ -9,8 +9,10 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
 import org.springframework.security.core.Authentication;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -68,6 +70,24 @@ public class SystemController {
         return maskProfile(saved);
     }
 
+    @DeleteMapping("/{systemId}")
+    @Transactional
+    void delete(@PathVariable String systemId, Authentication actor) {
+        access.requireOwnerOrAdmin(systemId, actor);
+        if (!systems.existsById(systemId)) throw new IllegalArgumentException("系统不存在");
+        if (systems.hasBusinessData(systemId)) {
+            throw new IllegalStateException("系统已有业务数据，无法删除");
+        }
+        try {
+            // 先清理成员关系，主体删除失败时由事务统一回滚。
+            memberships.deleteMembershipsForSystem(systemId);
+            systems.deleteById(systemId);
+        } catch (DataIntegrityViolationException error) {
+            throw new IllegalStateException("系统仍被业务数据引用，无法删除", error);
+        }
+        log.info("系统已删除 system={} actor={}", systemId, actor.getName());
+    }
+
     @PatchMapping("/{systemId}/profile")
     SystemProfile updateProfile(@PathVariable String systemId, @Valid @RequestBody ProfileRequest request, Authentication actor) {
         access.requireOwnerOrAdmin(systemId, actor);
@@ -112,7 +132,11 @@ public class SystemController {
 
     private SystemProfile toProfile(String systemId, UpsertSystemRequest request, SystemProfile existing, String createdBy) {
         var now = Instant.now();
-        var modelConfig = mergeSecret(existing == null ? null : existing.modelProviderConfig(), request.modelProviderConfig());
+        var agentConfig = request.agentConfig() == null && existing != null
+                ? readMap(existing.agentConfig()) : request.agentConfig() == null ? Map.<String, Object>of() : request.agentConfig();
+        var modelConfig = normalizeLegacyModelConfig(
+                mergeSecret(existing == null ? null : existing.modelProviderConfig(), request.modelProviderConfig()),
+                agentConfig);
         return new SystemProfile(
                 systemId,
                 request.name(),
@@ -122,7 +146,7 @@ public class SystemController {
                 json(request.allowedPaths()),
                 json(request.forbiddenPaths()),
                 json(request.testCommands()),
-                request.agentConfig() == null && existing != null ? existing.agentConfig() : json(request.agentConfig() == null ? Map.of() : request.agentConfig()),
+                json(agentConfig),
                 json(modelConfig),
                 createdBy,
                 existing == null ? now : existing.createdAt(),
@@ -164,6 +188,57 @@ public class SystemController {
             merged.put("apiKey", readMap(currentJson).get("apiKey"));
         }
         return merged;
+    }
+
+    private Map<String, Object> normalizeLegacyModelConfig(Map<String, Object> requested,
+                                                            Map<String, Object> agentConfig) {
+        var config = new LinkedHashMap<>(requested);
+        if (config.get("modelProfiles") instanceof List<?> profiles && !profiles.isEmpty()) return config;
+        if (!config.containsKey("model") && !config.containsKey("apiKey") && !config.containsKey("api_key")) return config;
+
+        // 旧单模型请求在写入时直接归一，避免新系统第一次 PRD 仍读取不到 Model Profile。
+        var profileId = "mp-default";
+        var provider = string(config.get("provider"));
+        var profile = new LinkedHashMap<String, Object>();
+        profile.put("id", profileId);
+        profile.put("name", "默认模型");
+        profile.put("provider", List.of("anthropic", "claude").contains(provider.toLowerCase())
+                ? "anthropic" : "openai-compat");
+        profile.put("baseUrl", string(config.containsKey("baseUrl") ? config.get("baseUrl") : config.get("base_url")));
+        profile.put("apiKey", string(config.containsKey("apiKey") ? config.get("apiKey") : config.get("api_key")));
+        profile.put("model", string(config.get("model")));
+        profile.put("supportsVision", false);
+        config.put("modelProfiles", List.of(profile));
+        config.put("modelRouting", Map.of(
+                "defaultProfileId", profileId,
+                "prdProfileId", profileId,
+                "planningProfileId", profileId,
+                "diffProfileId", profileId));
+
+        var engine = string(agentConfig.containsKey("executionProvider")
+                ? agentConfig.get("executionProvider") : agentConfig.get("execution_provider"));
+        if (!engine.isBlank()) {
+            var role = new LinkedHashMap<String, Object>();
+            role.put("id", "role-default");
+            role.put("name", "默认 Agent");
+            role.put("engine", engine);
+            role.put("modelProfileRef", "fake".equals(engine) ? "" : profileId);
+            role.put("pathScope", List.of());
+            role.put("prompt", "");
+            if (agentConfig.get("claudeMaxTurns") != null) role.put("maxTurns", agentConfig.get("claudeMaxTurns"));
+            if (agentConfig.get("executionTimeoutSeconds") != null) {
+                role.put("timeoutSeconds", agentConfig.get("executionTimeoutSeconds"));
+            }
+            config.put("agentRoles", List.of(role));
+            config.put("defaultAgentRoleId", "role-default");
+            config.put("executionMode", "single");
+        }
+        List.of("provider", "model", "baseUrl", "base_url", "apiKey", "api_key").forEach(config::remove);
+        return config;
+    }
+
+    private String string(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     private SystemProfile copy(SystemProfile existing, String agentConfig, String modelProviderConfig) {

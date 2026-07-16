@@ -100,6 +100,35 @@ class SystemBusinessIntegrationTest {
     }
 
     @Test
+    void emptySystemCanBeDeletedButBusinessSystemCannot() throws Exception {
+        var emptySystemId = id("sys-delete-empty");
+        createSystem(emptySystemId, "e2e-owner").andExpect(status().isOk());
+
+        mockMvc.perform(delete("/api/v5/systems/" + emptySystemId)
+                        .with(httpBasic("e2e-owner", "asterism")))
+                .andExpect(status().isOk());
+        assertThat(jdbc.sql("select count(*) from systems where system_id = :systemId")
+                .param("systemId", emptySystemId).query(Long.class).single()).isZero();
+        assertThat(jdbc.sql("select count(*) from system_memberships where system_id = :systemId")
+                .param("systemId", emptySystemId).query(Long.class).single()).isZero();
+
+        var usedSystemId = id("sys-delete-used");
+        createSystem(usedSystemId, "e2e-owner").andExpect(status().isOk());
+        mockMvc.perform(post("/api/v5/memory/candidates")
+                        .with(httpBasic("e2e-owner", "asterism"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"systemId\":\"" + usedSystemId + "\",\"category\":\"lesson\","
+                                + "\"title\":\"保留数据\",\"content\":\"不能随系统删除\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(delete("/api/v5/systems/" + usedSystemId)
+                        .with(httpBasic("e2e-owner", "asterism")))
+                .andExpect(status().isConflict());
+        assertThat(jdbc.sql("select count(*) from systems where system_id = :systemId")
+                .param("systemId", usedSystemId).query(Long.class).single()).isOne();
+    }
+
+    @Test
     void memoryListRequiresMembershipAndFiltersStatus() throws Exception {
         var systemId = id("sys-memory");
         var outsider = id("outsider");
@@ -110,12 +139,15 @@ class SystemBusinessIntegrationTest {
         mockMvc.perform(post("/api/v5/memory/candidates")
                         .with(httpBasic("e2e-user", "asterism"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"systemId\":\"" + systemId + "\",\"content\":\"禁止改历史迁移\"}"))
+                        .content("{\"systemId\":\"" + systemId + "\",\"category\":\"constraint\","
+                                + "\"title\":\"数据库迁移约束\",\"content\":\"禁止改历史迁移\"}"))
                 .andExpect(status().isOk());
 
         mockMvc.perform(get("/api/v5/memory?systemId=" + systemId + "&status=candidate")
                         .with(httpBasic("e2e-user", "asterism")))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].category").value("constraint"))
+                .andExpect(jsonPath("$[0].title").value("数据库迁移约束"))
                 .andExpect(jsonPath("$[0].content").value("禁止改历史迁移"));
         mockMvc.perform(get("/api/v5/memory?systemId=" + systemId + "&status=approved")
                         .with(httpBasic("e2e-user", "asterism")))

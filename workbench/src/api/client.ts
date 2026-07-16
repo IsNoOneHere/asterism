@@ -38,11 +38,20 @@ export type WorkItemEvent = Schemas['DomainEventRecord'] & {
 };
 export type UserAccount = Schemas['UserAccountView'] & { userId: string; displayName: string; enabled: boolean };
 export type ContextSnapshot = Schemas['ContextSnapshot'] & { manifestId?: string | null };
-export type MemoryItem = Schemas['MemoryItem'] & {
+export type MemoryCategory = 'constraint' | 'convention' | 'lesson';
+export type MemoryDraft = {
+  category: MemoryCategory;
+  title: string;
+  content: string;
+};
+export type MemoryItem = Schemas['MemoryView'] & {
   memoryId: string;
   systemId: string;
+  category: MemoryCategory | '';
+  title: string;
   content: string;
   status: string;
+  workItemId?: string | null;
   sourceEventId?: string | null;
   createdBy?: string;
   createdAt?: string;
@@ -244,6 +253,8 @@ export const api = {
   systems: () => request<SystemProfile[]>('/api/v5/systems'),
   createSystem: (body: unknown) =>
     request<SystemProfile>('/api/v5/systems', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
+  deleteSystem: (systemId: string) =>
+    requestVoid('/api/v5/systems/' + encodeURIComponent(systemId), { method: 'DELETE' }),
   updateSystem: (systemId: string, body: unknown) =>
     request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId), { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body) }),
   updateSystemProfile: (systemId: string, body: unknown) =>
@@ -324,6 +335,7 @@ export const api = {
   users: () => request<UserAccount[]>('/api/v5/users'),
   upsertUser: (body: { userId: string; displayName: string; email?: string; password?: string }) =>
     request<UserAccount>('/api/v5/users', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
+  deleteUser: (userId: string) => requestVoid('/api/v5/users/' + encodeURIComponent(userId), { method: 'DELETE' }),
   disableUser: (userId: string) => requestVoid('/api/v5/users/' + encodeURIComponent(userId) + '/disable', { method: 'POST' }),
   resetPassword: (userId: string, password: string) =>
     requestVoid('/api/v5/users/' + encodeURIComponent(userId) + '/reset-password', {
@@ -340,9 +352,11 @@ export const api = {
     }),
   memories: (systemId: string, status: string) =>
     request<MemoryItem[]>('/api/v5/memory?systemId=' + encodeURIComponent(systemId) + '&status=' + encodeURIComponent(status)),
-  createMemory: (body: unknown) =>
-    request('/api/v5/memory/candidates', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
-  approveMemory: (memoryId: string) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/approve', { method: 'POST' }),
+  createMemory: (body: MemoryDraft & { systemId: string; workItemId?: string }) =>
+    request<MemoryItem>('/api/v5/memory/candidates', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
+  approveMemory: (memoryId: string, draft?: MemoryDraft) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/approve', {
+    method: 'POST', ...(draft ? { headers: jsonHeaders, body: JSON.stringify(draft) } : {}),
+  }),
   rejectMemory: (memoryId: string) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/reject', { method: 'POST' }),
   disableMemory: (memoryId: string) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/disable', { method: 'POST' }),
   contextSnapshot: (systemId: string) =>

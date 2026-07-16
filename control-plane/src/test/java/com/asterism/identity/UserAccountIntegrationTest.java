@@ -16,6 +16,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -107,5 +108,54 @@ class UserAccountIntegrationTest {
         assertThatThrownBy(() -> users.upsertUser(userId, "No Default", userId + "@local", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("初始密码");
+    }
+
+    @Test
+    void deleteUserRemovesMemberships() throws Exception {
+        var userId = "delete-user-" + UUID.randomUUID();
+        var systemId = "delete-user-system-" + UUID.randomUUID();
+        users.upsertUser(userId, "Delete User", userId + "@local", "secret-one");
+        jdbc.sql("""
+                        insert into systems(system_id, name, repo_path, owner_user_id)
+                        values (:systemId, 'Delete User System', '/tmp/delete-user-system', 'admin')
+                        """)
+                .param("systemId", systemId)
+                .update();
+        jdbc.sql("""
+                        insert into system_memberships(system_id, user_id, role)
+                        values (:systemId, :userId, 'requester')
+                        """)
+                .param("systemId", systemId)
+                .param("userId", userId)
+                .update();
+
+        mockMvc.perform(delete("/api/v5/users/" + userId).with(httpBasic("admin", "asterism")))
+                .andExpect(status().isOk());
+
+        assertThat(jdbc.sql("select count(*) from users where user_id = :userId")
+                .param("userId", userId).query(Long.class).single()).isZero();
+        assertThat(jdbc.sql("select count(*) from system_memberships where user_id = :userId")
+                .param("userId", userId).query(Long.class).single()).isZero();
+    }
+
+    @Test
+    void currentUserAndSystemOwnerCannotBeDeleted() throws Exception {
+        mockMvc.perform(delete("/api/v5/users/admin").with(httpBasic("admin", "asterism")))
+                .andExpect(status().isConflict());
+
+        var ownerId = "delete-owner-" + UUID.randomUUID();
+        users.upsertUser(ownerId, "Delete Owner", ownerId + "@local", "secret-one");
+        jdbc.sql("""
+                        insert into systems(system_id, name, repo_path, owner_user_id)
+                        values (:systemId, 'Owned System', '/tmp/owned-system', :ownerId)
+                        """)
+                .param("systemId", "owned-system-" + UUID.randomUUID())
+                .param("ownerId", ownerId)
+                .update();
+
+        mockMvc.perform(delete("/api/v5/users/" + ownerId).with(httpBasic("admin", "asterism")))
+                .andExpect(status().isConflict());
+        assertThat(jdbc.sql("select count(*) from users where user_id = :userId")
+                .param("userId", ownerId).query(Long.class).single()).isOne();
     }
 }

@@ -1,6 +1,7 @@
 package com.asterism.projection;
 
 import com.asterism.event.DomainEventRecord;
+import com.asterism.prd.PrdSessionRepository;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -9,12 +10,17 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 class ProjectionServiceTest {
     @Test
     void ownerApprovalSignalDoesNotActivateWorkItem() {
         var store = new InMemoryStore();
-        var service = new ProjectionService(store);
+        var service = service(store);
 
         service.apply(event(1, "OwnerApprovalRequested"));
         service.apply(event(2, "OwnerApprovalSignalSubmitted"));
@@ -28,7 +34,7 @@ class ProjectionServiceTest {
     @Test
     void olderSequenceCannotDowngradeProjection() {
         var store = new InMemoryStore();
-        var service = new ProjectionService(store);
+        var service = service(store);
 
         service.apply(event(10, "OwnerApprovalRequested"));
         service.apply(event(11, "WorkItemActivated"));
@@ -43,7 +49,7 @@ class ProjectionServiceTest {
     @Test
     void laterApprovalSignalCannotDowngradeActivatedWorkItem() {
         var store = new InMemoryStore();
-        var service = new ProjectionService(store);
+        var service = service(store);
 
         service.apply(event(1, "OwnerApprovalRequested"));
         service.apply(event(2, "WorkItemActivated"));
@@ -58,7 +64,7 @@ class ProjectionServiceTest {
     @Test
     void ownerRejectionProjectsToRejectedTerminalState() {
         var store = new InMemoryStore();
-        var service = new ProjectionService(store);
+        var service = service(store);
 
         service.apply(event(1, "OwnerApprovalRequested"));
         service.apply(event(2, "WorkItemRejected"));
@@ -73,7 +79,7 @@ class ProjectionServiceTest {
     @Test
     void patchApplyBlockedProjectsBackToWorkerBlocked() {
         var store = new InMemoryStore();
-        var service = new ProjectionService(store);
+        var service = service(store);
 
         service.apply(event(1, "OwnerApprovalRequested"));
         service.apply(event(2, "WorkItemActivated"));
@@ -89,7 +95,7 @@ class ProjectionServiceTest {
     @Test
     void releaseFailureProjectsBackToWorkerBlockedAfterValidationPassed() {
         var store = new InMemoryStore();
-        var service = new ProjectionService(store);
+        var service = service(store);
 
         service.apply(event(1, "OwnerApprovalRequested"));
         service.apply(event(2, "WorkItemActivated"));
@@ -107,7 +113,7 @@ class ProjectionServiceTest {
     @Test
     void executionPlanDraftedDoesNotChangeLifecycleProjection() {
         var store = new InMemoryStore();
-        var service = new ProjectionService(store);
+        var service = service(store);
 
         service.apply(event(1, "OwnerApprovalRequested"));
         service.apply(event(2, "WorkItemActivated"));
@@ -121,7 +127,7 @@ class ProjectionServiceTest {
     @Test
     void reworkStartedReturnsToActivatedWithoutResettingApproval() {
         var store = new InMemoryStore();
-        var service = new ProjectionService(store);
+        var service = service(store);
 
         service.apply(event(1, "OwnerApprovalRequested"));
         service.apply(event(2, "WorkItemActivated"));
@@ -133,6 +139,28 @@ class ProjectionServiceTest {
         assertThat(item.lifecycleStatus()).isEqualTo("activated");
         assertThat(item.approvalStatus()).isEqualTo("approved");
         assertThat(item.executionAllowed()).isTrue();
+    }
+
+    @Test
+    void lifecycleStatusAlsoUpdatesPrdAfterProjectionSucceeds() {
+        var store = new InMemoryStore();
+        var sessions = mock(PrdSessionRepository.class);
+        var service = new ProjectionService(store, sessions);
+
+        service.apply(event(1, "OwnerApprovalRequested"));
+        service.apply(event(2, "WorkItemActivated"));
+        service.apply(event(3, "ModificationCompleted"));
+        service.apply(event(4, "PatchApplied"));
+        service.apply(event(5, "ValidationPassed"));
+        service.apply(event(6, "ReleaseCompleted"));
+        service.apply(event(2, "WorkItemActivated"));
+
+        verify(sessions).updateLifecycleStatus(eq("wi-1"), eq("completed"), any(Instant.class));
+        verify(sessions, never()).updateLifecycleStatus(eq("wi-1"), eq("allocated"), any(Instant.class));
+    }
+
+    private ProjectionService service(InMemoryStore store) {
+        return new ProjectionService(store, mock(PrdSessionRepository.class));
     }
 
     private DomainEventRecord event(long sequence, String type) {

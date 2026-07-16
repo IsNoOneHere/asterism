@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,8 @@ CONTAINER_REPO_ROOT = os.getenv("V5_SMOKE_CONTAINER_REPO_ROOT", "/repos").rstrip
 TIMEOUT_SECONDS = int(os.getenv("V5_SMOKE_TIMEOUT_SECONDS", "240"))
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("V5_SMOKE_REQUEST_TIMEOUT_SECONDS", "60"))
 EXECUTION_PROVIDER = os.getenv("V5_SMOKE_EXECUTION_PROVIDER", "http").strip() or "http"
+SCENARIO = os.getenv("V5_SMOKE_SCENARIO", "basic").strip() or "basic"
+MODEL_PROVIDER = os.getenv("V5_AGENT_PROVIDER", "openai").strip() or "openai"
 
 
 def log(message: str) -> None:
@@ -64,8 +67,14 @@ def make_repo(name: str) -> tuple[Path, str]:
     if host_repo.exists():
         shutil.rmtree(host_repo)
     host_repo.mkdir(parents=True)
-    (host_repo / "README.md").write_text("asterism\n", encoding="utf-8")
-    (host_repo / "app.py").write_text("print('hello')\n", encoding="utf-8")
+    if SCENARIO == "fullstack":
+        (host_repo / "frontend").mkdir()
+        (host_repo / "backend").mkdir()
+        (host_repo / "frontend" / "page.txt").write_text("title=old\n", encoding="utf-8")
+        (host_repo / "backend" / "service.py").write_text("MESSAGE = 'old'\n", encoding="utf-8")
+    else:
+        (host_repo / "README.md").write_text("asterism\n", encoding="utf-8")
+        (host_repo / "app.py").write_text("print('hello')\n", encoding="utf-8")
     sh(["git", "init"], host_repo)
     sh(["git", "add", "."], host_repo)
     sh(["git", "-c", "user.name=smoke", "-c", "user.email=smoke@example.invalid", "commit", "-m", "init"], host_repo)
@@ -100,6 +109,80 @@ def wait_event(work_item_id: str, event_type: str) -> dict:
     raise RuntimeError(f"等待事件 {event_type} 超时")
 
 
+def wait_prd_turn(accepted: dict) -> dict:
+    deadline = time.time() + TIMEOUT_SECONDS
+    while time.time() < deadline:
+        conversation = request("GET", f"/api/v5/conversations/{accepted['conversationId']}") or {}
+        if not conversation.get("pendingAssistant"):
+            messages = conversation.get("messages", [])
+            if messages and messages[-1].get("content") == "AI 暂时不可用，请重试":
+                raise RuntimeError("PRD AI 回合失败")
+            return request("GET", f"/api/v5/prd-sessions/{accepted['prdId']}")  # type: ignore[return-value]
+        time.sleep(1)
+    raise RuntimeError(f"等待 PRD AI 回合超时: {accepted['prdId']}")
+
+
+def wait_system_ready(system_id: str) -> dict:
+    deadline = time.time() + TIMEOUT_SECONDS
+    last: Optional[dict] = None
+    while time.time() < deadline:
+        last = request("GET", f"/api/v5/systems/{system_id}/readiness")  # type: ignore[assignment]
+        if last.get("ready"):
+            return last
+        time.sleep(2)
+    raise RuntimeError(f"等待系统 readiness 超时: {last.get('issues') if last else 'none'}")
+
+
+def configure_fullstack_roles(system_id: str) -> None:
+    config = request("GET", f"/api/v5/systems/{system_id}/agent-config") or {}
+    profile_id = config["modelProfiles"][0]["id"]
+    role_ids = []
+    for name, scope, prompt in (
+        ("前端 Agent", ["frontend/"], "只修改 frontend/ 下的前端文件"),
+        ("后端 Agent", ["backend/"], "只修改 backend/ 下的后端文件"),
+    ):
+        updated = request("POST", f"/api/v5/systems/{system_id}/agent-roles", {
+            "name": name,
+            "engine": EXECUTION_PROVIDER,
+            "modelProfileRef": profile_id,
+            "pathScope": scope,
+            "prompt": prompt,
+            "maxTurns": int(os.getenv("V5_SMOKE_CLAUDE_MAX_TURNS", "50")),
+            "timeoutSeconds": int(os.getenv("V5_SMOKE_EXECUTION_TIMEOUT_SECONDS", "600")),
+        }) or {}
+        role_ids.append(updated["agentRoles"][-1]["id"])
+    default_role = config.get("defaultRoleId")
+    if default_role:
+        request("DELETE", f"/api/v5/systems/{system_id}/agent-roles/{default_role}")
+    request("PATCH", f"/api/v5/systems/{system_id}/execution-policy", {
+        "mode": "planner_select",
+        "defaultRoleId": role_ids[0],
+    })
+    log("已配置前端/后端两个 Agent 角色与独立路径范围")
+
+
+def changed_paths(diff_patch: str) -> set[str]:
+    return set(re.findall(r"^diff --git a/(.+?) b/", diff_patch, re.MULTILINE))
+
+
+def legacy_model_config(model: str, base_url: str, api_key: str) -> dict:
+    return {"provider": MODEL_PROVIDER, "model": model, "baseUrl": base_url, "apiKey": api_key}
+
+
+def prepare_prd(system_id: str, goal: str, acceptance: str) -> dict:
+    first = wait_prd_turn(request("POST", f"/api/v5/systems/{system_id}/prd/messages", {"content": goal}))
+    if first.get("status") == "waiting_user_confirm":
+        log("第一轮 PRD 已直接就绪")
+    elif "acceptance_criteria" in first.get("missingFields", []):
+        first = wait_prd_turn(request("POST", f"/api/v5/systems/{system_id}/prd/messages", {
+            "prdId": first["prdId"], "content": acceptance,
+        }))
+        log("补充验收标准后 PRD 已就绪")
+    if first.get("status") != "waiting_user_confirm":
+        raise RuntimeError(f"PRD 未进入确认态: {first}")
+    return first
+
+
 def event_payload(event: dict) -> dict:
     value = event.get("payloadJson") or "{}"
     return json.loads(value)
@@ -128,6 +211,9 @@ def main() -> int:
     if EXECUTION_PROVIDER not in {"http", "claude_sdk"}:
         print(f"不支持的 V5_SMOKE_EXECUTION_PROVIDER={EXECUTION_PROVIDER}", file=sys.stderr)
         return 2
+    if SCENARIO not in {"basic", "fullstack"}:
+        print(f"不支持的 V5_SMOKE_SCENARIO={SCENARIO}", file=sys.stderr)
+        return 2
     if EXECUTION_PROVIDER == "claude_sdk":
         compatible_url = os.getenv("V5_MODEL_BASE_URL", os.getenv("V5_ANTHROPIC_BASE_URL", "")).strip()
         auth_mode = "AUTH_TOKEN" if compatible_url else "API_KEY"
@@ -141,15 +227,18 @@ def main() -> int:
     base_url = os.getenv("V5_AGENT_BASE_URL", "")
 
     log(f"临时 repo: {host_repo}")
+    fullstack = SCENARIO == "fullstack"
     request("POST", "/api/v5/systems", {
         "systemId": system_id,
         "name": "Smoke Real",
         "description": "真实 LLM smoke",
         "repoPath": repo_path,
         "ownerUserId": ADMIN_USER,
-        "allowedPaths": ["README.md", "app.py"],
+        "allowedPaths": ["frontend/", "backend/"] if fullstack else ["README.md", "app.py"],
         "forbiddenPaths": [],
         "testCommands": [
+            "python -c \"from pathlib import Path; assert 'Asterism web' in Path('frontend/page.txt').read_text(); assert 'Asterism API' in Path('backend/service.py').read_text()\""
+            if fullstack else
             "python -c \"from pathlib import Path; assert 'Asterism smoke' in Path('README.md').read_text()\""
         ],
         "agentConfig": {
@@ -157,29 +246,21 @@ def main() -> int:
             "claudeMaxTurns": int(os.getenv("V5_SMOKE_CLAUDE_MAX_TURNS", "50")),
             "executionTimeoutSeconds": int(os.getenv("V5_SMOKE_EXECUTION_TIMEOUT_SECONDS", "600")),
         },
-        "modelProviderConfig": {
-            "provider": "openai",
-            "model": model,
-            "baseUrl": base_url,
-            "apiKey": api_key,
-        },
+        "modelProviderConfig": legacy_model_config(model, base_url, api_key),
     })
     log("系统已创建")
+    if fullstack:
+        configure_fullstack_roles(system_id)
+    wait_system_ready(system_id)
+    log("系统 readiness 已通过")
 
-    first = request("POST", f"/api/v5/systems/{system_id}/prd/messages", {
-        "content": "把 README 里的 asterism 改成 Asterism smoke",
-    })
-    if "acceptance_criteria" not in first.get("missingFields", []):
-        raise RuntimeError(f"第一轮未追问验收标准: {first}")
-    log("第一轮已触发验收标准追问")
-
-    second = request("POST", f"/api/v5/systems/{system_id}/prd/messages", {
-        "prdId": first["prdId"],
-        "content": "验收标准：README 必须包含 Asterism smoke。",
-    })
-    if second.get("status") != "waiting_user_confirm":
-        raise RuntimeError(f"第二轮未进入确认态: {second}")
-    log("第二轮 PRD 已就绪")
+    goal = ("同时修改前后端：frontend/page.txt 的标题改为 Asterism web，"
+            "backend/service.py 的 MESSAGE 改为 Asterism API。" if fullstack
+            else "把 README 里的 asterism 改成 Asterism smoke")
+    acceptance = ("验收标准：frontend/page.txt 必须包含 Asterism web，"
+                  "backend/service.py 必须包含 Asterism API。" if fullstack
+                  else "验收标准：README 必须包含 Asterism smoke。")
+    first = prepare_prd(system_id, goal, acceptance)
 
     confirmed = request("POST", f"/api/v5/prd-sessions/{first['prdId']}/confirm")
     work_item_id = confirmed["workItemId"]
@@ -191,14 +272,25 @@ def main() -> int:
     request("POST", f"/api/v5/work-items/{work_item_id}/signals/start_modification")
     wait_item(work_item_id, "modification_completed")
     modification = event_payload(wait_event(work_item_id, "ModificationCompleted"))
-    if modification.get("executionProvider") != EXECUTION_PROVIDER:
-        raise RuntimeError(f"执行内核不一致: {modification.get('executionProvider')} != {EXECUTION_PROVIDER}")
-    if EXECUTION_PROVIDER == "claude_sdk" and (not modification.get("turns") or not modification.get("tokenUsage")):
+    expected_provider = "handoff" if fullstack else EXECUTION_PROVIDER
+    if modification.get("executionProvider") != expected_provider:
+        raise RuntimeError(f"执行内核不一致: {modification.get('executionProvider')} != {expected_provider}")
+    if not fullstack and EXECUTION_PROVIDER == "claude_sdk" and (not modification.get("turns") or not modification.get("tokenUsage")):
         raise RuntimeError(f"Claude SDK 审计摘要不完整: {modification}")
     diff_patch = modification.get("diffPatch", "")
     if "diff --git" not in diff_patch:
         raise RuntimeError("ModificationCompleted 没有有效 diff")
     sh(["git", "apply", "--check"], host_repo, diff_patch)
+    if fullstack:
+        paths = changed_paths(diff_patch)
+        expected = {"frontend/page.txt", "backend/service.py"}
+        if not expected.issubset(paths):
+            raise RuntimeError(f"前后端 diff 不完整: {sorted(paths)}")
+        stages = request("GET", f"/api/v5/work-items/{work_item_id}/events") or []
+        completed_roles = {event_payload(event).get("role") for event in stages
+                           if event.get("eventType") == "AgentStageCompleted"}
+        if len(completed_roles) < 2:
+            raise RuntimeError(f"前后端 Agent 阶段不足: {completed_roles}")
     log(f"{EXECUTION_PROVIDER} diff 非空且 git apply --check 通过")
 
     request("POST", f"/api/v5/work-items/{work_item_id}/signals/patch_apply_approved")
@@ -213,7 +305,12 @@ def main() -> int:
     branches = sh(["git", "branch", "--list", branch], host_repo)
     if branch not in branches:
         raise RuntimeError(f"repo 未出现分支 {branch}")
-    if "Asterism smoke" not in (host_repo / "README.md").read_text(encoding="utf-8"):
+    if fullstack:
+        if "Asterism web" not in (host_repo / "frontend" / "page.txt").read_text(encoding="utf-8"):
+            raise RuntimeError("前端文件未包含真实改动")
+        if "Asterism API" not in (host_repo / "backend" / "service.py").read_text(encoding="utf-8"):
+            raise RuntimeError("后端文件未包含真实改动")
+    elif "Asterism smoke" not in (host_repo / "README.md").read_text(encoding="utf-8"):
         raise RuntimeError("README 未包含真实改动")
     log(f"真实 smoke 通过: {branch} {commit_hash}")
     return 0

@@ -11,5 +11,4 @@ public interface MemoryItemRepository extends CrudRepository<MemoryItem, String>
 
     List<MemoryItem> findTop100BySystemIdAndStatusOrderByCreatedAtDesc(String systemId, String status);
 
-    boolean existsBySystemIdAndContent(String systemId, String content);
 }

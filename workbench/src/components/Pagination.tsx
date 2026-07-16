@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 const PAGE_SIZE = 20;
 
-export function usePagination<T>(items: T[], resetKey: string, initialPage = 1, ready = true) {
+export function usePagination<T>(items: T[], resetKey: string, initialPage = 1, ready = true, pageSize = PAGE_SIZE) {
   const [page, setPage] = useState(initialPage);
   const previousResetKey = useRef(resetKey);
-  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
 
   useEffect(() => {
     if (previousResetKey.current === resetKey) return;
@@ -17,9 +17,9 @@ export function usePagination<T>(items: T[], resetKey: string, initialPage = 1, 
   }, [ready, totalPages]);
 
   const pageItems = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE;
-    return items.slice(start, start + PAGE_SIZE);
-  }, [items, page]);
+    const start = (page - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, page, pageSize]);
 
   return { page, pageItems, setPage, totalPages };
 }

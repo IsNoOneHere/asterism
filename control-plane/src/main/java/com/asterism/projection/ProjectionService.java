@@ -1,6 +1,7 @@
 package com.asterism.projection;
 
 import com.asterism.event.DomainEventRecord;
+import com.asterism.prd.PrdSessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -28,9 +29,11 @@ public class ProjectionService {
             Map.entry("CaseCancelled", LifecycleStatus.cancelled));
 
     private final WorkItemProjectionStore workItems;
+    private final PrdSessionRepository prdSessions;
 
-    public ProjectionService(WorkItemProjectionStore workItems) {
+    public ProjectionService(WorkItemProjectionStore workItems, PrdSessionRepository prdSessions) {
         this.workItems = workItems;
+        this.prdSessions = prdSessions;
     }
 
     public void apply(DomainEventRecord event) {
@@ -50,7 +53,9 @@ public class ProjectionService {
                     event.workItemId(), from, target, event.eventType());
             return;
         }
+        var updatedAt = event.createdAt() == null ? Instant.now() : event.createdAt();
         workItems.save(nextProjection(event, current, target));
+        prdSessions.updateLifecycleStatus(event.workItemId(), target.name(), updatedAt);
         log.info("投影已更新 workItem={} status={} sequence={}", event.workItemId(), target, event.sequence());
     }
 

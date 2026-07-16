@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import { api, MemoryItem } from '../api/client';
+import { Link } from 'react-router-dom';
+import { api, MemoryCategory, MemoryDraft, MemoryItem } from '../api/client';
+import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
+import { MemoryEditorDialog } from '../components/MemoryEditorDialog';
 import { Pagination, usePagination } from '../components/Pagination';
 import { useCurrentSystem } from '../SystemContext';
 
@@ -8,36 +11,30 @@ type Tab = 'candidate' | 'approved' | 'closed';
 
 export function MemoryPage() {
   const queryClient = useQueryClient();
-  const [content, setContent] = useState('');
   const { systemId } = useCurrentSystem();
   const [tab, setTab] = useState<Tab>('candidate');
-  const [message, setMessage] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<MemoryItem | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ type: 'reject' | 'disable'; item: MemoryItem } | null>(null);
   const candidate = useQuery({ queryKey: ['memory', systemId, 'candidate'], queryFn: () => api.memories(systemId, 'candidate'), enabled: Boolean(systemId), retry: false });
   const approved = useQuery({ queryKey: ['memory', systemId, 'approved'], queryFn: () => api.memories(systemId, 'approved'), enabled: Boolean(systemId), retry: false });
-  const rejected = useQuery({ queryKey: ['memory', systemId, 'rejected'], queryFn: () => api.memories(systemId, 'rejected'), enabled: Boolean(systemId) && tab === 'closed', retry: false });
-  const disabled = useQuery({ queryKey: ['memory', systemId, 'disabled'], queryFn: () => api.memories(systemId, 'disabled'), enabled: Boolean(systemId) && tab === 'closed', retry: false });
+  const rejected = useQuery({ queryKey: ['memory', systemId, 'rejected'], queryFn: () => api.memories(systemId, 'rejected'), enabled: Boolean(systemId), retry: false });
+  const disabled = useQuery({ queryKey: ['memory', systemId, 'disabled'], queryFn: () => api.memories(systemId, 'disabled'), enabled: Boolean(systemId), retry: false });
 
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['memory', systemId] });
+    queryClient.invalidateQueries({ queryKey: ['context-snapshot', systemId] });
+  };
   const create = useMutation({
-    mutationFn: () => api.createMemory({ systemId, content }),
-    onSuccess: () => {
-      console.info('v5 workbench 手工沉淀记忆', { systemId });
-      setContent('');
-      setMessage('已进入待审批');
-      invalidate(queryClient, systemId);
-    },
+    mutationFn: (draft: MemoryDraft) => api.createMemory({ systemId, ...draft }),
+    onSuccess: () => { setCreating(false); invalidate(); },
   });
   const approve = useMutation({
-    mutationFn: api.approveMemory,
-    onSuccess: () => invalidate(queryClient, systemId),
+    mutationFn: ({ memoryId, draft }: { memoryId: string; draft: MemoryDraft }) => api.approveMemory(memoryId, draft),
+    onSuccess: () => { setEditing(null); invalidate(); },
   });
-  const reject = useMutation({
-    mutationFn: api.rejectMemory,
-    onSuccess: () => invalidate(queryClient, systemId),
-  });
-  const disable = useMutation({
-    mutationFn: api.disableMemory,
-    onSuccess: () => invalidate(queryClient, systemId),
-  });
+  const reject = useMutation({ mutationFn: api.rejectMemory, onSuccess: invalidate, onSettled: () => setConfirmAction(null) });
+  const disable = useMutation({ mutationFn: api.disableMemory, onSuccess: invalidate, onSettled: () => setConfirmAction(null) });
   const items = useMemo(() => {
     if (tab === 'candidate') return candidate.data ?? [];
     if (tab === 'approved') return approved.data ?? [];
@@ -45,43 +42,65 @@ export function MemoryPage() {
   }, [approved.data, candidate.data, disabled.data, rejected.data, tab]);
   const pagination = usePagination(items, systemId + ':' + tab);
 
-  return (
-    <section className="split wide-left">
-      <div className="panel">
-        <h1>系统记忆</h1>
-        <div className="notice">记忆是系统级约束、经验教训和失败原因；自动来自 WorkerBlocked/ValidationFailed 等生命周期事件，也可手工录入。只有 approved 会进入 worker 执行上下文，candidate/rejected 不投喂。</div>
-        <textarea
-          rows={5}
-          placeholder="本系统禁止修改 db/migration 下的历史文件"
-          value={content}
-          onChange={(event) => setContent(event.target.value)}
-        />
-        <button type="button" onClick={() => create.mutate()} disabled={!systemId || !content.trim()}>
-          沉淀 candidate
-        </button>
-        {message && <div className="success-text">{message}</div>}
+  return <section>
+    <header className="page-head">
+      <div><h1>系统记忆</h1><p>沉淀跨工作项长期有效的工程规则。</p></div>
+      <button type="button" onClick={() => setCreating(true)} disabled={!systemId}>新增记忆</button>
+    </header>
+    <div className="notice memory-guidance">
+      <span><strong>应该沉淀：</strong>兼容性约束、工程约定、问题原因与已验证解法。</span>
+      <span><strong>不要沉淀：</strong>一次性改动、完整 diff、运行日志和测试结果；权限类硬约束请放到系统配置。</span>
+    </div>
+    <div className="panel">
+      <div className="tabs">
+        <button type="button" className={tab === 'candidate' ? 'active' : ''} onClick={() => setTab('candidate')}>待审批 {candidate.data?.length ?? 0}</button>
+        <button type="button" className={tab === 'approved' ? 'active' : ''} onClick={() => setTab('approved')}>生效中 {approved.data?.length ?? 0}</button>
+        <button type="button" className={tab === 'closed' ? 'active' : ''} onClick={() => setTab('closed')}>已归档 {(rejected.data?.length ?? 0) + (disabled.data?.length ?? 0)}</button>
       </div>
-      <div className="panel">
-        <div className="tabs">
-          <button type="button" className={tab === 'candidate' ? 'active' : ''} onClick={() => setTab('candidate')}>待审批</button>
-          <button type="button" className={tab === 'approved' ? 'active' : ''} onClick={() => setTab('approved')}>已批准</button>
-          <button type="button" className={tab === 'closed' ? 'active' : ''} onClick={() => setTab('closed')}>已拒绝·停用</button>
-        </div>
-        {pagination.pageItems.map((item) => (
-          <MemoryRow
-            key={item.memoryId}
-            item={item}
-            tab={tab}
-            onApprove={() => approve.mutate(item.memoryId)}
-            onReject={() => { if (window.confirm('拒绝后该记忆不会进入执行上下文，是否继续？')) reject.mutate(item.memoryId); }}
-            onDisable={() => { if (window.confirm('停用后该记忆不会再进入执行上下文，是否继续？')) disable.mutate(item.memoryId); }}
-          />
-        ))}
-        {!items.length && <div className="empty">暂无记忆。</div>}
-        <Pagination total={items.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
-      </div>
-    </section>
-  );
+      {pagination.pageItems.map((item) => <MemoryRow
+        key={item.memoryId}
+        item={item}
+        tab={tab}
+        onApprove={() => setEditing(item)}
+        onReject={() => { reject.reset(); setConfirmAction({ type: 'reject', item }); }}
+        onDisable={() => { disable.reset(); setConfirmAction({ type: 'disable', item }); }}
+      />)}
+      {!items.length && <div className="empty">暂无记忆。</div>}
+      <Pagination total={items.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
+    </div>
+    <MemoryEditorDialog
+      open={creating || Boolean(editing)}
+      title={editing ? '编辑并批准' : '新增系统记忆'}
+      submitLabel={editing ? '批准并生效' : '加入待审批'}
+      initial={editing ? memoryDraft(editing) : undefined}
+      workItemId={editing?.workItemId ?? undefined}
+      pending={editing ? approve.isPending : create.isPending}
+      onClose={() => { setCreating(false); setEditing(null); }}
+      onSubmit={(draft) => editing ? approve.mutate({ memoryId: editing.memoryId, draft }) : create.mutate(draft)}
+    />
+    <ActionConfirmDialog
+      open={Boolean(confirmAction)}
+      title={`${confirmAction?.type === 'reject' ? '拒绝' : '停用'}“${confirmAction?.item.title || ''}”？`}
+      description={confirmAction?.type === 'reject' ? '拒绝后该记忆不会进入执行上下文。' : '停用后该记忆不会再进入执行上下文。'}
+      confirmLabel={confirmAction?.type === 'reject' ? '拒绝记忆' : '停用记忆'}
+      pending={reject.isPending || disable.isPending}
+      onClose={() => setConfirmAction(null)}
+      onConfirm={() => {
+        if (confirmAction?.type === 'reject') reject.mutate(confirmAction.item.memoryId);
+        if (confirmAction?.type === 'disable') disable.mutate(confirmAction.item.memoryId);
+      }}
+    />
+    <ActionConfirmDialog
+      open={Boolean(reject.error || disable.error)}
+      title="操作失败"
+      description={String(reject.error || disable.error || '')}
+      confirmLabel="知道了"
+      alert
+      showCancel={false}
+      onClose={() => { reject.reset(); disable.reset(); }}
+      onConfirm={() => { reject.reset(); disable.reset(); }}
+    />
+  </section>;
 }
 
 function MemoryRow({ item, tab, onApprove, onReject, onDisable }: {
@@ -91,27 +110,27 @@ function MemoryRow({ item, tab, onApprove, onReject, onDisable }: {
   onReject: () => void;
   onDisable: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const long = item.content.length > 280;
-  return (
-    <div className="list-item action-item">
-      <div>
-        <strong>{expanded || !long ? item.content : item.content.slice(0, 280) + '...'}</strong>
-        <span>{item.sourceEventId ? '自动沉淀' : '手工录入'} · {item.createdAt || '未知时间'} · {item.status}</span>
-        {long && <button type="button" className="link-button" onClick={() => setExpanded(!expanded)}>{expanded ? '收起' : '展开'}</button>}
-      </div>
-      {tab === 'candidate' && (
-        <div className="button-row">
-          <button type="button" onClick={onApprove}>批准</button>
-          <button type="button" className="secondary" onClick={onReject}>拒绝</button>
-        </div>
-      )}
-      {tab === 'approved' && <button type="button" className="secondary" onClick={onDisable}>停用</button>}
+  const legacyEvent = !item.category && Boolean(item.sourceEventId);
+  return <article className="list-item action-item memory-card">
+    <div>
+      <div className="memory-card-title"><span className={'memory-category ' + (item.category || 'legacy')}>{legacyEvent ? '旧事件' : categoryLabel(item.category)}</span><strong>{legacyEvent ? '旧生命周期事件候选' : item.title}</strong></div>
+      <p>{legacyEvent ? '原始 JSON、diff 和日志仅保留在事件审计中，不作为系统记忆展示。' : item.content}</p>
+      <span>{item.workItemId ? <Link className="action-link" to={'/work-items/' + item.workItemId}>来源工作项 {item.workItemId}</Link> : legacyEvent ? '已归档至事件审计' : '手工录入'} · {formatTime(item.createdAt)}</span>
     </div>
-  );
+    {tab === 'candidate' && <div className="button-row"><button type="button" onClick={onApprove}>编辑并批准</button><button type="button" className="secondary" onClick={onReject}>拒绝</button></div>}
+    {tab === 'approved' && <button type="button" className="secondary" onClick={onDisable}>停用</button>}
+  </article>;
 }
 
-function invalidate(queryClient: ReturnType<typeof useQueryClient>, systemId: string) {
-  queryClient.invalidateQueries({ queryKey: ['memory', systemId] });
-  queryClient.invalidateQueries({ queryKey: ['context-snapshot', systemId] });
+function memoryDraft(item: MemoryItem): MemoryDraft {
+  return { category: item.category || 'convention', title: item.title, content: item.content };
+}
+
+function categoryLabel(category: MemoryCategory | '') {
+  return ({ constraint: '约束', convention: '约定', lesson: '经验' } as Record<string, string>)[category] ?? '未分类';
+}
+
+function formatTime(value?: string) {
+  if (!value) return '未知时间';
+  return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }

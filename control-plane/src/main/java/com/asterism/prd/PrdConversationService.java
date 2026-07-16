@@ -224,7 +224,6 @@ public class PrdConversationService {
         var history = current == null ? List.<ConversationMessage>of()
                 : messages.findByConversationIdOrderByCreatedAtAsc(conversationId);
         var approvedMemories = memories.findBySystemIdAndStatus(systemId, "approved").stream()
-                .limit(5)
                 .map(memory -> memory.content())
                 .toList();
         var validatedAttachments = attachmentIds.stream()

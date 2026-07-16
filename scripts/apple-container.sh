@@ -57,6 +57,11 @@ ensure_volume() {
   "$CONTAINER_BIN" volume inspect "$1" >/dev/null 2>&1 || "$CONTAINER_BIN" volume create "$1"
 }
 
+container_proxy_url() {
+  # 容器中的回环地址不是宿主机，Apple Container 通过内置域名访问宿主端口。
+  printf '%s\n' "$1" | sed -E 's#^(https?://)(127\.0\.0\.1|localhost)(:[0-9]+)#\1host.container.internal\3#'
+}
+
 run_service() {
   name="$1"
   shift
@@ -125,10 +130,11 @@ prepare_env() {
   V5_WORKSPACE_ROOT="/tmp/asterism-workspaces"
   SPRING_PROFILES_ACTIVE="temporal,llm"
   if [ -n "${V5_APPLE_PROXY_URL:-}" ]; then
-    HTTP_PROXY="$V5_APPLE_PROXY_URL"
-    HTTPS_PROXY="$V5_APPLE_PROXY_URL"
-    http_proxy="$V5_APPLE_PROXY_URL"
-    https_proxy="$V5_APPLE_PROXY_URL"
+    CONTAINER_PROXY_URL="$(container_proxy_url "$V5_APPLE_PROXY_URL")"
+    HTTP_PROXY="$CONTAINER_PROXY_URL"
+    HTTPS_PROXY="$CONTAINER_PROXY_URL"
+    http_proxy="$CONTAINER_PROXY_URL"
+    https_proxy="$CONTAINER_PROXY_URL"
     export HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
   fi
   export V5_REPO_ROOT V5_DB_USER V5_DB_PASSWORD POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD PGDATA
@@ -147,9 +153,10 @@ build_image() {
   tag="$1"
   context="$2"
   if [ -n "${V5_APPLE_PROXY_URL:-}" ]; then
+    proxy_url="$(container_proxy_url "$V5_APPLE_PROXY_URL")"
     "$CONTAINER_BIN" build \
-      --build-arg "HTTP_PROXY=$V5_APPLE_PROXY_URL" \
-      --build-arg "HTTPS_PROXY=$V5_APPLE_PROXY_URL" \
+      --build-arg "HTTP_PROXY=$proxy_url" \
+      --build-arg "HTTPS_PROXY=$proxy_url" \
       --tag "$tag" "$context"
   else
     "$CONTAINER_BIN" build --tag "$tag" "$context"

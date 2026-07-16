@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { api, WorkItemEvent } from '../api/client';
+import { api, MemoryDraft, WorkItemEvent } from '../api/client';
+import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
+import { MemoryEditorDialog } from '../components/MemoryEditorDialog';
 import { WorkItemNavigationState } from '../workItemListState';
 
 type StageAction = {
@@ -19,6 +22,9 @@ export function WorkItemDetailPage() {
   const { workItemId = '' } = useParams();
   const location = useLocation();
   const queryClient = useQueryClient();
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memoryMessage, setMemoryMessage] = useState('');
+  const [confirmAction, setConfirmAction] = useState<StageAction | null>(null);
   const item = useQuery({
     queryKey: ['work-item', workItemId],
     queryFn: () => api.workItem(workItemId),
@@ -38,6 +44,15 @@ export function WorkItemDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['work-item', workItemId] });
       queryClient.invalidateQueries({ queryKey: ['work-item-events', workItemId] });
+    },
+    onSettled: () => setConfirmAction(null),
+  });
+  const createMemory = useMutation({
+    mutationFn: (draft: MemoryDraft) => api.createMemory({ systemId: item.data!.systemId, workItemId, ...draft }),
+    onSuccess: () => {
+      console.info('v5 workbench 从工作项沉淀记忆', { workItemId });
+      setMemoryOpen(false);
+      setMemoryMessage('已加入系统记忆待审批');
     },
   });
 
@@ -74,7 +89,12 @@ export function WorkItemDetailPage() {
               <div className="button-row wrap">
                 {actions.map((action) => (
                   <button key={action.label} type="button" disabled={runAction.isPending} onClick={() => {
-                    if (!needsConfirmation(action) || window.confirm(confirmText(action))) runAction.mutate(action);
+                    if (needsConfirmation(action)) {
+                      runAction.reset();
+                      setConfirmAction(action);
+                    } else {
+                      runAction.mutate(action);
+                    }
                   }}>
                     {action.label}
                   </button>
@@ -83,7 +103,8 @@ export function WorkItemDetailPage() {
             ) : (
               <div className="empty">当前用户仅可查看，或该阶段无需人工动作。</div>
             )}
-            {runAction.isError && <div className="error-text">{String(runAction.error)}</div>}
+            <div className="button-row memory-work-item-action"><button type="button" className="secondary" onClick={() => setMemoryOpen(true)}>沉淀为记忆</button></div>
+            {memoryMessage && <div className="success-text">{memoryMessage}</div>}
           </div>
           <div className="panel">
             <h2>事件时间线</h2>
@@ -96,6 +117,27 @@ export function WorkItemDetailPage() {
         </div>
       )}
       {item.isError && <div className="empty">工作项不存在或无权限。</div>}
+      <MemoryEditorDialog open={memoryOpen} title="从工作项沉淀记忆" submitLabel="加入待审批" workItemId={workItemId} pending={createMemory.isPending} onClose={() => setMemoryOpen(false)} onSubmit={(draft) => createMemory.mutate(draft)} />
+      <ActionConfirmDialog
+        open={Boolean(confirmAction)}
+        title={`确认${confirmAction?.label || ''}？`}
+        description={confirmAction ? confirmText(confirmAction).replace('，是否继续？', '。') : ''}
+        confirmLabel={confirmAction?.label}
+        pending={runAction.isPending}
+        tone={confirmAction && ['拒绝', '取消'].includes(confirmAction.label) ? 'danger' : 'primary'}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={() => confirmAction && runAction.mutate(confirmAction)}
+      />
+      <ActionConfirmDialog
+        open={Boolean(runAction.error)}
+        title="操作失败"
+        description={String(runAction.error || '')}
+        confirmLabel="知道了"
+        alert
+        showCancel={false}
+        onClose={() => runAction.reset()}
+        onConfirm={() => runAction.reset()}
+      />
     </section>
   );
 }

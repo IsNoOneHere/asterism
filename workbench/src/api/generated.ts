@@ -999,11 +999,14 @@ export interface components {
             caseId?: string;
             lifecycleStatus?: string;
         };
-        MemoryItem: {
+        MemoryView: {
             memoryId?: string;
             systemId?: string;
+            category?: string;
+            title?: string;
             content?: string;
             status?: string;
+            workItemId?: string;
             sourceEventId?: string;
             approvedBy?: string;
             metadataJson?: string;
@@ -1012,6 +1015,18 @@ export interface components {
             createdAt?: string;
             /** Format: date-time */
             approvedAt?: string;
+        };
+        ApprovalRequest: {
+            category: string;
+            title: string;
+            content: string;
+        };
+        MemoryCandidateRequest: {
+            systemId: string;
+            category: string;
+            title: string;
+            content: string;
+            workItemId?: string;
         };
         TargetReadiness: {
             systemId?: string;
@@ -1690,7 +1705,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": components["schemas"]["MemoryItem"];
+                    "*/*": components["schemas"]["MemoryView"];
                 };
             };
         };
@@ -1712,7 +1727,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": components["schemas"]["MemoryItem"];
+                    "*/*": components["schemas"]["MemoryView"];
                 };
             };
         };
@@ -1726,7 +1741,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ApprovalRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {
@@ -1734,7 +1753,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": components["schemas"]["MemoryItem"];
+                    "*/*": components["schemas"]["MemoryView"];
                 };
             };
         };
@@ -1748,7 +1767,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CandidateRequest"];
+                "application/json": components["schemas"]["MemoryCandidateRequest"];
             };
         };
         responses: {
@@ -1758,7 +1777,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": components["schemas"]["MemoryItem"];
+                    "*/*": components["schemas"]["MemoryView"];
                 };
             };
         };
@@ -2389,7 +2408,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "*/*": Record<string, never>;
+                    "*/*": components["schemas"]["MemoryView"][];
                 };
             };
         };

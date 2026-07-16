@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api, WorkItem } from '../api/client';
+import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { formatDateTime, StatusBadge } from '../components/Display';
 import { Pagination, usePagination } from '../components/Pagination';
 import { useCurrentSystem } from '../SystemContext';
@@ -17,6 +18,7 @@ export function WorkItemsPage() {
   const [status, setStatus] = useState(restored.status);
   const [q, setQ] = useState(restored.q);
   const [sort, setSort] = useState(restored.sort);
+  const [approvalTarget, setApprovalTarget] = useState<WorkItem | null>(null);
 
   const items = useQuery({
     queryKey: ['work-items', scope, systemId, status, q, sort],
@@ -28,6 +30,7 @@ export function WorkItemsPage() {
   const approve = useMutation({
     mutationFn: (id: string) => api.approveOwner(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+    onSettled: () => setApprovalTarget(null),
   });
   const values = items.data ?? [];
   const pagination = usePagination(values, [scope, systemId, status, q, sort].join(':'), restored.page, items.isSuccess);
@@ -72,9 +75,7 @@ export function WorkItemsPage() {
                 navigationState={navigationState}
                 canAct={item.canControl}
                 pending={approve.isPending}
-                onApprove={() => {
-                  if (window.confirm('批准后工作项将进入可执行状态，是否继续？')) approve.mutate(item.workItemId);
-                }}
+                onApprove={() => { approve.reset(); setApprovalTarget(item); }}
               />
             ))}
             {items.isError && <tr><td colSpan={8}>工作项加载失败。</td></tr>}
@@ -83,6 +84,26 @@ export function WorkItemsPage() {
         </table>
         <Pagination total={values.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
       </div>
+      <ActionConfirmDialog
+        open={Boolean(approvalTarget)}
+        title="批准执行该工作项？"
+        description={`“${approvalTarget?.title || approvalTarget?.workItemId || ''}”批准后将进入可执行状态。`}
+        confirmLabel="批准执行"
+        pending={approve.isPending}
+        tone="primary"
+        onClose={() => setApprovalTarget(null)}
+        onConfirm={() => approvalTarget && approve.mutate(approvalTarget.workItemId)}
+      />
+      <ActionConfirmDialog
+        open={Boolean(approve.error)}
+        title="审批失败"
+        description={String(approve.error || '')}
+        confirmLabel="知道了"
+        alert
+        showCancel={false}
+        onClose={() => approve.reset()}
+        onConfirm={() => approve.reset()}
+      />
     </div>
   );
 }

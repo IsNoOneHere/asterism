@@ -6,6 +6,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { api, PrdMessageResult, SuspectedTarget, UiObservation } from '../api/client';
+import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { StatusBadge } from '../components/Display';
 import { SystemSelect } from '../components/SystemSelect';
 import { useCurrentSystem } from '../SystemContext';
@@ -37,6 +38,7 @@ export function NewPrdPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [optimisticUser, setOptimisticUser] = useState<{ content: string; display: string }>();
   const [draftEditor, setDraftEditor] = useState<DraftEditorValue>({ title: '', goal: '', acceptanceCriteria: [] });
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const completedAssistant = useRef<string>();
   const sessionPrdId = routePrdId || prdId;
   const draftSession = useQuery({
@@ -126,6 +128,7 @@ export function NewPrdPage() {
       setResult((current) => ({ ...current, ...data, status: 'confirmed' }));
       queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
     },
+    onSettled: () => setConfirmOpen(false),
   });
 
   useEffect(() => {
@@ -177,7 +180,8 @@ export function NewPrdPage() {
   }
 
   function confirmPrd() {
-    if (window.confirm('确认后将创建工作项并启动执行流程，是否继续？')) confirm.mutate();
+    confirm.reset();
+    setConfirmOpen(true);
   }
 
   function addFiles(values: FileList | File[]) {
@@ -314,11 +318,30 @@ export function NewPrdPage() {
         )}
         {prdId && <button type="button" className="secondary" onClick={reset}>创建另一项</button>}
         {send.isError && <div className="error-text">{String(send.error)}</div>}
-        {confirm.isError && <div className="error-text">{String(confirm.error)}</div>}
         {confirmTarget.isError && <div className="error-text">{String(confirmTarget.error)}</div>}
         {saveDraft.isError && <div className="error-text">{String(saveDraft.error)}</div>}
       </div>
       </div>}
+      <ActionConfirmDialog
+        open={confirmOpen}
+        title="确认并生成工作项？"
+        description="确认后将创建工作项并启动真实执行流程。"
+        confirmLabel="确认并生成"
+        pending={confirm.isPending}
+        tone="primary"
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={() => confirm.mutate()}
+      />
+      <ActionConfirmDialog
+        open={Boolean(confirm.error)}
+        title="生成工作项失败"
+        description={String(confirm.error || '')}
+        confirmLabel="知道了"
+        alert
+        showCancel={false}
+        onClose={() => confirm.reset()}
+        onConfirm={() => confirm.reset()}
+      />
     </section>
   );
 }

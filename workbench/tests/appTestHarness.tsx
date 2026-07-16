@@ -10,7 +10,10 @@ const responses: Record<string, unknown> = {
     { systemId: 'alpha-system', name: 'Alpha System', repoPath: '/tmp/alpha', ownerUserId: 'admin', allowedPaths: '[]', forbiddenPaths: '[]', testCommands: '[]', agentConfig: '{"executionProvider":"claude_sdk","claudeMaxTurns":40,"executionTimeoutSeconds":900}', modelProviderConfig: '{"provider":"deepseek","model":"deepseek-chat","baseUrl":"https://api.deepseek.com","apiKey":"******","claudePreset":"deepseek","claudeModel":"deepseek-v4-pro","claudeBaseUrl":"https://api.deepseek.com/anthropic","claudeReuseBusinessApiKey":true}' },
     { systemId: 'prod-system', name: 'Prod System', repoPath: '/tmp/prod', ownerUserId: 'owner', allowedPaths: '[]', forbiddenPaths: '[]', testCommands: '[]', agentConfig: '{}', modelProviderConfig: '{}' },
   ],
-  '/api/v5/users': [{ userId: 'admin', displayName: 'Admin', email: 'admin@local', enabled: true }],
+  '/api/v5/users': [
+    { userId: 'admin', displayName: 'Admin', email: 'admin@local', enabled: true },
+    { userId: 'demo-user', displayName: 'Demo User', email: 'demo@local', enabled: true },
+  ],
   '/api/v5/systems/alpha-system/members': [{ systemId: 'alpha-system', userId: 'admin', displayName: 'Admin', role: 'owner' }],
   '/api/v5/work-items?systemId=alpha-system': [],
   '/api/v5/work-items?systemId=prod-system': [],
@@ -84,10 +87,10 @@ let workItems: unknown[] = [];
 let agentConfiguration: any;
 let prdPostCount = 0;
 
-export function jsonResponse(data: unknown, ok = true) {
+export function jsonResponse(data: unknown, ok = true, status = ok ? 200 : 401) {
   return Promise.resolve({
     ok,
-    status: ok ? 200 : 401,
+    status,
     json: () => Promise.resolve(data),
     text: () => Promise.resolve(typeof data === 'string' ? data : JSON.stringify(data)),
   } as Response);
@@ -95,7 +98,7 @@ export function jsonResponse(data: unknown, ok = true) {
 
 export function resetAppTestState() {
   localStorage.clear();
-  candidateMemories = [{ memoryId: 'mem-candidate', systemId: 'alpha-system', content: '保留登录页样式', status: 'candidate', createdAt: '2026-07-05T12:00:00Z' }];
+  candidateMemories = [{ memoryId: 'mem-candidate', systemId: 'alpha-system', category: 'convention', title: '登录页样式约定', content: '保留登录页样式', status: 'candidate', workItemId: 'wi-1', createdAt: '2026-07-05T12:00:00Z' }];
   conversationMessages = [];
   workItems = [];
   agentConfiguration = {
@@ -148,9 +151,24 @@ export function resetAppTestState() {
     if (path === '/api/v5/memory?systemId=alpha-system&status=approved') {
       return jsonResponse([]);
     }
+    if (path === '/api/v5/memory?systemId=alpha-system&status=rejected') {
+      return jsonResponse([{ memoryId: 'mem-legacy', systemId: 'alpha-system', category: '', title: 'ModificationCompleted {\"diff\":\"raw\"}', content: 'ModificationCompleted {\"diff\":\"raw\"}', status: 'rejected', sourceEventId: 'evt-1', createdAt: '2026-07-04T12:00:00Z' }]);
+    }
+    if (path === '/api/v5/memory?systemId=alpha-system&status=disabled') {
+      return jsonResponse([]);
+    }
+    if (path === '/api/v5/memory/candidates' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      candidateMemories = [...candidateMemories, { ...body, memoryId: 'mem-new', status: 'candidate', createdAt: '2026-07-05T13:00:00Z' }];
+      return jsonResponse(candidateMemories[candidateMemories.length - 1]);
+    }
+    if (path.startsWith('/api/v5/systems/alpha-system/knowledge?') && !init?.method) {
+      return jsonResponse([]);
+    }
     if (path === '/api/v5/memory/mem-candidate/approve' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body));
       candidateMemories = [];
-      return jsonResponse({ memoryId: 'mem-candidate', status: 'approved' });
+      return jsonResponse({ memoryId: 'mem-candidate', ...body, status: 'approved' });
     }
     if (path === '/api/v5/systems/alpha-system/prd/messages' && init?.method === 'POST') {
       prdPostCount += 1;

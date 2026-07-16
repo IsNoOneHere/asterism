@@ -31,6 +31,11 @@ public class UserAdminController {
         users.disableUser(userId);
     }
 
+    @DeleteMapping("/{userId}")
+    void delete(@PathVariable String userId, Authentication actor) {
+        users.deleteUser(userId, actor.getName());
+    }
+
     @PostMapping("/{userId}/reset-password")
     void resetPassword(@PathVariable String userId, @Valid @RequestBody ResetPasswordRequest request) {
         users.resetPassword(userId, request.password());
@@ -50,4 +55,3 @@ public class UserAdminController {
     public record MembershipRequest(@NotBlank String systemId, @NotBlank String userId, @NotBlank String role) {
     }
 }
-

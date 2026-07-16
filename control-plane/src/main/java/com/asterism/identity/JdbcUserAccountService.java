@@ -1,5 +1,8 @@
 package com.asterism.identity;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -7,11 +10,13 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
 @Service
 public class JdbcUserAccountService implements UserDetailsService {
+    private static final Logger log = LoggerFactory.getLogger(JdbcUserAccountService.class);
     private final JdbcClient jdbc;
     private final PasswordEncoder encoder;
     private final SystemMembershipRepository memberships;
@@ -96,6 +101,27 @@ public class JdbcUserAccountService implements UserDetailsService {
                 .param("userId", userId)
                 .param("passwordHash", encoder.encode(password))
                 .update();
+    }
+
+    @Transactional
+    public void deleteUser(String userId, String actor) {
+        if (userId.equals(actor)) throw new IllegalStateException("不能删除当前登录用户");
+        var ownsSystem = jdbc.sql("select exists (select 1 from systems where owner_user_id = :userId)")
+                .param("userId", userId)
+                .query(Boolean.class)
+                .single();
+        if (ownsSystem) throw new IllegalStateException("用户仍是系统负责人，请先转移负责人");
+        try {
+            // 账号删除时同步清理成员角色，历史业务审计仍保留原用户 ID。
+            memberships.deleteMembershipsForUser(userId);
+            var deleted = jdbc.sql("delete from users where user_id = :userId")
+                    .param("userId", userId)
+                    .update();
+            if (deleted == 0) throw new IllegalArgumentException("用户不存在");
+        } catch (DataIntegrityViolationException error) {
+            throw new IllegalStateException("用户仍被业务数据引用，无法删除", error);
+        }
+        log.info("用户已删除 user={} actor={}", userId, actor);
     }
 
     public void upsertMembership(String systemId, String userId, String role, String actor) {

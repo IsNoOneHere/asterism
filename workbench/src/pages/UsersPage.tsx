@@ -1,25 +1,36 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FormEvent, useEffect, useState } from 'react';
-import { api } from '../api/client';
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import { KeyRound, Pencil, Plus, Trash2, UserPlus } from 'lucide-react';
+import { api, UserAccount } from '../api/client';
+import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { Pagination, usePagination } from '../components/Pagination';
 import { useCurrentSystem } from '../SystemContext';
 
 const emptyUser = { userId: '', displayName: '', email: '', password: '' };
+type UserConfirmAction =
+  | { type: 'disable'; userId: string; name: string }
+  | { type: 'delete'; userId: string; name: string }
+  | { type: 'remove-member'; userId: string; role: string };
 
 export function UsersPage() {
   const queryClient = useQueryClient();
   const users = useQuery({ queryKey: ['users'], queryFn: api.users, retry: false });
   const { systemId } = useCurrentSystem();
+  const userDialogRef = useRef<HTMLDialogElement>(null);
+  const memberDialogRef = useRef<HTMLDialogElement>(null);
+  const resetDialogRef = useRef<HTMLDialogElement>(null);
+  const [tab, setTab] = useState<'users' | 'members'>('users');
   const [userForm, setUserForm] = useState(emptyUser);
   const [editingUser, setEditingUser] = useState(false);
   const [membership, setMembership] = useState({ systemId, userId: '', role: 'requester' });
   const [resetForm, setResetForm] = useState({ userId: '', password: '', confirm: '' });
   const [message, setMessage] = useState('');
+  const [confirmAction, setConfirmAction] = useState<UserConfirmAction | null>(null);
   const enabledUsers = (users.data ?? []).filter((user) => user.enabled);
   const members = useQuery({
-    queryKey: ['members', membership.systemId],
-    queryFn: () => api.members(membership.systemId),
-    enabled: Boolean(membership.systemId),
+    queryKey: ['members', systemId],
+    queryFn: () => api.members(systemId),
+    enabled: Boolean(systemId),
     retry: false,
   });
   const userValues = users.data ?? [];
@@ -28,145 +39,237 @@ export function UsersPage() {
   const memberPagination = usePagination(memberValues, systemId + ':' + memberValues.map((member) => member.userId + member.role).join(':'));
 
   useEffect(() => {
-    if (systemId && membership.systemId !== systemId) setMembership((value) => ({ ...value, systemId }));
-  }, [membership.systemId, systemId]);
+    setMembership((value) => ({ ...value, systemId }));
+  }, [systemId]);
 
   const upsert = useMutation({
     mutationFn: () => api.upsertUser(blankToUndefined(userForm)),
     onSuccess: (saved) => {
       console.info('v5 workbench 保存用户', { userId: saved.userId });
-      setUserForm(emptyUser);
-      setEditingUser(false);
+      userDialogRef.current?.close();
       setMessage('用户保存成功');
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
   });
   const disable = useMutation({
     mutationFn: api.disableUser,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+    onSuccess: () => {
+      setMessage('用户已禁用');
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+    onSettled: () => setConfirmAction(null),
   });
   const reset = useMutation({
     mutationFn: (value: { userId: string; password: string }) => api.resetPassword(value.userId, value.password),
-    onSuccess: () => { setMessage('密码已重置'); setResetForm({ userId: '', password: '', confirm: '' }); },
+    onSuccess: () => {
+      console.info('v5 workbench 重置用户密码', { userId: resetForm.userId });
+      resetDialogRef.current?.close();
+      setMessage('密码已重置');
+    },
   });
   const saveMembership = useMutation({
     mutationFn: () => api.upsertMembership(membership),
     onSuccess: () => {
       console.info('v5 workbench 保存系统成员', membership);
+      memberDialogRef.current?.close();
       setMessage('成员保存成功');
-      queryClient.invalidateQueries({ queryKey: ['members', membership.systemId] });
+      queryClient.invalidateQueries({ queryKey: ['members', systemId] });
     },
   });
   const removeMembership = useMutation({
-    mutationFn: (value: { userId: string; role: string }) => api.deleteMember(membership.systemId, value.userId, value.role),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['members', membership.systemId] }),
+    mutationFn: (value: { userId: string; role: string }) => api.deleteMember(systemId, value.userId, value.role),
+    onSuccess: () => {
+      setMessage('成员角色已移除');
+      queryClient.invalidateQueries({ queryKey: ['members', systemId] });
+    },
+    onSettled: () => setConfirmAction(null),
   });
+  const removeUser = useMutation({
+    mutationFn: api.deleteUser,
+    onSuccess: (_, userId) => {
+      console.info('v5 workbench 删除用户', { userId });
+      setMessage('用户已删除');
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['members'] });
+    },
+    onSettled: () => setConfirmAction(null),
+  });
+  const operationError = removeUser.error || disable.error || removeMembership.error;
+  const confirmation = confirmAction ? confirmationCopy(confirmAction) : null;
+  const operationPending = removeUser.isPending || disable.isPending || removeMembership.isPending;
 
-  function submitUser(event: FormEvent) {
-    event.preventDefault();
-    upsert.mutate();
+  function openUserEditor(user?: UserAccount) {
+    setEditingUser(Boolean(user));
+    setUserForm(user
+      ? { userId: user.userId, displayName: user.displayName, email: user.email || '', password: '' }
+      : emptyUser);
+    setMessage('');
+    // 原生 dialog 直接提供居中展示、遮罩和键盘关闭能力。
+    userDialogRef.current?.showModal();
   }
 
-  function submitMembership(event: FormEvent) {
-    event.preventDefault();
-    saveMembership.mutate();
+  function openMemberEditor() {
+    setMembership({ systemId, userId: '', role: 'requester' });
+    setMessage('');
+    memberDialogRef.current?.showModal();
+  }
+
+  function openPasswordReset(userId: string) {
+    setResetForm({ userId, password: '', confirm: '' });
+    resetDialogRef.current?.showModal();
+  }
+
+  function openConfirmation(action: UserConfirmAction) {
+    removeUser.reset();
+    disable.reset();
+    removeMembership.reset();
+    setMessage('');
+    setConfirmAction(action);
+  }
+
+  function runConfirmedAction() {
+    if (!confirmAction) return;
+    if (confirmAction.type === 'disable') disable.mutate(confirmAction.userId);
+    if (confirmAction.type === 'delete') removeUser.mutate(confirmAction.userId);
+    if (confirmAction.type === 'remove-member') removeMembership.mutate(confirmAction);
+  }
+
+  function clearOperationError() {
+    removeUser.reset();
+    disable.reset();
+    removeMembership.reset();
   }
 
   return (
-    <section className="split wide-left">
-      <div className="panel">
-        <h1>用户与成员</h1>
-        <form onSubmit={submitUser}>
-          <label>
-            用户 ID
-            <input value={userForm.userId} readOnly={editingUser} onChange={(event) => setUserForm({ ...userForm, userId: event.target.value })} />
-          </label>
-          <label>
-            显示名
-            <input value={userForm.displayName} onChange={(event) => setUserForm({ ...userForm, displayName: event.target.value })} />
-          </label>
-          <label>
-            邮箱
-            <input value={userForm.email} onChange={(event) => setUserForm({ ...userForm, email: event.target.value })} />
-          </label>
-          <label>
-            密码
-            <input type="password" value={userForm.password} placeholder={editingUser ? '留空则不改密码' : ''} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} />
-          </label>
-          <div className="button-row">
-            <button type="submit" disabled={!userForm.userId || !userForm.displayName}>保存用户</button>
-            {editingUser && <button type="button" className="secondary" onClick={() => { setEditingUser(false); setUserForm(emptyUser); }}>取消</button>}
-          </div>
-        </form>
-        <form className="sub-form" onSubmit={submitMembership}>
-          <h2>系统成员</h2>
-          <label>
-            用户
-            <select value={membership.userId} onChange={(event) => setMembership({ ...membership, userId: event.target.value })}>
-              <option value="">请选择用户</option>
-              {enabledUsers.map((user) => <option key={user.userId} value={user.userId}>{user.displayName || user.userId}</option>)}
-            </select>
-          </label>
-          <label>
-            角色
-            <select value={membership.role} onChange={(event) => setMembership({ ...membership, role: event.target.value })}>
-              <option value="requester">requester</option>
-              <option value="owner">owner</option>
-              <option value="admin">admin</option>
-            </select>
-          </label>
-          <button type="submit" disabled={!membership.systemId || !membership.userId}>保存成员</button>
-        </form>
-        {message && <div className="success-text">{message}</div>}
+    <section className="management-page">
+      <header className="page-head management-head">
+        <div><h1>用户与成员</h1><p>管理登录账号，以及当前系统中的成员角色。</p></div>
+        <div className="button-row">
+          <button type="button" className="secondary icon-text-button" disabled={!systemId} onClick={openMemberEditor}><UserPlus size={16} />添加成员</button>
+          <button type="button" className="icon-text-button" onClick={() => openUserEditor()}><Plus size={16} />新增用户</button>
+        </div>
+      </header>
+
+      {message && <div className="success-text" role="status">{message}</div>}
+
+      <div className="panel management-panel">
+        <div className="tabs management-tabs" role="tablist" aria-label="用户与成员列表">
+          <button type="button" role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>用户列表 <span>{userValues.length}</span></button>
+          <button type="button" role="tab" aria-selected={tab === 'members'} className={tab === 'members' ? 'active' : ''} onClick={() => setTab('members')}>当前系统成员 <span>{memberValues.length}</span></button>
+        </div>
+
+        {tab === 'users' ? <>
+          <div className="table-frame"><table className="data-table management-table users-table"><thead><tr><th>用户</th><th>邮箱</th><th>状态</th><th>操作</th></tr></thead><tbody>
+            {userPagination.pageItems.map((user) => <tr key={user.userId}>
+              <td><div className="table-title"><strong>{user.displayName}</strong><span>{user.userId}</span></div></td>
+              <td>{user.email || '未设置'}</td>
+              <td><span className={`status-badge ${user.enabled ? 'success' : 'neutral'}`}>{user.enabled ? '已启用' : '已禁用'}</span></td>
+              <td><div className="button-row compact-actions">
+                <button type="button" className="secondary icon-text-button" onClick={() => openUserEditor(user)}><Pencil size={15} />编辑</button>
+                <button type="button" className="secondary icon-text-button" onClick={() => openPasswordReset(user.userId)}><KeyRound size={15} />重置密码</button>
+                <button type="button" className="danger-outline" onClick={() => openConfirmation({ type: 'disable', userId: user.userId, name: user.displayName || user.userId })} disabled={!user.enabled}>禁用</button>
+                <button type="button" className="danger-outline icon-text-button" aria-label={`删除用户 ${user.userId}`} disabled={removeUser.isPending} onClick={() => openConfirmation({ type: 'delete', userId: user.userId, name: user.displayName || user.userId })}><Trash2 size={15} />删除</button>
+              </div></td>
+            </tr>)}
+            {!userValues.length && <tr><td className="empty-cell" colSpan={4}>暂无用户</td></tr>}
+          </tbody></table></div>
+          {users.isError && <div className="empty">用户接口不可用或无管理员权限。</div>}
+          <Pagination total={userValues.length} page={userPagination.page} totalPages={userPagination.totalPages} onPageChange={userPagination.setPage} />
+        </> : <>
+          <div className="table-frame"><table className="data-table management-table"><thead><tr><th>成员</th><th>角色</th><th>所属系统</th><th>操作</th></tr></thead><tbody>
+            {memberPagination.pageItems.map((member) => <tr key={member.userId + member.role}>
+              <td><div className="table-title"><strong>{member.displayName || member.userId}</strong><span>{member.userId}</span></div></td>
+              <td><span className="status-badge info">{roleName(member.role)}</span></td>
+              <td>{systemId}</td>
+              <td><button type="button" className="danger-outline" onClick={() => openConfirmation({ type: 'remove-member', userId: member.userId, role: member.role })}>移除</button></td>
+            </tr>)}
+            {!memberValues.length && <tr><td className="empty-cell" colSpan={4}>当前系统暂无成员</td></tr>}
+          </tbody></table></div>
+          <Pagination total={memberValues.length} page={memberPagination.page} totalPages={memberPagination.totalPages} onPageChange={memberPagination.setPage} />
+        </>}
       </div>
-      <div className="panel">
-        <h2>用户列表</h2>
-        {userPagination.pageItems.map((user) => (
-          <div className="list-item action-item" key={user.userId}>
-            <div>
-              <strong>{user.displayName}</strong>
-              <span>{user.userId} · {user.email || 'no-email'} · {user.enabled ? 'enabled' : 'disabled'}</span>
-            </div>
-            <div className="button-row">
-              <button type="button" onClick={() => { setEditingUser(true); setUserForm({ userId: user.userId, displayName: user.displayName, email: user.email || '', password: '' }); }}>编辑</button>
-              <button type="button" className="secondary" onClick={() => setResetForm({ userId: user.userId, password: '', confirm: '' })}>重置密码</button>
-              <button type="button" className="secondary" onClick={() => { if (window.confirm(`确认禁用用户 ${user.userId}？`)) disable.mutate(user.userId); }} disabled={!user.enabled}>禁用</button>
-            </div>
+
+      <ActionConfirmDialog
+        open={Boolean(confirmAction)}
+        title={confirmation?.title || ''}
+        description={confirmation?.description || ''}
+        confirmLabel={confirmation?.confirmLabel}
+        pending={operationPending}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={runConfirmedAction}
+      />
+      <ActionConfirmDialog
+        open={Boolean(operationError)}
+        title="操作失败"
+        description={operationError?.message || ''}
+        confirmLabel="知道了"
+        alert
+        showCancel={false}
+        onClose={clearOperationError}
+        onConfirm={clearOperationError}
+      />
+
+      <dialog ref={userDialogRef} className="confirm-dialog config-dialog" aria-labelledby="user-dialog-title" onClose={() => { setEditingUser(false); setUserForm(emptyUser); }}>
+        <form onSubmit={(event: FormEvent) => { event.preventDefault(); upsert.mutate(); }}>
+          <div className="config-section-head compact"><div><h2 id="user-dialog-title">{editingUser ? '编辑用户' : '新增用户'}</h2><p>{editingUser ? '用户 ID 不可修改，密码留空则保持原值。' : '创建可登录星群的新账号。'}</p></div></div>
+          <div className="config-dialog-fields">
+            <label>用户 ID<input required value={userForm.userId} readOnly={editingUser} onChange={(event) => setUserForm({ ...userForm, userId: event.target.value })} /></label>
+            <label>显示名<input required value={userForm.displayName} onChange={(event) => setUserForm({ ...userForm, displayName: event.target.value })} /></label>
+            <label>邮箱<input type="email" value={userForm.email} onChange={(event) => setUserForm({ ...userForm, email: event.target.value })} /></label>
+            <label>密码<input type="password" autoComplete="new-password" placeholder={editingUser ? '留空则不修改' : ''} value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} /></label>
           </div>
-        ))}
-        {users.isError && <div className="empty">用户接口不可用或无管理员权限。</div>}
-        <Pagination total={userValues.length} page={userPagination.page} totalPages={userPagination.totalPages} onPageChange={userPagination.setPage} />
-        <h2>当前系统成员</h2>
-        {memberPagination.pageItems.map((member) => (
-          <div className="list-item action-item" key={member.userId + member.role}>
-            <div>
-              <strong>{member.displayName || member.userId}</strong>
-              <span>{member.userId} · {member.role}</span>
-            </div>
-            <button type="button" className="secondary" onClick={() => { if (window.confirm(`确认移除 ${member.userId} 的 ${member.role} 角色？`)) removeMembership.mutate({ userId: member.userId, role: member.role }); }}>移除</button>
-          </div>
-        ))}
-        <Pagination total={memberValues.length} page={memberPagination.page} totalPages={memberPagination.totalPages} onPageChange={memberPagination.setPage} />
-      </div>
-      {resetForm.userId && <dialog open className="confirm-dialog">
-        <form onSubmit={(event) => { event.preventDefault(); reset.mutate({ userId: resetForm.userId, password: resetForm.password }); }}>
-          <h2>重置 {resetForm.userId} 的密码</h2>
+          {upsert.error && <div className="error-text">用户保存失败。</div>}
+          <div className="button-row"><button type="button" className="secondary" onClick={() => userDialogRef.current?.close()}>取消</button><button type="submit" disabled={!userForm.userId || !userForm.displayName || upsert.isPending}>保存用户</button></div>
+        </form>
+      </dialog>
+
+      <dialog ref={memberDialogRef} className="confirm-dialog config-dialog" aria-labelledby="member-dialog-title">
+        <form onSubmit={(event: FormEvent) => { event.preventDefault(); saveMembership.mutate(); }}>
+          <div className="config-section-head compact"><div><h2 id="member-dialog-title">添加系统成员</h2><p>成员将加入当前系统 {systemId}。</p></div></div>
+          <label>用户<select required value={membership.userId} onChange={(event) => setMembership({ ...membership, userId: event.target.value })}><option value="">请选择用户</option>{enabledUsers.map((user) => <option key={user.userId} value={user.userId}>{user.displayName || user.userId}</option>)}</select></label>
+          <label>角色<select value={membership.role} onChange={(event) => setMembership({ ...membership, role: event.target.value })}><option value="requester">需求方</option><option value="owner">负责人</option><option value="admin">管理员</option></select></label>
+          {saveMembership.error && <div className="error-text">成员保存失败。</div>}
+          <div className="button-row"><button type="button" className="secondary" onClick={() => memberDialogRef.current?.close()}>取消</button><button type="submit" disabled={!membership.userId || saveMembership.isPending}>保存成员</button></div>
+        </form>
+      </dialog>
+
+      <dialog ref={resetDialogRef} className="confirm-dialog config-dialog" aria-labelledby="reset-dialog-title" onClose={() => setResetForm({ userId: '', password: '', confirm: '' })}>
+        <form onSubmit={(event: FormEvent) => { event.preventDefault(); reset.mutate({ userId: resetForm.userId, password: resetForm.password }); }}>
+          <div className="config-section-head compact"><div><h2 id="reset-dialog-title">重置 {resetForm.userId} 的密码</h2><p>保存后旧密码立即失效。</p></div></div>
           <label>新密码<input type="password" autoComplete="new-password" value={resetForm.password} onChange={(event) => setResetForm({ ...resetForm, password: event.target.value })} /></label>
           <label>再次输入<input type="password" autoComplete="new-password" value={resetForm.confirm} onChange={(event) => setResetForm({ ...resetForm, confirm: event.target.value })} /></label>
           {resetForm.confirm && resetForm.password !== resetForm.confirm && <div className="error-text">两次密码不一致</div>}
-          <div className="button-row"><button type="submit" disabled={!resetForm.password || resetForm.password !== resetForm.confirm || reset.isPending}>确认重置</button><button type="button" className="secondary" onClick={() => setResetForm({ userId: '', password: '', confirm: '' })}>取消</button></div>
+          {reset.error && <div className="error-text">密码重置失败。</div>}
+          <div className="button-row"><button type="button" className="secondary" onClick={() => resetDialogRef.current?.close()}>取消</button><button type="submit" disabled={!resetForm.password || resetForm.password !== resetForm.confirm || reset.isPending}>确认重置</button></div>
         </form>
-      </dialog>}
+      </dialog>
     </section>
   );
 }
 
 function blankToUndefined(value: { userId: string; displayName: string; email: string; password: string }) {
   // 空密码表示沿用后端默认策略；前端不接触 password_hash。
+  return { ...value, email: value.email || undefined, password: value.password || undefined };
+}
+
+function roleName(role: string) {
+  return { requester: '需求方', owner: '负责人', admin: '管理员' }[role] || role;
+}
+
+function confirmationCopy(action: UserConfirmAction) {
+  if (action.type === 'disable') return {
+    title: `禁用“${action.name}”？`,
+    description: '禁用后该用户将无法登录，账号和历史数据仍会保留。',
+    confirmLabel: '禁用用户',
+  };
+  if (action.type === 'delete') return {
+    title: `删除“${action.name}”？`,
+    description: '删除后账号不可恢复；系统负责人需要先转移负责人。',
+    confirmLabel: '删除用户',
+  };
   return {
-    userId: value.userId,
-    displayName: value.displayName,
-    email: value.email || undefined,
-    password: value.password || undefined,
+    title: `移除 ${action.userId}？`,
+    description: `将从当前系统移除其“${roleName(action.role)}”角色。`,
+    confirmLabel: '移除成员',
   };
 }

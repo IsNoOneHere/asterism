@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { jsonResponse, renderApp, renderAppWithRouter, resetAppTestState, setWorkItems } from './appTestHarness';
 
@@ -38,6 +38,66 @@ test('shows login page when auth check fails', async () => {
   renderApp('/work-items');
 
   expect(await screen.findByRole('heading', { name: '登录' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '星群' })).toBeInTheDocument();
+  expect(document.querySelector('.star-field')).toBeInTheDocument();
+});
+
+test('logout immediately returns to login page', async () => {
+  renderApp('/work-items');
+
+  fireEvent.click(await screen.findByRole('button', { name: '退出登录' }));
+
+  expect(await screen.findByRole('heading', { name: '登录' })).toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledWith('/logout', expect.objectContaining({ method: 'POST' }));
+});
+
+test.each([
+  { path: '/systems', button: '编辑', heading: '编辑系统配置' },
+  { path: '/users', button: '新增用户', heading: '新增用户' },
+  { path: '/knowledge', button: '新增条目', heading: '新增知识条目' },
+])('$path keeps the list first and opens $heading in a dialog', async ({ path, button, heading }) => {
+  renderApp(path);
+
+  const actions = await screen.findAllByRole('button', { name: button });
+  fireEvent.click(actions[0]);
+
+  expect(screen.getByRole('dialog')).toHaveAttribute('open');
+  expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
+});
+
+test.each([
+  { path: '/systems', button: '删除系统 alpha-system', confirmButton: '删除系统', requestPath: '/api/v5/systems/alpha-system' },
+  { path: '/users', button: '删除用户 demo-user', confirmButton: '删除用户', requestPath: '/api/v5/users/demo-user' },
+])('$path uses the unified confirmation dialog and sends DELETE', async ({ path, button, confirmButton, requestPath }) => {
+  renderApp(path);
+
+  fireEvent.click(await screen.findByRole('button', { name: button }));
+  const dialog = screen.getByRole('dialog');
+  expect(dialog).toHaveAttribute('open');
+  expect(fetch).not.toHaveBeenCalledWith(requestPath, expect.objectContaining({ method: 'DELETE' }));
+  fireEvent.click(within(dialog).getByRole('button', { name: confirmButton }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(requestPath, expect.objectContaining({ method: 'DELETE' })));
+});
+
+test('system deletion failure is shown in the unified alert dialog', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/v5/systems/alpha-system' && init?.method === 'DELETE') {
+      return jsonResponse({ message: '系统已有业务数据，无法删除' }, false, 409);
+    }
+    return fallback(input, init);
+  });
+  renderApp('/systems');
+
+  fireEvent.click(await screen.findByRole('button', { name: '删除系统 alpha-system' }));
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '删除系统' }));
+
+  const alert = await screen.findByRole('alertdialog');
+  expect(alert).toHaveTextContent('删除失败');
+  expect(alert).toHaveTextContent('系统已有业务数据，无法删除');
+  fireEvent.click(within(alert).getByRole('button', { name: '知道了' }));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
 });
 
 test('work item page loads selected system from systems api', async () => {
@@ -150,10 +210,37 @@ test('work item detail shows agent stage handoff metadata', async () => {
 test('memory approve moves candidate out of pending tab', async () => {
   renderApp('/memory');
 
-  expect(await screen.findByText(/保留登录页样式/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '批准' }));
+  expect(await screen.findByText('登录页样式约定')).toBeInTheDocument();
+  expect(document.querySelector('.memory-category')).toHaveTextContent('约定');
+  expect(screen.getByRole('link', { name: /来源工作项 wi-1/ })).toHaveAttribute('href', '/work-items/wi-1');
+  fireEvent.click(screen.getByRole('button', { name: '编辑并批准' }));
+  expect(screen.getByRole('dialog')).toHaveAttribute('open');
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: '登录页视觉约定' } });
+  fireEvent.click(screen.getByRole('button', { name: '批准并生效' }));
 
   await waitFor(() => {
-    expect(screen.queryByText(/保留登录页样式/)).not.toBeInTheDocument();
+    expect(screen.queryByText('登录页样式约定')).not.toBeInTheDocument();
   });
+});
+
+test('archived lifecycle memory does not expose raw event payload', async () => {
+  renderApp('/memory');
+
+  fireEvent.click(await screen.findByRole('button', { name: '已归档 1' }));
+
+  expect(await screen.findByText('旧生命周期事件候选')).toBeInTheDocument();
+  expect(screen.getByText(/仅保留在事件审计中/)).toBeInTheDocument();
+  expect(screen.queryByText(/ModificationCompleted/)).not.toBeInTheDocument();
+});
+
+test('work item detail creates a structured memory candidate', async () => {
+  renderApp('/work-items/wi-1');
+
+  fireEvent.click(await screen.findByRole('button', { name: '沉淀为记忆' }));
+  fireEvent.change(screen.getByLabelText('记忆类型'), { target: { value: 'lesson' } });
+  fireEvent.change(screen.getByLabelText('标题'), { target: { value: '登录错误处理经验' } });
+  fireEvent.change(screen.getByLabelText('正文'), { target: { value: '登录错误统一使用现有提示组件。' } });
+  fireEvent.click(screen.getByRole('button', { name: '加入待审批' }));
+
+  expect(await screen.findByText('已加入系统记忆待审批')).toBeInTheDocument();
 });
