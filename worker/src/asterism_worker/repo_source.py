@@ -92,11 +92,10 @@ def git_credentials(url: str, token: str, directory: Path):
 
     parsed = urlsplit(url)
     credentials = directory / ".git-credentials"
-    credentials.write_text(
-        f"{parsed.scheme}://oauth2:{quote(token, safe='')}@{parsed.netloc}\n",
-        encoding="utf-8",
-    )
-    credentials.chmod(0o600)
+    # 从创建瞬间即限制为当前用户读写，避免 chmod 前的短暂宽权限窗口。
+    descriptor = os.open(credentials, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write(f"{parsed.scheme}://oauth2:{quote(token, safe='')}@{parsed.netloc}\n")
     try:
         yield ["-c", f"credential.helper=store --file={credentials}"]
     finally:
