@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -45,40 +46,22 @@ class GitlabRepoSource:
     def prepare(self, repo: RepoSnapshot, workspace_root: str) -> Path:
         workspace = _workspace(workspace_root, repo.repo_id)
         target = workspace / "repo"
-        credentials = workspace / ".git-credentials"
         clone_url = f"{self.base_url.rstrip('/')}/{repo.gitlab_project.strip('/')}.git"
         parsed = urlsplit(clone_url)
         if not parsed.scheme or not parsed.netloc or not self.token:
             raise RuntimeError("GitLab clone 配置不完整")
-        # 临时 credential store 只存在于隔离目录，clone 完成即删除，token 不进入命令行或 .git/config。
-        credentials.write_text(
-            f"{parsed.scheme}://oauth2:{quote(self.token, safe='')}@{parsed.netloc}\n",
-            encoding="utf-8",
-        )
-        credentials.chmod(0o600)
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         try:
-            subprocess.run([
-                "git",
-                "-c",
-                f"credential.helper=store --file={credentials}",
-                "clone",
-                "--quiet",
-                "--depth",
-                "50",
-                "--single-branch",
-                "--branch",
-                repo.default_branch,
-                clone_url,
-                str(target),
-            ], check=True, capture_output=True, text=True, env=env)
+            with git_credentials(clone_url, self.token, workspace) as auth:
+                subprocess.run([
+                    "git", *auth, "clone", "--quiet", "--depth", "50", "--single-branch", "--branch",
+                    repo.default_branch, clone_url, str(target),
+                ], check=True, capture_output=True, text=True, env=env)
             log.info("GitLab 仓库工作区已准备 repo=%s project=%s", repo.repo_id, repo.gitlab_project)
             return target
         except Exception:
             shutil.rmtree(workspace, ignore_errors=True)
             raise
-        finally:
-            credentials.unlink(missing_ok=True)
 
 
 async def prepare_repo_workspace(repo: RepoSnapshot, system_id: str, settings: Settings) -> Path:
@@ -101,6 +84,23 @@ async def fetch_git_connection(system_id: str, settings: Settings) -> tuple[str,
 def cleanup_repo_workspace(repo_path: Path) -> None:
     root = repo_path.parent if repo_path.name == "repo" and repo_path.parent.name.startswith("case-") else repo_path
     shutil.rmtree(root, ignore_errors=True)
+
+
+@contextmanager
+def git_credentials(url: str, token: str, directory: Path):
+    """短时创建 0600 credential store，退出上下文即删除。"""
+
+    parsed = urlsplit(url)
+    credentials = directory / ".git-credentials"
+    credentials.write_text(
+        f"{parsed.scheme}://oauth2:{quote(token, safe='')}@{parsed.netloc}\n",
+        encoding="utf-8",
+    )
+    credentials.chmod(0o600)
+    try:
+        yield ["-c", f"credential.helper=store --file={credentials}"]
+    finally:
+        credentials.unlink(missing_ok=True)
 
 
 def _workspace(workspace_root: str, repo_id: str) -> Path:

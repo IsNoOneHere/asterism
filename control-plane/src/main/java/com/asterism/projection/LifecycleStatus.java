@@ -10,8 +10,8 @@ public enum LifecycleStatus {
     patch_rejected,
     validation_passed,
     validation_failed,
+    waiting_merge,
     completed,
     cancelled,
     rejected
 }
-

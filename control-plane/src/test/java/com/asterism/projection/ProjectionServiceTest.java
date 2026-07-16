@@ -111,6 +111,40 @@ class ProjectionServiceTest {
     }
 
     @Test
+    void gitlabMergeRequestsProjectThroughWaitingMergeToCompleted() {
+        var store = new InMemoryStore();
+        var service = service(store);
+
+        service.apply(event(1, "OwnerApprovalRequested"));
+        service.apply(event(2, "WorkItemActivated"));
+        service.apply(event(3, "ModificationCompleted"));
+        service.apply(event(4, "PatchApplied"));
+        service.apply(event(5, "ValidationPassed"));
+        service.apply(event(6, "MergeRequestCreated"));
+        service.apply(event(7, "MergeRequestMerged"));
+
+        assertThat(store.findById("wi-1").orElseThrow().lifecycleStatus()).isEqualTo("waiting_merge");
+        service.apply(event(8, "ReleaseCompleted"));
+        assertThat(store.findById("wi-1").orElseThrow().lifecycleStatus()).isEqualTo("completed");
+    }
+
+    @Test
+    void closedMergeRequestProjectsToWorkerBlocked() {
+        var store = new InMemoryStore();
+        var service = service(store);
+
+        service.apply(event(1, "OwnerApprovalRequested"));
+        service.apply(event(2, "WorkItemActivated"));
+        service.apply(event(3, "ModificationCompleted"));
+        service.apply(event(4, "PatchApplied"));
+        service.apply(event(5, "ValidationPassed"));
+        service.apply(event(6, "MergeRequestCreated"));
+        service.apply(event(7, "MergeRequestClosed"));
+
+        assertThat(store.findById("wi-1").orElseThrow().lifecycleStatus()).isEqualTo("worker_blocked");
+    }
+
+    @Test
     void executionPlanDraftedDoesNotChangeLifecycleProjection() {
         var store = new InMemoryStore();
         var service = service(store);

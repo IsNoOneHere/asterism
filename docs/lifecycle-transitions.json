@@ -5,9 +5,10 @@
   "worker_blocked": ["activated", "cancelled"],
   "modification_completed": ["patch_applied", "patch_rejected", "worker_blocked", "cancelled"],
   "patch_rejected": ["activated", "cancelled"],
-  "patch_applied": ["validation_passed", "validation_failed"],
+  "patch_applied": ["validation_passed", "validation_failed", "worker_blocked"],
   "validation_failed": ["activated", "cancelled"],
-  "validation_passed": ["completed", "worker_blocked", "cancelled"],
+  "validation_passed": ["waiting_merge", "completed", "worker_blocked", "cancelled"],
+  "waiting_merge": ["activated", "worker_blocked", "completed", "cancelled"],
   "completed": [],
   "cancelled": [],
   "rejected": []

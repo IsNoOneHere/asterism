@@ -416,6 +416,99 @@ def test_two_repositories_route_assignments_and_diff_gates_independently():
     assert [item["repo"] for item in completed["payload"]["repositories"]] == ["frontend", "backend"]
 
 
+def test_gitlab_all_merged_completes_after_waiting_merge():
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+    ], assignments=_gitlab_assignments(), repos=_gitlab_repos(), release_mode="gitlab",
+       merge_states=["merged", "merged"]))
+
+    types = [event["eventType"] for event in events]
+    assert result == "completed"
+    assert types.count("MergeRequestCreated") == 2
+    assert types.count("MergeRequestMerged") == 2
+    assert types[-1] == "ReleaseCompleted"
+    assert next(event for event in events if event["eventType"] == "ReleaseCompleted")["payload"]["repositories"][0]["state"] == "merged"
+
+
+def test_gitlab_partial_merge_does_not_complete():
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], assignments=_gitlab_assignments(), repos=_gitlab_repos(), release_mode="gitlab",
+       merge_states=["merged", "opened"]))
+
+    types = [event["eventType"] for event in events]
+    assert result == "cancelled"
+    assert types.count("MergeRequestMerged") == 1
+    assert "ReleaseCompleted" not in types
+
+
+def test_gitlab_closed_merge_request_blocks_until_human_decision():
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], assignments=_gitlab_assignments(), repos=_gitlab_repos(), release_mode="gitlab",
+       merge_states=["closed", "opened"]))
+
+    closed = next(event for event in events if event["eventType"] == "MergeRequestClosed")
+    assert result == "cancelled"
+    assert closed["payload"]["reason"] == "mr_closed"
+    assert "ReleaseCompleted" not in [event["eventType"] for event in events]
+
+
+def test_gitlab_rework_runs_modification_again_before_review():
+    counts: dict[str, int] = {}
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+        ("rework", "rework-wi-1"),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], assignments=_gitlab_assignments(), repos=_gitlab_repos(), release_mode="gitlab",
+       merge_states=["opened", "opened"], activity_counts=counts))
+
+    assert result == "cancelled"
+    assert counts["fetch_context"] == 2
+    assert counts["plan_execution"] == 2
+    assert [event["eventType"] for event in events].count("ModificationCompleted") == 2
+
+
+def test_gitlab_push_failure_blocks_with_repo_reason():
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], assignments=_gitlab_assignments(), repos=_gitlab_repos(), release_mode="gitlab",
+       publish_failure_repo="backend"))
+
+    blocked = next(event for event in events if event["eventType"] == "WorkerBlocked")
+    assert result == "cancelled"
+    assert blocked["payload"]["reason"] == "mr_create_failed"
+    assert blocked["payload"]["repo"] == "backend"
+
+
+def test_gitlab_validation_failure_uses_existing_validation_failed_path():
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], assignments=_gitlab_assignments(), repos=_gitlab_repos(), release_mode="gitlab",
+       validation_failure_repo="frontend"))
+
+    failed = next(event for event in events if event["eventType"] == "ValidationFailed")
+    assert result == "cancelled"
+    assert failed["payload"]["repo"] == "frontend"
+    assert "MergeRequestCreated" not in [event["eventType"] for event in events]
+
+
 def test_snapshot_unknown_assignment_blocks_with_unknown_role():
     events, result = asyncio.run(_run_workflow([
         ("owner_approved", "owner-approved-wi-1"),
@@ -464,6 +557,10 @@ async def _run_workflow(
     fail_role: str = "",
     fail_role_attempts: int = 0,
     activity_counts: dict[str, int] | None = None,
+    release_mode: str = "local",
+    merge_states: list[str] | None = None,
+    publish_failure_repo: str = "",
+    validation_failure_repo: str = "",
 ) -> tuple[list[dict], str]:
     events: list[dict] = []
     execution_requests: list[dict] = []
@@ -601,6 +698,27 @@ async def _run_workflow(
         assert request["repo_path"] == repo_path
         return validation_result or {"passed": True, "commands": []}
 
+    @activity.defn(name="publish_merge_request")
+    async def fake_publish_merge_request(request: dict) -> dict:
+        repo_id = request["repo"]["repo_id"]
+        if repo_id == publish_failure_repo:
+            raise RuntimeError("push failed")
+        validation = ({"passed": False, "commands": [], "failed_command": "test", "stderr_tail": "failed"}
+                      if repo_id == validation_failure_repo else {"passed": True, "commands": []})
+        return {
+            "repo": repo_id,
+            "branch": "wi/wi-1",
+            "commit_hash": f"commit-{repo_id}",
+            "merge_request": {"repo": repo_id, "mr_iid": 1 if repo_id == "frontend" else 2,
+                              "mr_url": f"https://gitlab/{repo_id}/mr", "state": "opened"},
+            "validation": validation,
+        }
+
+    @activity.defn(name="check_merge_requests")
+    async def fake_check_merge_requests(request: dict) -> list[dict]:
+        states = merge_states or ["merged"] * len(request["merge_requests"])
+        return [{**item, "state": states[index]} for index, item in enumerate(request["merge_requests"])]
+
     @activity.defn(name="send_projection_event")
     async def fake_send_projection_event(event: dict) -> None:
         # 收集 worker 回写，断言事件顺序和幂等键。
@@ -621,12 +739,14 @@ async def _run_workflow(
                 fake_run_release,
                 fake_revert_patch,
                 fake_run_validation,
+                fake_publish_merge_request,
+                fake_check_merge_requests,
                 fake_send_projection_event,
             ],
         ):
             handle = await env.client.start_workflow(
                 AsterismCaseWorkflow.run,
-                _case_input(test_commands, repo_path, agent_config_snapshot, repos),
+                _case_input(test_commands, repo_path, agent_config_snapshot, repos, release_mode),
                 id=f"case-{uuid4()}",
                 task_queue=TASK_QUEUE,
             )
@@ -637,7 +757,8 @@ async def _run_workflow(
 
 
 def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/repo",
-                agent_config_snapshot: dict | None = None, repos: list[dict] | None = None) -> CaseInput:
+                agent_config_snapshot: dict | None = None, repos: list[dict] | None = None,
+                release_mode: str = "local") -> CaseInput:
     payload = dict(
         case_id="case-1",
         work_item_id="wi-1",
@@ -654,6 +775,9 @@ def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/r
         forbidden_paths=["secrets"],
         test_commands=["pytest"] if test_commands is None else test_commands,
         repos=repos or [],
+        release_mode=release_mode,
+        validation_mode="auto",
+        mr_target_branch="main",
     )
     if agent_config_snapshot is None:
         payload.update(execution_provider="claude_sdk", claude_max_turns=25, execution_timeout_seconds=900)
@@ -679,3 +803,21 @@ def _agent_snapshot() -> dict:
              "model_profile_ref": "mp-back", "path_scope": ["api"], "timeout_seconds": 900},
         ],
     }
+
+
+def _gitlab_repos() -> list[dict]:
+    return [
+        {"repo_id": "frontend", "name": "Web", "kind": "frontend", "clone_mode": "gitlab",
+         "gitlab_project": "group/web", "default_branch": "main", "allowed_paths": ["web"],
+         "forbidden_paths": [], "test_commands": ["test-web"]},
+        {"repo_id": "backend", "name": "API", "kind": "backend", "clone_mode": "gitlab",
+         "gitlab_project": "group/api", "default_branch": "main", "allowed_paths": ["api"],
+         "forbidden_paths": [], "test_commands": ["test-api"]},
+    ]
+
+
+def _gitlab_assignments() -> list[dict]:
+    return [
+        {"role": "frontend", "repo": "frontend", "scope_paths": ["web"], "step_refs": ["web"]},
+        {"role": "backend", "repo": "backend", "scope_paths": ["api"], "step_refs": ["api"]},
+    ]

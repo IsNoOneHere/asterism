@@ -339,6 +339,8 @@ export const api = {
     request('/api/v5/work-items/' + workItemId + '/owner-approval', { method: 'POST' }),
   submitSignal: (workItemId: string, signalName: string) =>
     request('/api/v5/work-items/' + workItemId + '/signals/' + signalName, { method: 'POST' }),
+  checkMergeStatus: (workItemId: string) =>
+    request('/api/v5/work-items/' + workItemId + '/merge-status/check', { method: 'POST' }),
   users: () => request<UserAccount[]>('/api/v5/users'),
   upsertUser: (body: { userId: string; displayName: string; email?: string; password?: string }) =>
     request<UserAccount>('/api/v5/users', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),

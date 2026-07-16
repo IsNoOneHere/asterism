@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     temporal_namespace: str = Field(default="default")
     temporal_task_queue: str = Field(default="asterism")
     control_plane_url: str = Field(default="http://127.0.0.1:8085")
+    public_url: str = Field(default="")
     worker_callback_token: str = Field(default="dev-worker-token")
     profile: str = Field(default="local")
     workspace_root: str = Field(default="runtime/workspaces")

@@ -1,9 +1,12 @@
 package com.asterism.workitem;
 
+import com.asterism.common.ApiException;
 import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventRecord;
 import com.asterism.event.DomainEventType;
 import com.asterism.identity.SystemAccessService;
+import com.asterism.git.GitIntegrationService;
+import com.asterism.git.GitLabClient;
 import com.asterism.knowledge.KnowledgeMatchService.SuspectedTarget;
 import com.asterism.projection.WorkItemProjection;
 import com.asterism.projection.WorkItemProjectionRepository;
@@ -13,6 +16,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.security.core.Authentication;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -32,15 +36,20 @@ public class WorkItemController {
     private final SystemAccessService access;
     private final PrdSessionRepository prdSessions;
     private final ObjectMapper objectMapper;
+    private final GitIntegrationService git;
+    private final GitLabClient gitLab;
 
     public WorkItemController(WorkItemProjectionRepository workItems, TemporalCasePort temporal, DomainEventService events,
-                              SystemAccessService access, PrdSessionRepository prdSessions, ObjectMapper objectMapper) {
+                              SystemAccessService access, PrdSessionRepository prdSessions, ObjectMapper objectMapper,
+                              GitIntegrationService git, GitLabClient gitLab) {
         this.workItems = workItems;
         this.temporal = temporal;
         this.events = events;
         this.access = access;
         this.prdSessions = prdSessions;
         this.objectMapper = objectMapper;
+        this.git = git;
+        this.gitLab = gitLab;
     }
 
     @GetMapping
@@ -171,6 +180,31 @@ public class WorkItemController {
         return new SignalResponse(workItemId, signalId, "submitted");
     }
 
+    @PostMapping("/{workItemId}/merge-status/check")
+    SignalResponse checkMergeStatus(@PathVariable String workItemId, Authentication actor) {
+        var item = find(workItemId);
+        access.requireOwnerOrAdmin(item.systemId(), actor);
+        if (!"waiting_merge".equals(item.lifecycleStatus())) {
+            throw new ApiException(HttpStatus.CONFLICT, "NOT_WAITING_MERGE", "工作项当前不在等待合并状态");
+        }
+        var config = git.internal(item.systemId());
+        var repos = config.repos().stream().collect(java.util.stream.Collectors.toMap(
+                GitIntegrationService.RepoConfig::repoId, value -> value));
+        var mergeRequests = latestMergeRequests(workItemId);
+        if (mergeRequests.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, "MR_NOT_FOUND", "工作项没有可核验的 MR");
+        }
+        var unmerged = mergeRequests.stream().filter(mr -> {
+            var repo = repos.get(mr.repo());
+            return repo == null || !"merged".equals(gitLab.mergeRequest(
+                    config.baseUrl(), config.token(), repo.gitlabProject(), mr.iid()).state());
+        }).map(mr -> mr.repo() + "!" + mr.iid()).toList();
+        if (!unmerged.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, "MR_NOT_MERGED", "仍有 MR 未合并", unmerged);
+        }
+        return submitSignal(workItemId, "check_merge_status", actor);
+    }
+
     public record SignalResponse(String workItemId, String signalId, String status) {
     }
 
@@ -207,8 +241,36 @@ public class WorkItemController {
             case "modification_completed" -> List.of("patch_apply_approved", "patch_apply_rejected", "cancel_case");
             case "patch_applied" -> List.of("validation_passed", "validation_rejected", "cancel_case");
             case "validation_passed" -> List.of("release_approved", "cancel_case");
+            case "waiting_merge" -> List.of("check_merge_status", "rework", "cancel_case");
             default -> List.of();
         };
+    }
+
+    private List<MergeRequestReference> latestMergeRequests(String workItemId) {
+        var timeline = events.findByWorkItemId(workItemId);
+        String causation = null;
+        for (var event : timeline) {
+            if ("MergeRequestCreated".equals(event.eventType()) && event.causationId() != null) {
+                causation = event.causationId().split(":mr:", 2)[0];
+            }
+        }
+        if (causation == null) return List.of();
+        var prefix = causation + ":mr:";
+        var result = new ArrayList<MergeRequestReference>();
+        for (var event : timeline) {
+            if (!"MergeRequestCreated".equals(event.eventType()) || event.causationId() == null
+                    || !event.causationId().startsWith(prefix)) continue;
+            try {
+                var payload = objectMapper.readTree(event.payloadJson());
+                result.add(new MergeRequestReference(payload.path("repo").asText(), payload.path("mrIid").asInt()));
+            } catch (JsonProcessingException ignored) {
+                // 历史坏事件不参与人工核验，Temporal 轮询仍会继续。
+            }
+        }
+        return result;
+    }
+
+    private record MergeRequestReference(String repo, int iid) {
     }
 
     public record WorkItemView(String workItemId, String systemId, String prdId, String caseId, String title,

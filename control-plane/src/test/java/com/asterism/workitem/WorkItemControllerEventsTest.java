@@ -27,7 +27,8 @@ class WorkItemControllerEventsTest {
         when(workItems.findById("wi-1")).thenReturn(Optional.of(item()));
         when(events.findByWorkItemId("wi-1")).thenReturn(List.of(event));
         var controller = new WorkItemController(workItems, mock(TemporalCasePort.class), events, access,
-                mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper());
+                mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper(),
+                mock(com.asterism.git.GitIntegrationService.class), mock(com.asterism.git.GitLabClient.class));
 
         var timeline = controller.events("wi-1", actor);
 

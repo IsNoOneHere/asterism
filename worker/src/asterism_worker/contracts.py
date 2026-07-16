@@ -14,6 +14,7 @@ class LifecycleStatus(StrEnum):
     patch_rejected = "patch_rejected"
     validation_passed = "validation_passed"
     validation_failed = "validation_failed"
+    waiting_merge = "waiting_merge"
     completed = "completed"
     cancelled = "cancelled"
     rejected = "rejected"
@@ -196,6 +197,21 @@ class ReleaseResult(BaseModel):
     branch: str
     commit_hash: str
     push_failed: str = ""
+
+
+class MergeRequestRef(BaseModel):
+    repo: str
+    mr_iid: int
+    mr_url: str
+    state: str = "opened"
+
+
+class GitlabPublishResult(BaseModel):
+    repo: str
+    branch: str = ""
+    commit_hash: str = ""
+    merge_request: MergeRequestRef | None = None
+    validation: ValidationResult = Field(default_factory=lambda: ValidationResult(passed=True))
 
 
 class PrdSpec(BaseModel):

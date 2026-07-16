@@ -2324,6 +2324,19 @@ label {
   color: var(--muted-strong);
 }
 
+.merge-request-list ul {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.merge-request-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .pagination {
   align-items: center;
   background: transparent;

@@ -36,18 +36,26 @@ flowchart LR
 
 ## Handoff
 
-`ExecutionPlan.assignments[]` 包含 `role/scope_paths/step_refs`。Planner 的 role 元数据由 `plan_execution` activity 从 internal API 读取并剔除 Profile/Key 后加入 prompt，因此真实 planner 可以选择角色。
+`ExecutionPlan.assignments[]` 包含 `role/repo/scope_paths/step_refs`。单仓可省略 `repo`，多仓必须显式指定。Planner 收到按 repo 标注的摘要和剔除 Profile/Key 后的 role 元数据。
 
-Workflow 在现有 `start_modification` 内顺序执行 assignments。每段收到自己的 `step_refs` 与前序摘要；段内越出 role scope 时产生 `WorkerBlocked(role_scope_violation)`，不同段修改同一文件时产生 `WorkerBlocked(handoff_conflict)`。不冲突的 diff 按文件拼接，最终仍只有一个 `ModificationCompleted`。
+Workflow 在现有 `start_modification` 内顺序执行 assignments。每段只在所属 repo 的隔离 workspace 执行，并收到带 repo 的前序 handoff；路径门禁和冲突键均为 `(repo, path)`。不冲突的 diff 最终仍只有一个 `ModificationCompleted`，同时保留每仓 `repoDiffs`。
 
 跨框架不共享 SDK 会话，只交接工件和 `AgentStageCompleted` 事件。阶段事件的 causation/idempotency suffix 为 `stage:<index>:<role>`，可 replay 且不会相互去重。
 
 ## Temporal 修改守则
 
-- 不改变已有生命周期状态和 signal 顺序；新阶段是 `start_modification` 内部活动。
+- `local` 模式保持原生命周期；`gitlab` 模式新增 `waiting_merge`。
 - 已上线 workflow 的确定性分支保持 replay 兼容；老 history 没有 assignments 时走单 Agent 路径。
 - 对不兼容 workflow 修改使用 Temporal worker versioning / `workflow.patched`，补 replay 测试后再移除旧分支。
 - `domain_events.sequence` 与 `work_items.last_applied_sequence` 的投影机制不得绕过。
+
+## GitLab 发布边界
+
+`releaseMode=gitlab` 时，Patch 审批后由 worker 在临时 shallow clone 中按仓验证、提交 `wi/<workItemId>`、用 `force-with-lease` 幂等推送并创建或复用 MR。Token 仅由 activity 通过 internal API 实时读取，临时 `0600` credential store 在 Git 命令结束后删除，不进入 Temporal、事件、日志、前端或 `.git/config`。
+
+全部 MR 创建后进入 `waiting_merge`。服务器 A 上的 Temporal timer 主动调用 GitLab API 轮询 MR，因此只要求 `A → B`；不要求 GitLab B 能回调 A，也不提供 webhook 双实现。部分合并保持等待，全部合并产生 `ReleaseCompleted`，MR 被关闭则进入 `worker_blocked`。人工“标记已合并”也必须先由控制面实时核验 GitLab。
+
+Asterism 的职责止于“所有 MR 已合并”。合并后的 CI/CD、部署和服务重启属于 GitLab Runner，当前及未来都不进入 Asterism 核心生命周期。
 
 ## 多模态截图管线
 

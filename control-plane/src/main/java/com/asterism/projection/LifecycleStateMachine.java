@@ -14,9 +14,10 @@ public final class LifecycleStateMachine {
         NEXT.put(LifecycleStatus.worker_blocked, EnumSet.of(LifecycleStatus.activated, LifecycleStatus.cancelled));
         NEXT.put(LifecycleStatus.modification_completed, EnumSet.of(LifecycleStatus.patch_applied, LifecycleStatus.patch_rejected, LifecycleStatus.worker_blocked, LifecycleStatus.cancelled));
         NEXT.put(LifecycleStatus.patch_rejected, EnumSet.of(LifecycleStatus.activated, LifecycleStatus.cancelled));
-        NEXT.put(LifecycleStatus.patch_applied, EnumSet.of(LifecycleStatus.validation_passed, LifecycleStatus.validation_failed));
+        NEXT.put(LifecycleStatus.patch_applied, EnumSet.of(LifecycleStatus.validation_passed, LifecycleStatus.validation_failed, LifecycleStatus.worker_blocked));
         NEXT.put(LifecycleStatus.validation_failed, EnumSet.of(LifecycleStatus.activated, LifecycleStatus.cancelled));
-        NEXT.put(LifecycleStatus.validation_passed, EnumSet.of(LifecycleStatus.completed, LifecycleStatus.worker_blocked, LifecycleStatus.cancelled));
+        NEXT.put(LifecycleStatus.validation_passed, EnumSet.of(LifecycleStatus.waiting_merge, LifecycleStatus.completed, LifecycleStatus.worker_blocked, LifecycleStatus.cancelled));
+        NEXT.put(LifecycleStatus.waiting_merge, EnumSet.of(LifecycleStatus.activated, LifecycleStatus.worker_blocked, LifecycleStatus.completed, LifecycleStatus.cancelled));
         NEXT.put(LifecycleStatus.completed, EnumSet.noneOf(LifecycleStatus.class));
         NEXT.put(LifecycleStatus.cancelled, EnumSet.noneOf(LifecycleStatus.class));
         NEXT.put(LifecycleStatus.rejected, EnumSet.noneOf(LifecycleStatus.class));

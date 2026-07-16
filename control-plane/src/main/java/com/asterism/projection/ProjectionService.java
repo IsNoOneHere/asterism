@@ -25,6 +25,8 @@ public class ProjectionService {
             Map.entry("PatchRejected", LifecycleStatus.patch_rejected),
             Map.entry("ValidationPassed", LifecycleStatus.validation_passed),
             Map.entry("ValidationFailed", LifecycleStatus.validation_failed),
+            Map.entry("MergeRequestCreated", LifecycleStatus.waiting_merge),
+            Map.entry("MergeRequestClosed", LifecycleStatus.worker_blocked),
             Map.entry("ReleaseCompleted", LifecycleStatus.completed),
             Map.entry("CaseCancelled", LifecycleStatus.cancelled));
 
@@ -103,6 +105,7 @@ public class ProjectionService {
             case patch_rejected -> "等待重新修改";
             case validation_passed -> "等待上线确认";
             case validation_failed -> "等待重改";
+            case waiting_merge -> "等待 GitLab 合并";
             case completed -> "已完成";
             case cancelled -> "已取消";
             case rejected -> "已拒绝";
@@ -113,6 +116,7 @@ public class ProjectionService {
     private String waitingFor(LifecycleStatus status) {
         return switch (status) {
             case waiting_owner_approval, modification_completed, patch_rejected, validation_passed, validation_failed -> "owner";
+            case waiting_merge -> "gitlab";
             case activated, worker_blocked, patch_applied -> "worker";
             default -> "";
         };

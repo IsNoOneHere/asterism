@@ -6,20 +6,24 @@
 | --- | --- |
 | `ExecutionPlanDrafted` | 计划与 assignments 已生成，不改状态 |
 | `PRDUpdated` | PRD 草稿已更新；手工编辑时 payload 含 `source: manual_edit` 和最新 `status` |
-| `AgentStageCompleted` | 单个 role 完成，payload 含 stageIndex、role、engine、摘要、changedPaths、tokenUsage，不含 Key |
-| `ModificationCompleted` | 单 Agent diff 或多段无冲突合并 diff 完成 |
+| `AgentStageCompleted` | 单个 role 完成，payload 含 stageIndex、role、repo、engine、摘要、changedPaths、tokenUsage，不含 Key |
+| `ModificationCompleted` | 单 Agent diff 或多段无冲突合并 diff 完成；多仓另含 repoDiffs |
 | `WorkerBlocked` | 执行被阻塞 |
-| `ReleaseCompleted` | `wi/<workItemId>` 分支和 commit 已创建 |
+| `MergeRequestCreated` | 每仓 MR 已创建或复用；首个事件把状态推进到 waiting_merge |
+| `MergeRequestMerged` | Temporal 轮询确认单仓 MR 已合并，不单独改状态 |
+| `MergeRequestClosed` | Temporal 轮询确认 MR 未合并而关闭，状态转 worker_blocked |
+| `ReleaseCompleted` | local 模式提交完成，或 gitlab 模式全部 MR 已合并 |
 
 `AgentStageCompleted` 使用 `caseId:AgentStageCompleted:<signalId>:stage:<index>:<role>` 作为稳定幂等键；causationId 使用相同 stage suffix。
 
-相邻 Agent 通过 `HandoffContext{role,summary,diff_patch,interface_notes}` 列表交接。单段 diff 不超过 32KB 时完整传递；超出后 `diff_patch` 只保留 changed paths、`diff --git` 行和 hunk 头，且最终仍限制在 32KB。
+相邻 Agent 通过 `HandoffContext{role,repo,summary,diff_patch,interface_notes}` 列表交接。单段 diff 不超过 32KB 时完整传递；超出后 `diff_patch` 只保留 changed paths、`diff --git` 行和 hunk 头，且最终仍限制在 32KB。
 
 `WorkerBlocked.payload.reason` 额外支持：
 
 - `role_scope_violation`：role diff 越出自身 path scope。
 - `handoff_conflict`：两个 assignment 修改同一文件。
 - `execution_failed`：执行内核异常或阶段 diff 无效。
+- `mr_create_failed`：Git push 或 MR 创建在幂等重试后仍失败。
 
 新快照 Case 的多 assignment 执行失败时，`WorkerBlocked.payload` 还包含：
 
@@ -28,4 +32,4 @@
 
 此时 `rework` 先发出 `ReworkStarted`，随后直接从 `failed_stage.index` 续跑；已完成段的结果和 handoff 复用，不重新抓上下文、规划或执行。其它失败仍保持原语义：`rework` 回到 `activated`，等待新的 `start_modification`。全新重跑使用 cancel + 新工作项。
 
-多段执行仍不新增生命周期状态、signal 或人工审批 gate。完整生命周期迁移见 [lifecycle-transitions.json](lifecycle-transitions.json)。
+完整生命周期迁移见 [lifecycle-transitions.json](lifecycle-transitions.json)。

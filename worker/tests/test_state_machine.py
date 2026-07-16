@@ -86,6 +86,22 @@ def test_release_failure_can_block_after_validation_passed():
     assert state.execution_allowed is False
 
 
+def test_gitlab_release_waits_for_merge_before_completion():
+    state = CaseState(status=LifecycleStatus.validation_passed)
+
+    assert state.merge_requests_created() == "MergeRequestCreated"
+    assert state.status == LifecycleStatus.waiting_merge
+    assert state.all_merged() == "ReleaseCompleted"
+    assert state.status == LifecycleStatus.completed
+
+
+def test_closed_merge_request_blocks_for_human_decision():
+    state = CaseState(status=LifecycleStatus.waiting_merge)
+
+    assert state.merge_request_closed() == "MergeRequestClosed"
+    assert state.status == LifecycleStatus.worker_blocked
+
+
 def test_python_state_machine_matches_shared_lifecycle_contract():
     contract_path = Path(__file__).resolve().parents[2] / "docs" / "lifecycle-transitions.json"
     transitions = json.loads(contract_path.read_text())

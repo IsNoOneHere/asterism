@@ -18,6 +18,7 @@ from asterism_worker.activities.execution import (
     validate_plan_targets_activity,
 )
 from asterism_worker.activities.projections import fetch_context, send_projection_event
+from asterism_worker.activities.gitlab import check_merge_requests, publish_merge_request
 from asterism_worker.activities.route_index import index_system_routes, send_knowledge_candidates
 from asterism_worker.config.settings import load_settings
 from asterism_worker.readiness import readiness_loop
@@ -58,6 +59,8 @@ async def _worker() -> None:
             run_release,
             revert_patch,
             run_validation,
+            publish_merge_request,
+            check_merge_requests,
             send_projection_event,
             index_system_routes,
             send_knowledge_candidates,

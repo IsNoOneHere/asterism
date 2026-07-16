@@ -10,7 +10,9 @@ type StageAction = {
   label: string;
   signalName?: string;
   ownerApproval?: boolean;
+  mergeCheck?: boolean;
 };
+type MergeRequestView = { repo: string; iid: number; url: string; status: string };
 type PlanView = {
   steps: string[];
   targetFiles: string[];
@@ -42,7 +44,9 @@ export function WorkItemDetailPage() {
     retry: false,
   });
   const runAction = useMutation({
-    mutationFn: (action: StageAction) => (action.ownerApproval ? api.approveOwner(workItemId) : api.submitSignal(workItemId, action.signalName!)),
+    mutationFn: (action: StageAction) => (action.ownerApproval
+      ? api.approveOwner(workItemId)
+      : action.mergeCheck ? api.checkMergeStatus(workItemId) : api.submitSignal(workItemId, action.signalName!)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['work-item', workItemId] });
       queryClient.invalidateQueries({ queryKey: ['work-item-events', workItemId] });
@@ -61,6 +65,7 @@ export function WorkItemDetailPage() {
   const workItem = item.data;
   const actions = workItem ? (workItem.availableActions ?? []).map(stageAction).filter((action): action is StageAction => Boolean(action)) : [];
   const canAct = workItem?.canControl ?? false;
+  const mergeRequests = buildMergeRequests(events.data ?? []);
 
   return (
     <section>
@@ -87,6 +92,7 @@ export function WorkItemDetailPage() {
               <dt>确认目标</dt>
               <dd>{workItem.targets?.map((target) => `${target.title}${target.apiEndpoints?.length ? `（${target.apiEndpoints.join('、')}）` : ''}`).join('；') || '-'}</dd>
             </dl>
+            {mergeRequests.length > 0 && <div className="merge-request-list"><h3>GitLab Merge Requests</h3><ul>{mergeRequests.map((mr) => <li key={`${mr.repo}-${mr.iid}`}><a href={mr.url} target="_blank" rel="noreferrer">{mr.repo} !{mr.iid}</a><span className={`status-badge ${mr.status === 'merged' ? 'success' : mr.status === 'closed' ? 'danger' : 'info'}`}>{mr.status}</span></li>)}</ul></div>}
             {canAct && actions.length > 0 ? (
               <div className="button-row wrap">
                 {actions.map((action) => (
@@ -261,13 +267,16 @@ function stageAction(code: string): StageAction | null {
     owner_approved: '批准执行', owner_rejected: '拒绝', cancel_case: '取消', start_modification: '开始修改',
     rework: '重新执行', patch_apply_approved: '应用 Patch', patch_apply_rejected: '重做',
     validation_passed: '测试通过', validation_rejected: '重做', release_approved: '创建发布提交',
+    check_merge_status: '标记已合并',
   };
   if (!labels[code]) return null;
-  return code === 'owner_approved' ? { label: labels[code], ownerApproval: true } : { label: labels[code], signalName: code };
+  if (code === 'owner_approved') return { label: labels[code], ownerApproval: true };
+  return code === 'check_merge_status' ? { label: labels[code], mergeCheck: true } : { label: labels[code], signalName: code };
 }
 
 function needsConfirmation(action: StageAction) {
-  return action.ownerApproval || ['owner_rejected', 'cancel_case', 'patch_apply_approved', 'release_approved'].includes(action.signalName || '');
+  return action.ownerApproval || action.mergeCheck
+    || ['owner_rejected', 'cancel_case', 'patch_apply_approved', 'release_approved'].includes(action.signalName || '');
 }
 
 function confirmText(action: StageAction) {
@@ -275,7 +284,38 @@ function confirmText(action: StageAction) {
     owner_approved: '批准后工作项将进入可执行状态，是否继续？', owner_rejected: '拒绝后工作项将结束，是否继续？',
     cancel_case: '取消后工作项将结束，是否继续？', patch_apply_approved: '该操作会修改真实仓库，是否继续？',
     release_approved: '该操作会创建发布分支和提交，是否继续？',
-  } as Record<string, string>)[action.ownerApproval ? 'owner_approved' : action.signalName || ''] || '是否继续？';
+    check_merge_status: '后端将实时核验所有 GitLab MR，只有确实合并后才会完成工作项，是否继续？',
+  } as Record<string, string>)[action.ownerApproval ? 'owner_approved' : action.mergeCheck ? 'check_merge_status' : action.signalName || ''] || '是否继续？';
+}
+
+function buildMergeRequests(events: WorkItemEvent[]): MergeRequestView[] {
+  const values = new Map<string, MergeRequestView>();
+  let attempt = '';
+  events.forEach((event) => {
+    if (!['MergeRequestCreated', 'MergeRequestMerged', 'MergeRequestClosed'].includes(event.eventType)) return;
+    try {
+      const payload = JSON.parse(event.payloadJson || '{}') as Record<string, unknown>;
+      const repo = String(payload.repo ?? '');
+      const iid = Number(payload.mrIid ?? payload.mr_iid);
+      if (!repo || !Number.isInteger(iid)) return;
+      if (event.eventType === 'MergeRequestCreated') {
+        const root = String(event.causationId ?? '').split(':mr:')[0];
+        if (attempt && root !== attempt) values.clear();
+        attempt = root;
+      }
+      const previous = values.get(repo);
+      values.set(repo, {
+        repo,
+        iid,
+        url: String(payload.mrUrl ?? payload.mr_url ?? previous?.url ?? ''),
+        status: event.eventType === 'MergeRequestMerged' ? 'merged'
+          : event.eventType === 'MergeRequestClosed' ? 'closed' : String(payload.state ?? 'opened'),
+      });
+    } catch {
+      // 时间线原始事件仍可查看，坏 payload 不影响其它 MR。
+    }
+  });
+  return [...values.values()];
 }
 
 function isTerminal(status?: string) {

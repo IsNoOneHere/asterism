@@ -17,9 +17,24 @@ TRANSITIONS: dict[LifecycleStatus, set[LifecycleStatus]] = {
         LifecycleStatus.cancelled,
     },
     LifecycleStatus.patch_rejected: {LifecycleStatus.activated, LifecycleStatus.cancelled},
-    LifecycleStatus.patch_applied: {LifecycleStatus.validation_passed, LifecycleStatus.validation_failed},
+    LifecycleStatus.patch_applied: {
+        LifecycleStatus.validation_passed,
+        LifecycleStatus.validation_failed,
+        LifecycleStatus.worker_blocked,
+    },
     LifecycleStatus.validation_failed: {LifecycleStatus.activated, LifecycleStatus.cancelled},
-    LifecycleStatus.validation_passed: {LifecycleStatus.completed, LifecycleStatus.worker_blocked, LifecycleStatus.cancelled},
+    LifecycleStatus.validation_passed: {
+        LifecycleStatus.waiting_merge,
+        LifecycleStatus.completed,
+        LifecycleStatus.worker_blocked,
+        LifecycleStatus.cancelled,
+    },
+    LifecycleStatus.waiting_merge: {
+        LifecycleStatus.activated,
+        LifecycleStatus.worker_blocked,
+        LifecycleStatus.completed,
+        LifecycleStatus.cancelled,
+    },
     LifecycleStatus.completed: set(),
     LifecycleStatus.cancelled: set(),
     LifecycleStatus.rejected: set(),
@@ -104,6 +119,23 @@ class CaseState:
         return "WorkerBlocked"
 
     def release_approved(self) -> str | None:
+        if not self._move(LifecycleStatus.completed):
+            return None
+        self.execution_allowed = False
+        return "ReleaseCompleted"
+
+    def merge_requests_created(self) -> str | None:
+        if not self._move(LifecycleStatus.waiting_merge):
+            return None
+        return "MergeRequestCreated"
+
+    def merge_request_closed(self) -> str | None:
+        if not self._move(LifecycleStatus.worker_blocked):
+            return None
+        self.execution_allowed = False
+        return "MergeRequestClosed"
+
+    def all_merged(self) -> str | None:
         if not self._move(LifecycleStatus.completed):
             return None
         self.execution_allowed = False

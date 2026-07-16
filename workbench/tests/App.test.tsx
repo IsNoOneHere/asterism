@@ -239,6 +239,28 @@ test('work item detail shows completed and failed agent stages', async () => {
   expect(stages[1]).toHaveTextContent('失败');
 });
 
+test('waiting merge shows each GitLab MR and verified merge action', async () => {
+  setApiResponse('/api/v5/work-items/wi-1', {
+    workItemId: 'wi-1', systemId: 'alpha-system', title: '跨仓发布', lifecycleStatus: 'waiting_merge',
+    currentStage: '等待 GitLab 合并', canControl: true, availableActions: ['check_merge_status', 'rework'],
+  });
+  setApiResponse('/api/v5/work-items/wi-1/events', [
+    { sequence: 1, eventType: 'MergeRequestCreated', causationId: 'patch-1:mr:frontend:1',
+      payloadJson: JSON.stringify({ repo: 'frontend', mrIid: 1, mrUrl: 'https://gitlab/web/1', state: 'opened' }) },
+    { sequence: 2, eventType: 'MergeRequestCreated', causationId: 'patch-1:mr:backend:2',
+      payloadJson: JSON.stringify({ repo: 'backend', mrIid: 2, mrUrl: 'https://gitlab/api/2', state: 'opened' }) },
+    { sequence: 3, eventType: 'MergeRequestMerged',
+      payloadJson: JSON.stringify({ repo: 'frontend', mrIid: 1, mrUrl: 'https://gitlab/web/1' }) },
+  ]);
+
+  renderApp('/work-items/wi-1');
+
+  expect(await screen.findByRole('link', { name: 'frontend !1' })).toHaveAttribute('href', 'https://gitlab/web/1');
+  expect(screen.getByRole('link', { name: 'backend !2' })).toHaveAttribute('href', 'https://gitlab/api/2');
+  expect(screen.getByRole('button', { name: '标记已合并' })).toBeInTheDocument();
+  expect(screen.getByText('merged')).toBeInTheDocument();
+});
+
 test('memory approve moves candidate out of pending tab', async () => {
   renderApp('/memory');
 

@@ -55,7 +55,7 @@ export function WorkItemsPage() {
             <option value="mine">待我处理</option><option value="system">当前系统</option><option value="all">全部可见</option>
           </select>
           <select aria-label="状态" value={status} onChange={(event) => resetPage(() => setStatus(event.target.value))}>
-            <option value="">全部状态</option><option value="waiting_owner_approval">待审批</option><option value="activated">执行中</option><option value="worker_blocked">阻塞</option><option value="completed">已完成</option>
+            <option value="">全部状态</option><option value="waiting_owner_approval">待审批</option><option value="activated">执行中</option><option value="waiting_merge">待合并</option><option value="worker_blocked">阻塞</option><option value="completed">已完成</option>
           </select>
           <input aria-label="搜索工作项" placeholder="搜索 ID 或标题" value={q} onChange={(event) => resetPage(() => setQ(event.target.value))} />
           <select aria-label="排序" value={sort} onChange={(event) => resetPage(() => setSort(event.target.value))}>

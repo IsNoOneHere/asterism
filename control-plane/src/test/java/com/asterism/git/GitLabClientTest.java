@@ -34,4 +34,30 @@ class GitLabClientTest {
             server.stop(0);
         }
     }
+
+    @Test
+    void mergeRequestStatusUsesProjectAndIid() throws Exception {
+        var requestPath = new AtomicReference<String>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/v4/projects/", exchange -> {
+            requestPath.set(exchange.getRequestURI().getRawPath());
+            var body = "{\"state\":\"merged\",\"web_url\":\"https://gitlab/mr/9\"}"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var client = new GitLabClient();
+            var status = client.mergeRequest("http://127.0.0.1:" + server.getAddress().getPort(),
+                    "credential-value", "group/web", 9);
+
+            assertThat(status.state()).isEqualTo("merged");
+            assertThat(status.url()).isEqualTo("https://gitlab/mr/9");
+            assertThat(requestPath.get()).isEqualTo("/api/v4/projects/group%2Fweb/merge_requests/9");
+        } finally {
+            server.stop(0);
+        }
+    }
 }

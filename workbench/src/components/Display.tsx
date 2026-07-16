@@ -7,6 +7,7 @@ const labels: Record<string, string> = {
   patch_rejected: 'Patch 已拒绝',
   validation_passed: '验证通过',
   validation_failed: '验证失败',
+  waiting_merge: '等待 GitLab 合并',
   completed: '已完成',
   cancelled: '已取消',
   rejected: '已拒绝',
@@ -28,7 +29,7 @@ const labels: Record<string, string> = {
 const danger = new Set(['worker_blocked', 'patch_rejected', 'validation_failed', 'case_start_failed', 'rejected']);
 const warning = new Set(['waiting_owner_approval', 'pending', 'need_clarification', 'waiting_user_confirm', 'imported_pending']);
 const success = new Set(['completed', 'validation_passed', 'approved', 'confirmed', 'imported_completed']);
-const info = new Set(['activated', 'modification_completed', 'patch_applied', 'case_starting']);
+const info = new Set(['activated', 'modification_completed', 'patch_applied', 'waiting_merge', 'case_starting']);
 
 export function StatusBadge({ value }: { value?: string | null }) {
   const status = value || 'unknown';
