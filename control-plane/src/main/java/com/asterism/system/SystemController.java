@@ -81,19 +81,6 @@ public class SystemController {
         return maskProfile(saved);
     }
 
-    @PatchMapping("/{systemId}/execution-config")
-    SystemProfile updateExecutionConfig(@PathVariable String systemId, @Valid @RequestBody ExecutionConfigRequest request, Authentication actor) {
-        access.requireOwnerOrAdmin(systemId, actor);
-        var existing = systems.findById(systemId).orElseThrow(() -> new IllegalArgumentException("系统不存在"));
-        var config = new LinkedHashMap<>(readMap(existing.agentConfig()));
-        config.put("executionProvider", request.executionProvider());
-        config.put("claudeMaxTurns", request.claudeMaxTurns());
-        config.put("executionTimeoutSeconds", request.executionTimeoutSeconds());
-        var saved = aggregate.update(copy(existing, json(config), existing.modelProviderConfig()));
-        log.info("系统执行配置已更新 system={} provider={} actor={}", systemId, request.executionProvider(), actor.getName());
-        return maskProfile(saved);
-    }
-
     @GetMapping("/{systemId}/members")
     Iterable<SystemMembershipRepository.SystemMemberView> members(@PathVariable String systemId, Authentication actor) {
         access.requireMember(systemId, actor);
@@ -112,7 +99,6 @@ public class SystemController {
 
     private SystemProfile toProfile(String systemId, UpsertSystemRequest request, SystemProfile existing, String createdBy) {
         var now = Instant.now();
-        var modelConfig = mergeSecret(existing == null ? null : existing.modelProviderConfig(), request.modelProviderConfig());
         return new SystemProfile(
                 systemId,
                 request.name(),
@@ -122,8 +108,8 @@ public class SystemController {
                 json(request.allowedPaths()),
                 json(request.forbiddenPaths()),
                 json(request.testCommands()),
-                request.agentConfig() == null && existing != null ? existing.agentConfig() : json(request.agentConfig() == null ? Map.of() : request.agentConfig()),
-                json(modelConfig),
+                existing == null ? "{}" : existing.agentConfig(),
+                existing == null ? "{}" : existing.modelProviderConfig(),
                 createdBy,
                 existing == null ? now : existing.createdAt(),
                 now);
@@ -152,24 +138,6 @@ public class SystemController {
                 profile.createdBy(),
                 profile.createdAt(),
                 profile.updatedAt());
-    }
-
-    private Map<String, Object> mergeSecret(String currentJson, Map<String, Object> requested) {
-        var merged = new LinkedHashMap<>(readMap(currentJson));
-        if (requested != null) {
-            merged.putAll(requested);
-        }
-        // 前端不填 apiKey 表示保留旧值，避免保存配置时清空密钥。
-        if ((requested == null || !requested.containsKey("apiKey")) && readMap(currentJson).containsKey("apiKey")) {
-            merged.put("apiKey", readMap(currentJson).get("apiKey"));
-        }
-        return merged;
-    }
-
-    private SystemProfile copy(SystemProfile existing, String agentConfig, String modelProviderConfig) {
-        return new SystemProfile(existing.systemId(), existing.name(), existing.description(), existing.repoPath(),
-                existing.ownerUserId(), existing.allowedPaths(), existing.forbiddenPaths(), existing.testCommands(),
-                agentConfig, modelProviderConfig, existing.createdBy(), existing.createdAt(), Instant.now());
     }
 
     private void startRouteIndex(SystemProfile profile) {
@@ -244,9 +212,7 @@ public class SystemController {
             @NotBlank String ownerUserId,
             List<String> allowedPaths,
             List<String> forbiddenPaths,
-            List<String> testCommands,
-            Map<String, Object> agentConfig,
-            Map<String, Object> modelProviderConfig) {
+            List<String> testCommands) {
     }
 
     public record ProfileRequest(@NotBlank String name, String description, @NotBlank String repoPath,
@@ -254,7 +220,4 @@ public class SystemController {
                                  List<String> forbiddenPaths, List<String> testCommands) {
     }
 
-    public record ExecutionConfigRequest(@NotBlank String executionProvider, Integer claudeMaxTurns,
-                                         Integer executionTimeoutSeconds) {
-    }
 }

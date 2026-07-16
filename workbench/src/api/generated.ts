@@ -196,7 +196,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v5/systems/{systemId}/agent-roles": {
+    "/api/v5/systems/{systemId}/agents": {
         parameters: {
             query?: never;
             header?: never;
@@ -205,7 +205,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        post: operations["createRole"];
+        post: operations["createAgent"];
         delete?: never;
         options?: never;
         head?: never;
@@ -404,22 +404,6 @@ export interface paths {
         patch: operations["updateProfile"];
         trace?: never;
     };
-    "/api/v5/systems/{systemId}/model-routing": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch: operations["updateModelRouting"];
-        trace?: never;
-    };
     "/api/v5/systems/{systemId}/model-profiles/{profileId}": {
         parameters: {
             query?: never;
@@ -452,7 +436,7 @@ export interface paths {
         patch: operations["updateStatus"];
         trace?: never;
     };
-    "/api/v5/systems/{systemId}/execution-policy": {
+    "/api/v5/systems/{systemId}/agents/{agentName}": {
         parameters: {
             query?: never;
             header?: never;
@@ -462,58 +446,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        delete: operations["deleteAgent"];
         options?: never;
         head?: never;
-        patch: operations["updateExecutionPolicy"];
-        trace?: never;
-    };
-    "/api/v5/systems/{systemId}/execution-config": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch: operations["updateExecutionConfig"];
-        trace?: never;
-    };
-    "/api/v5/systems/{systemId}/default-agent-role": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch: operations["updateDefaultRole"];
-        trace?: never;
-    };
-    "/api/v5/systems/{systemId}/agent-roles/{roleId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete: operations["deleteRole"];
-        options?: never;
-        head?: never;
-        patch: operations["updateRole"];
+        patch: operations["updateAgent"];
         trace?: never;
     };
     "/api/v5/prd-sessions/{prdId}/draft": {
@@ -801,12 +737,6 @@ export interface components {
             allowedPaths?: string[];
             forbiddenPaths?: string[];
             testCommands?: string[];
-            agentConfig?: {
-                [key: string]: Record<string, never>;
-            };
-            modelProviderConfig?: {
-                [key: string]: Record<string, never>;
-            };
         };
         SystemProfile: {
             systemId?: string;
@@ -874,17 +804,9 @@ export interface components {
             model?: string;
             supportsVision?: boolean;
         };
-        AgentConfigurationResponse: {
-            modelProfiles?: components["schemas"]["ModelProfileView"][];
-            agentRoles?: components["schemas"]["AgentRole"][];
-            modelRouting?: components["schemas"]["ModelRouting"];
-            defaultRoleId?: string;
-            executionMode?: string;
-            engines?: string[];
-        };
-        AgentRole: {
-            id?: string;
+        Agent: {
             name?: string;
+            kind?: string;
             engine?: string;
             modelProfileRef?: string;
             pathScope?: string[];
@@ -894,6 +816,11 @@ export interface components {
             /** Format: int32 */
             timeoutSeconds?: number;
         };
+        AgentConfigurationResponse: {
+            modelProfiles?: components["schemas"]["ModelProfileView"][];
+            agents?: components["schemas"]["Agent"][];
+            engines?: string[];
+        };
         ModelProfileView: {
             id?: string;
             name?: string;
@@ -902,12 +829,6 @@ export interface components {
             model?: string;
             apiKeySet?: boolean;
             supportsVision?: boolean;
-        };
-        ModelRouting: {
-            defaultProfileId?: string;
-            prdProfileId?: string;
-            planningProfileId?: string;
-            diffProfileId?: string;
         };
         CandidateRequest: {
             kind?: string;
@@ -940,7 +861,7 @@ export interface components {
         RouteIndexResponse: {
             workflowId?: string;
         };
-        AgentRoleRequest: {
+        AgentRequest: {
             name?: string;
             engine?: string;
             modelProfileRef?: string;
@@ -1082,28 +1003,8 @@ export interface components {
             forbiddenPaths?: string[];
             testCommands?: string[];
         };
-        ModelRoutingRequest: {
-            defaultProfileId?: string;
-            prdProfileId?: string;
-            planningProfileId?: string;
-            diffProfileId?: string;
-        };
         StatusRequest: {
             status?: string;
-        };
-        ExecutionPolicyRequest: {
-            mode?: string;
-            defaultRoleId?: string;
-        };
-        ExecutionConfigRequest: {
-            executionProvider: string;
-            /** Format: int32 */
-            claudeMaxTurns?: number;
-            /** Format: int32 */
-            executionTimeoutSeconds?: number;
-        };
-        DefaultRoleRequest: {
-            roleId?: string;
         };
         DraftUpdateRequest: {
             title?: string;
@@ -1575,7 +1476,7 @@ export interface operations {
             };
         };
     };
-    createRole: {
+    createAgent: {
         parameters: {
             query?: never;
             header?: never;
@@ -1586,7 +1487,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AgentRoleRequest"];
+                "application/json": components["schemas"]["AgentRequest"];
             };
         };
         responses: {
@@ -1912,32 +1813,6 @@ export interface operations {
             };
         };
     };
-    updateModelRouting: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ModelRoutingRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["AgentConfigurationResponse"];
-                };
-            };
-        };
-    };
     deleteProfile: {
         parameters: {
             query?: never;
@@ -2015,91 +1890,13 @@ export interface operations {
             };
         };
     };
-    updateExecutionPolicy: {
+    deleteAgent: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 systemId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ExecutionPolicyRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["AgentConfigurationResponse"];
-                };
-            };
-        };
-    };
-    updateExecutionConfig: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ExecutionConfigRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["SystemProfile"];
-                };
-            };
-        };
-    };
-    updateDefaultRole: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DefaultRoleRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["AgentConfigurationResponse"];
-                };
-            };
-        };
-    };
-    deleteRole: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-                roleId: string;
+                agentName: string;
             };
             cookie?: never;
         };
@@ -2116,19 +1913,19 @@ export interface operations {
             };
         };
     };
-    updateRole: {
+    updateAgent: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 systemId: string;
-                roleId: string;
+                agentName: string;
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AgentRoleRequest"];
+                "application/json": components["schemas"]["AgentRequest"];
             };
         };
         responses: {
@@ -2397,7 +2194,7 @@ export interface operations {
     modelConfig: {
         parameters: {
             query?: {
-                stage?: string;
+                agent?: string;
                 profile_id?: string;
             };
             header?: never;

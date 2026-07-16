@@ -20,34 +20,36 @@ public class InternalSystemController {
 
     @GetMapping("/{systemId}/model-config")
     Map<String, Object> modelConfig(@PathVariable String systemId,
-                                    @RequestParam(defaultValue = "default") String stage,
+                                    @RequestParam(defaultValue = "developer") String agent,
                                     @RequestParam(name = "profile_id", defaultValue = "") String profileId) {
         var config = configurations.internal(systemId);
-        String selectedId;
-        if (profileId.isBlank() && "vision".equals(stage)) {
+        String selectedId = profileId;
+        if (selectedId.isBlank() && "vision".equals(agent)) {
             selectedId = config.modelProfiles().stream()
                     .filter(AgentConfigurationService.ModelProfile::supportsVision)
                     .map(AgentConfigurationService.ModelProfile::id)
                     .findFirst().orElse("");
-        } else {
-            selectedId = profileId.isBlank() ? config.modelRouting().resolve(stage) : profileId;
+        } else if (selectedId.isBlank()) {
+            selectedId = config.agents().stream()
+                    .filter(item -> item.name().equals(agent))
+                    .map(AgentConfigurationService.Agent::modelProfileRef)
+                    .findFirst().orElseThrow(() -> new IllegalArgumentException("Agent 不存在: " + agent));
         }
+        var resolvedProfileId = selectedId;
         var selected = config.modelProfiles().stream()
-                .filter(profile -> profile.id().equals(selectedId))
+                .filter(profile -> profile.id().equals(resolvedProfileId))
                 .findFirst().orElse(null);
-        if (!selectedId.isBlank() && selected == null) {
-            throw new IllegalArgumentException("模型 Profile 不存在: " + selectedId);
+        if (!resolvedProfileId.isBlank() && selected == null) {
+            throw new IllegalArgumentException("模型 Profile 不存在: " + resolvedProfileId);
         }
 
         // Internal API 是 activity 读取完整配置的唯一入口，密钥不会进入 workflow payload。
         var response = new LinkedHashMap<String, Object>();
-        response.put("managed", !config.modelProfiles().isEmpty());
+        response.put("managed", selected != null);
         response.put("configured", selected != null && !selected.model().isBlank() && !selected.apiKey().isBlank());
         if (selected != null) applyProfile(response, selected);
         response.put("model_profiles", config.modelProfiles().stream().map(this::profileMap).toList());
-        response.put("agent_roles", config.agentRoles().stream().map(this::roleMap).toList());
-        response.put("default_role_id", config.defaultRoleId());
-        response.put("execution_mode", config.executionMode());
+        response.put("agents", config.agents().stream().map(this::agentMap).toList());
         return response;
     }
 
@@ -63,16 +65,16 @@ public class InternalSystemController {
         return item;
     }
 
-    private Map<String, Object> roleMap(AgentConfigurationService.AgentRole role) {
+    private Map<String, Object> agentMap(AgentConfigurationService.Agent agent) {
         var item = new LinkedHashMap<String, Object>();
-        item.put("id", role.id());
-        item.put("name", role.name());
-        item.put("engine", role.engine());
-        item.put("model_profile_ref", role.modelProfileRef());
-        item.put("path_scope", role.pathScope());
-        item.put("prompt", role.prompt());
-        if (role.maxTurns() != null) item.put("max_turns", role.maxTurns());
-        if (role.timeoutSeconds() != null) item.put("timeout_seconds", role.timeoutSeconds());
+        item.put("name", agent.name());
+        item.put("kind", agent.kind());
+        item.put("engine", agent.engine());
+        item.put("model_profile_ref", agent.modelProfileRef());
+        item.put("path_scope", agent.pathScope());
+        item.put("prompt", agent.prompt());
+        if (agent.maxTurns() != null) item.put("max_turns", agent.maxTurns());
+        if (agent.timeoutSeconds() != null) item.put("timeout_seconds", agent.timeoutSeconds());
         return item;
     }
 

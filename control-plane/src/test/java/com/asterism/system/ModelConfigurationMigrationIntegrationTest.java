@@ -50,15 +50,26 @@ class ModelConfigurationMigrationIntegrationTest {
         // 测试直接重放幂等迁移，覆盖真实旧行而不依赖测试库启动顺序。
         var connection = DataSourceUtils.getConnection(dataSource);
         ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/V4__unify_model_configuration.sql"));
-        ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/V4__unify_model_configuration.sql"));
+        ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/V8__collapse_agent_configuration.sql"));
+        ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/V8__collapse_agent_configuration.sql"));
 
         var config = objectMapper.readTree(jdbc.sql("""
                 select model_provider_config::text from systems where system_id = :systemId
                 """).param("systemId", systemId).query(String.class).single());
         assertThat(config.at("/modelProfiles/0/id").asText()).isEqualTo("bm-main");
         assertThat(config.at("/modelProfiles/0/provider").asText()).isEqualTo("openai-compat");
-        assertThat(config.at("/modelRouting/defaultProfileId").asText()).isEqualTo("bm-main");
-        assertThat(config.at("/agentRoles/0/modelProfileRef").asText()).isEqualTo("bm-main");
+        assertThat(config.at("/agents/0/name").asText()).isEqualTo("product");
+        assertThat(config.at("/agents/0/modelProfileRef").asText()).isEqualTo("bm-main");
+        assertThat(config.at("/agents/1/name").asText()).isEqualTo("planner");
+        assertThat(config.at("/agents/1/modelProfileRef").asText()).isEqualTo("bm-main");
+        assertThat(config.at("/agents/2/name").asText()).isEqualTo("developer");
+        assertThat(config.at("/agents/2/engine").asText()).isEqualTo("http");
+        assertThat(config.at("/agents/2/modelProfileRef").asText()).isEqualTo("bm-main");
+        assertThat(config.get("agents")).hasSize(3);
+        assertThat(config.get("modelRouting")).isNull();
+        assertThat(config.get("agentRoles")).isNull();
+        assertThat(config.get("defaultAgentRoleId")).isNull();
+        assertThat(config.get("executionMode")).isNull();
         assertThat(config.get("businessModels")).isNull();
         assertThat(config.get("businessRouting")).isNull();
         assertThat(config.get("modelProfiles")).hasSize(1);

@@ -73,48 +73,45 @@ async def resolve_agent_config(
     except httpx.HTTPError:
         data = {}
 
-    roles = [item for item in data.get("agent_roles", []) if isinstance(item, dict)]
-    selected_role_id = role_id or str(data.get("default_role_id", ""))
-    role = next((item for item in roles if str(item.get("id", "")) == selected_role_id), None)
-    if role_id and role is None:
-        raise RuntimeError(f"Agent role 不存在: {role_id}")
-    if role:
-        profiles = [item for item in data.get("model_profiles", []) if isinstance(item, dict)]
-        profile_id = str(role.get("model_profile_ref", ""))
-        raw_profile = next((item for item in profiles if str(item.get("id", "")) == profile_id), {})
-        engine = str(role.get("engine", "")) or settings.default_engine
-        if engine != "fake" and not raw_profile:
-            raise RuntimeError(f"Agent role 缺少有效模型 Profile: {selected_role_id}")
-        profile = _profile(raw_profile, "system") if raw_profile else ModelProfile(source="fake")
+    agents = [item for item in data.get("agents", []) if isinstance(item, dict)]
+    selected_agent = role_id or "developer"
+    agent = next((item for item in agents if str(item.get("name", "")) == selected_agent), None)
+    if agent is None and not role_id and not agents:
+        # 旧 workflow / 控制面暂不可达时保留原有部署环境回落路径。
         return ResolvedAgentConfig(
-            engine=_engine(settings, engine, role.get("max_turns"), role.get("timeout_seconds")),
+            engine=_engine(settings, legacy_engine or settings.default_engine,
+                           legacy_max_turns, legacy_timeout_seconds),
+            model_profile=environment_model_profile(settings),
+            artifacts_root=settings.artifacts_root,
+            callbacks=callbacks or {},
+        )
+    if agent is None:
+        raise RuntimeError(f"Agent 不存在: {selected_agent}")
+    if agent:
+        profiles = [item for item in data.get("model_profiles", []) if isinstance(item, dict)]
+        profile_id = str(agent.get("model_profile_ref", ""))
+        raw_profile = next((item for item in profiles if str(item.get("id", "")) == profile_id), {})
+        engine = str(agent.get("engine", "")) or settings.default_engine
+        profile = _profile(raw_profile, "system") if raw_profile else environment_model_profile(settings)
+        return ResolvedAgentConfig(
+            engine=_engine(settings, engine, agent.get("max_turns"), agent.get("timeout_seconds")),
             model_profile=profile,
             constraints=AgentConstraints(
-                role_id=str(role.get("id", "")),
-                role_name=str(role.get("name", "")),
-                path_scope=tuple(str(item) for item in role.get("path_scope", []) if item),
-                prompt=str(role.get("prompt", "")),
+                role_id=str(agent.get("name", "")),
+                role_name=str(agent.get("name", "")),
+                path_scope=tuple(str(item) for item in agent.get("path_scope", []) if item),
+                prompt=str(agent.get("prompt", "")),
             ),
             artifacts_root=settings.artifacts_root,
             callbacks=callbacks or {},
         )
 
-    engine = legacy_engine or settings.default_engine
-    profile = environment_model_profile(settings)
-    return ResolvedAgentConfig(
-        engine=_engine(settings, engine, legacy_max_turns, legacy_timeout_seconds),
-        model_profile=profile,
-        artifacts_root=settings.artifacts_root,
-        callbacks=callbacks or {},
-    )
-
-
-async def available_role_metadata(settings: Settings, system_id: str, client: httpx.AsyncClient | None = None) -> list[dict[str, Any]]:
-    """Planner 只看到角色元数据，Profile 和密钥在这里丢弃。"""
+async def available_agent_metadata(settings: Settings, system_id: str, client: httpx.AsyncClient | None = None) -> list[dict[str, Any]]:
+    """Planner 只看到自定义 Agent 元数据，Profile 和密钥在这里丢弃。"""
 
     if client is None:
         async with httpx.AsyncClient(timeout=5) as owned:
-            return await available_role_metadata(settings, system_id, owned)
+            return await available_agent_metadata(settings, system_id, owned)
     try:
         response = await client.get(
             settings.control_plane_url.rstrip("/") + f"/api/v5/internal/systems/{system_id}/model-config",
@@ -124,18 +121,15 @@ async def available_role_metadata(settings: Settings, system_id: str, client: ht
             return []
         response.raise_for_status()
         data = response.json()
-        # 单 Agent 模式不向 Planner 暴露角色，执行阶段会使用默认 Agent。
-        if data.get("execution_mode", "planner_select") == "single":
-            return []
-        roles = data.get("agent_roles", [])
+        agents = data.get("agents", [])
         return [
             {
-                "id": str(role.get("id", "")),
-                "name": str(role.get("name", "")),
-                "engine": str(role.get("engine", "")),
-                "path_scope": [str(path) for path in role.get("path_scope", [])],
+                "name": str(agent.get("name", "")),
+                "engine": str(agent.get("engine", "")),
+                "path_scope": [str(path) for path in agent.get("path_scope", [])],
             }
-            for role in roles if isinstance(role, dict) and role.get("id")
+            for agent in agents
+            if isinstance(agent, dict) and agent.get("name") and agent.get("kind") == "custom"
         ]
     except httpx.HTTPError:
         return []

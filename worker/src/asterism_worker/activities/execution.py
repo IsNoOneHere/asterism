@@ -17,7 +17,7 @@ from asterism_worker.activities.execution_support import (
     validate_patch_paths,
     validate_plan_targets,
 )
-from asterism_worker.agent_config import available_role_metadata, resolve_agent_config
+from asterism_worker.agent_config import available_agent_metadata, resolve_agent_config
 from asterism_worker.config.settings import load_settings
 from asterism_worker.contracts import ExecutionRequest, PatchApplyRequest, PatchApplyResult, PlanRequest, PreviousAttempt
 from asterism_worker.providers.factory import build_execution_provider, build_planner_provider
@@ -110,18 +110,18 @@ async def plan_execution(request: dict) -> dict:
     settings = load_settings()
     parsed = PlanRequest.model_validate(request)
     provider = build_planner_provider(settings)
-    roles = await available_role_metadata(settings, parsed.system_id)
-    parsed = parsed.model_copy(update={"available_roles": roles})
+    agents = await available_agent_metadata(settings, parsed.system_id)
+    parsed = parsed.model_copy(update={"available_agents": agents})
     log.info("执行 planner", extra={"provider": settings.planner_provider, "manifest_id": parsed.context_manifest_id})
     plan = await provider.plan(parsed)
     # 无可选角色时清空模型自带的分配；有角色时只接受系统已发布的引用。
-    if not roles:
+    if not agents:
         plan = plan.model_copy(update={"assignments": []})
     else:
-        role_ids = {role["id"] for role in roles}
-        unknown_role = next((item.role for item in plan.assignments if item.role not in role_ids), "")
+        agent_names = {agent["name"] for agent in agents}
+        unknown_role = next((item.role for item in plan.assignments if item.role not in agent_names), "")
         if unknown_role:
-            raise RuntimeError(f"Planner 返回了不可用的 Agent role: {unknown_role}")
+            raise RuntimeError(f"Planner 返回了不可用的 Agent: {unknown_role}")
     return plan.model_dump()
 
 

@@ -156,9 +156,8 @@ class AgentAssignment(BaseModel):
     step_refs: list[str] = Field(default_factory=list)
 
 
-class AvailableRole(BaseModel):
-    id: str
-    name: str = ""
+class AvailableAgent(BaseModel):
+    name: str
     engine: str
     path_scope: list[str] = Field(default_factory=list)
 
@@ -170,7 +169,7 @@ class PlanRequest(BaseModel):
     memories: list[dict[str, Any]] = Field(default_factory=list)
     allowed_paths: list[str] = Field(default_factory=list)
     context_manifest_id: str
-    available_roles: list[AvailableRole] = Field(default_factory=list)
+    available_agents: list[AvailableAgent] = Field(default_factory=list)
 
 
 class RouteIndexInput(BaseModel):

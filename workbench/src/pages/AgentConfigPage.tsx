@@ -1,18 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
-import { Pencil, Plus, Trash2 } from 'lucide-react';
-import { AgentConfiguration, AgentRole, api, ModelProfile } from '../api/client';
+import { useRef, useState } from 'react';
+import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Agent, AgentConfiguration, api, ModelProfile } from '../api/client';
 import { useCurrentSystem } from '../SystemContext';
 
-type RoleDraft = { name: string; engine: string; modelProfileRef: string; pathScope: string; prompt: string; maxTurns: number; timeoutSeconds: number };
+type ProfileDraft = { name: string; provider: string; model: string; baseUrl: string; apiKey: string; supportsVision: boolean };
+type AgentDraft = { name: string; engine: string; modelProfileRef: string; pathScope: string; prompt: string; maxTurns: number; timeoutSeconds: number };
 
-const emptyRole: RoleDraft = { name: '', engine: 'http', modelProfileRef: '', pathScope: '', prompt: '', maxTurns: 50, timeoutSeconds: 600 };
+const emptyProfile: ProfileDraft = { name: '', provider: 'openai-compat', model: '', baseUrl: '', apiKey: '', supportsVision: false };
+const emptyAgent: AgentDraft = { name: '', engine: 'http', modelProfileRef: '', pathScope: '', prompt: '', maxTurns: 50, timeoutSeconds: 600 };
+const builtinPurpose: Record<string, string> = { product: 'PRD 对话', planner: '执行规划', developer: '默认执行' };
 
 export function AgentConfigPage() {
   const { systemId } = useCurrentSystem();
   const queryClient = useQueryClient();
-  const [roleId, setRoleId] = useState('');
-  const [role, setRole] = useState<RoleDraft>(emptyRole);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [profileId, setProfileId] = useState('');
+  const [profile, setProfile] = useState<ProfileDraft>(emptyProfile);
+  const [agentName, setAgentName] = useState('');
+  const [agent, setAgent] = useState<AgentDraft>(emptyAgent);
   const [message, setMessage] = useState('');
   const config = useQuery({
     queryKey: ['agent-config', systemId],
@@ -23,108 +29,158 @@ export function AgentConfigPage() {
     queryClient.setQueryData(['agent-config', systemId], value);
     setMessage(text);
   };
-  const saveRole = useMutation({
+  const saveProfile = useMutation({
+    mutationFn: () => profileId
+      ? api.updateModelProfile(systemId, profileId, profile)
+      : api.createModelProfile(systemId, profile),
+    onSuccess: (value) => {
+      accept(value, '模型 Profile 保存成功');
+      dialogRef.current?.close();
+    },
+  });
+  const deleteProfile = useMutation({
+    mutationFn: (id: string) => api.deleteModelProfile(systemId, id),
+    onSuccess: (value) => accept(value, '模型 Profile 已删除'),
+  });
+  const saveAgent = useMutation({
     mutationFn: () => {
-      const body = { ...role, pathScope: lines(role.pathScope), modelProfileRef: role.engine === 'fake' ? '' : role.modelProfileRef };
-      return roleId ? api.updateAgentRole(systemId, roleId, body) : api.createAgentRole(systemId, body);
+      const name = agentName || agent.name.trim();
+      const modelOnly = name === 'product' || name === 'planner';
+      const body = {
+        ...agent,
+        name,
+        engine: modelOnly ? '' : agent.engine,
+        pathScope: modelOnly ? [] : lines(agent.pathScope),
+        prompt: modelOnly ? '' : agent.prompt,
+        maxTurns: modelOnly ? undefined : agent.maxTurns,
+        timeoutSeconds: modelOnly ? undefined : agent.timeoutSeconds,
+      };
+      return agentName ? api.updateAgent(systemId, agentName, body) : api.createAgent(systemId, body);
     },
     onSuccess: (value) => {
       accept(value, 'Agent 保存成功');
-      setRoleId('');
-      setRole(emptyRole);
+      resetAgent();
     },
   });
-  const deleteRole = useMutation({
-    mutationFn: (id: string) => api.deleteAgentRole(systemId, id),
+  const deleteAgent = useMutation({
+    mutationFn: (name: string) => api.deleteAgent(systemId, name),
     onSuccess: (value) => accept(value, 'Agent 已删除'),
-  });
-  const savePolicy = useMutation({
-    // 执行模式和默认 Agent 使用同一接口保存，页面不会出现半套策略。
-    mutationFn: ({ mode, defaultRoleId }: { mode: 'single' | 'planner_select'; defaultRoleId: string }) =>
-      api.updateExecutionPolicy(systemId, mode, defaultRoleId),
-    onSuccess: (value) => accept(value, '执行策略已更新'),
   });
 
   const value = config.data;
-  const executionMode = value?.executionMode ?? 'planner_select';
-  const defaultRole = value?.agentRoles.find((item) => item.id === value.defaultRoleId);
+  const modelOnly = agentName === 'product' || agentName === 'planner';
+  const openProfile = (item?: ModelProfile) => {
+    setProfileId(item?.id ?? '');
+    setProfile(item
+      ? { name: item.name, provider: item.provider, model: item.model, baseUrl: item.baseUrl, apiKey: '', supportsVision: Boolean(item.supportsVision) }
+      : emptyProfile);
+    // 原生 dialog 负责焦点约束和遮罩，不引入额外弹窗库。
+    dialogRef.current?.showModal();
+  };
+  const editAgent = (item: Agent) => {
+    setAgentName(item.name);
+    setAgent({ name: item.name, engine: item.engine || 'http', modelProfileRef: item.modelProfileRef,
+      pathScope: item.pathScope.join('\n'), prompt: item.prompt, maxTurns: item.maxTurns ?? 50,
+      timeoutSeconds: item.timeoutSeconds ?? 600 });
+  };
+  const resetAgent = () => {
+    setAgentName('');
+    setAgent(emptyAgent);
+  };
+
   if (!systemId) return <div className="empty">请先选择系统。</div>;
   return <section className="agent-config-page">
     <header className="page-head agent-page-head">
-      <div><h1>Agent 配置</h1><p>管理代码 Agent 及其协作方式</p></div>
-      <span className="config-count">{value?.agentRoles.length ?? 0} 个 Agent</span>
+      <div><h1>Agent / 模型配置</h1><p>Model Profile 管接入，Agent 管谁使用模型</p></div>
+      <span className="config-count">{value?.modelProfiles.length ?? 0} 个模型 · {value?.agents.length ?? 0} 个 Agent</span>
     </header>
 
-    <div className="agent-config-layout">
-      <div className="panel execution-agent-panel">
-        <div className="config-section-head"><div><h2>代码 Agent</h2><p>选择已有 Profile，配置角色职责和执行边界。</p></div></div>
-        <div className="table-frame"><table className="data-table agent-role-table"><thead><tr><th>Agent</th><th>Engine / Profile</th><th>范围</th><th>操作</th></tr></thead><tbody>
-          {(value?.agentRoles ?? []).map((item) => <tr key={item.id}>
-            <td><strong>{item.name || item.id}</strong>{item.id === value?.defaultRoleId && <span className="default-badge">默认</span>}</td>
-            <td>{item.engine} · {profileName(value?.modelProfiles ?? [], item.modelProfileRef)}</td>
-            <td>{item.pathScope.join(', ') || '跟随系统'}</td>
+    <div className="model-config-layout">
+      <div className="panel business-model-panel">
+        <div className="config-section-head">
+          <div><h2>模型列表</h2><p>API Key 只维护一次，页面不会回显明文。</p></div>
+          <button type="button" className="icon-text-button" onClick={() => openProfile()}><Plus size={16} />新增 Profile</button>
+        </div>
+        <div className="table-frame"><table className="data-table model-profile-table"><thead><tr><th>名称</th><th>协议 / 模型</th><th>状态</th><th>操作</th></tr></thead><tbody>
+          {(value?.modelProfiles ?? []).map((item) => <tr key={item.id}>
+            <td><strong>{item.name || item.id}</strong><small>{item.baseUrl || '默认端点'}</small></td>
+            <td>{providerName(item.provider)} · {item.model}</td>
+            <td><span className={`key-status ${item.apiKeySet ? 'configured' : ''}`}><KeyRound size={14} aria-hidden="true" />{item.apiKeySet ? 'Key 已配置' : 'Key 未配置'}{item.supportsVision ? ' · Vision' : ''}</span></td>
             <td><div className="button-row compact-actions">
-              <button type="button" className="icon-button" title="编辑 Agent" aria-label={`编辑 ${item.name || item.id}`} onClick={() => editRole(item, setRoleId, setRole)}><Pencil size={16} /></button>
-              <button type="button" className="icon-button danger" title="删除 Agent" aria-label={`删除 ${item.name || item.id}`} onClick={() => deleteRole.mutate(item.id)}><Trash2 size={16} /></button>
+              <button type="button" className="icon-button" title="编辑 Profile" aria-label={`编辑 ${item.name || item.id}`} onClick={() => openProfile(item)}><Pencil size={16} /></button>
+              <button type="button" className="icon-button danger" title="删除 Profile" aria-label={`删除 ${item.name || item.id}`} onClick={() => deleteProfile.mutate(item.id)}><Trash2 size={16} /></button>
             </div></td>
           </tr>)}
-          {value?.agentRoles.length === 0 && <tr><td className="empty-cell" colSpan={4}>还没有代码 Agent</td></tr>}
+          {value?.modelProfiles.length === 0 && <tr><td className="empty-cell" colSpan={4}>还没有模型连接</td></tr>}
         </tbody></table></div>
-
-        <form className="agent-role-editor" onSubmit={(event) => { event.preventDefault(); saveRole.mutate(); }}>
-          <div className="config-section-head compact"><div><h3>{roleId ? '编辑 Agent' : '新增 Agent'}</h3><p>Engine 决定执行内核，Profile 提供模型连接。</p></div></div>
-          <div className="agent-role-fields">
-            <label>Agent 名称<input required value={role.name} onChange={(event) => setRole({ ...role, name: event.target.value })} /></label>
-            <label>执行内核<select value={role.engine} onChange={(event) => setRole({ ...role, engine: event.target.value })}>{(value?.engines ?? ['claude_sdk', 'deepagents', 'http', 'fake']).map((engine) => <option key={engine} value={engine}>{engine}</option>)}</select></label>
-            {role.engine !== 'fake' && <label>Model Profile<select required value={role.modelProfileRef} onChange={(event) => setRole({ ...role, modelProfileRef: event.target.value })}><option value="">请选择</option>{(value?.modelProfiles ?? []).map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}</select></label>}
-            <label>Path Scope（每行一条）<textarea value={role.pathScope} onChange={(event) => setRole({ ...role, pathScope: event.target.value })} /></label>
-            <label className="wide-field">角色提示词<textarea value={role.prompt} onChange={(event) => setRole({ ...role, prompt: event.target.value })} /></label>
-            <label>最大轮次<input type="number" min="1" value={role.maxTurns} onChange={(event) => setRole({ ...role, maxTurns: Number(event.target.value) })} /></label>
-            <label>超时（秒）<input type="number" min="1" value={role.timeoutSeconds} onChange={(event) => setRole({ ...role, timeoutSeconds: Number(event.target.value) })} /></label>
-          </div>
-          <div className="button-row"><button type="submit" disabled={saveRole.isPending}><Plus size={16} />{roleId ? '保存 Agent' : '添加 Agent'}</button>{roleId && <button type="button" className="secondary" onClick={() => { setRoleId(''); setRole(emptyRole); }}>取消</button>}</div>
-        </form>
       </div>
 
-      <aside className="agent-policy-column">
-        <div className="panel agent-policy-panel">
-          <div className="config-section-head compact"><div><h2>执行策略</h2><p>只控制代码 Agent 的选择。</p></div></div>
-          <fieldset className="execution-options">
-            <label className="execution-option"><input type="radio" name="execution-mode" checked={executionMode === 'single'} onChange={() => savePolicy.mutate({ mode: 'single', defaultRoleId: value?.defaultRoleId ?? '' })} /><span><strong>单 Agent</strong><small>始终由默认 Agent 完成代码任务</small></span></label>
-            <label className="execution-option"><input type="radio" name="execution-mode" checked={executionMode === 'planner_select'} onChange={() => savePolicy.mutate({ mode: 'planner_select', defaultRoleId: value?.defaultRoleId ?? '' })} /><span><strong>Planner 选择</strong><small>Planner 根据任务分配一个或多个 Agent</small></span></label>
-          </fieldset>
-          <label>默认 Agent<select value={value?.defaultRoleId ?? ''} onChange={(event) => savePolicy.mutate({ mode: executionMode, defaultRoleId: event.target.value })}><option value="">未设置</option>{(value?.agentRoles ?? []).map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}</select></label>
-        </div>
-
-        <div className="panel execution-path-panel">
-          <div className="config-section-head compact"><div><h2>实际执行</h2><p>当前 Agent 路径</p></div></div>
-          <div className="execution-path-step"><i /><span>Planning 完成</span></div>
-          <div className="execution-path-step"><i /><span>{executionMode === 'single' ? (defaultRole?.name || '默认 Agent 未设置') : 'Planner 按任务选择 Agent'}</span></div>
-          <div className="execution-path-step"><i /><span>Patch · 验证 · 发布</span></div>
-        </div>
-      </aside>
+      <div className="panel execution-agent-panel">
+        <div className="config-section-head"><div><h2>Agent 列表</h2><p>内置 Agent 固定置顶，自定义 Agent 供 Planner 按名称分配。</p></div></div>
+        <div className="table-frame"><table className="data-table agent-role-table"><thead><tr><th>Agent</th><th>Engine / Profile</th><th>范围</th><th>操作</th></tr></thead><tbody>
+          {(value?.agents ?? []).map((item) => <tr key={item.name}>
+            <td><strong>{item.name}</strong>{item.kind === 'builtin' && <span className="default-badge">内置 · {builtinPurpose[item.name]}</span>}</td>
+            <td>{item.engine ? `${item.engine} · ` : ''}{profileName(value?.modelProfiles ?? [], item.modelProfileRef)}</td>
+            <td>{item.pathScope.join(', ') || (item.name === 'product' || item.name === 'planner' ? '不执行代码' : '跟随系统')}</td>
+            <td><div className="button-row compact-actions">
+              <button type="button" className="icon-button" title="编辑 Agent" aria-label={`编辑 ${item.name}`} onClick={() => editAgent(item)}><Pencil size={16} /></button>
+              {item.kind === 'custom' && <button type="button" className="icon-button danger" title="删除 Agent" aria-label={`删除 ${item.name}`} onClick={() => deleteAgent.mutate(item.name)}><Trash2 size={16} /></button>}
+            </div></td>
+          </tr>)}
+        </tbody></table></div>
+      </div>
     </div>
 
-    <div className="config-boundary">
-      <div><strong>来自模型配置</strong><span>Profile 名称和可用状态</span></div>
-      <b aria-hidden="true">引用 →</b>
-      <div><strong>Agent 配置拥有</strong><span>Engine · 职责 · 路径 · 策略</span></div>
-    </div>
+    <form className="panel agent-role-editor" onSubmit={(event) => { event.preventDefault(); saveAgent.mutate(); }}>
+      <div className="config-section-head compact"><div><h2>{agentName ? `编辑 ${agentName}` : '新增自定义 Agent'}</h2><p>{modelOnly ? '内置沟通 Agent 只选择 Model Profile。' : '执行参数在 Case 启动时固定。'}</p></div></div>
+      <div className="agent-role-fields">
+        <label>Agent 名称<input required disabled={Boolean(agentName)} value={agent.name} onChange={(event) => setAgent({ ...agent, name: event.target.value })} /></label>
+        {!modelOnly && <label>执行内核<select value={agent.engine} onChange={(event) => setAgent({ ...agent, engine: event.target.value })}>{(value?.engines ?? ['claude_sdk', 'deepagents', 'http', 'fake']).map((engine) => <option key={engine} value={engine}>{engine}</option>)}</select></label>}
+        <label>Model Profile<select value={agent.modelProfileRef} onChange={(event) => setAgent({ ...agent, modelProfileRef: event.target.value })}><option value="">回落部署默认</option>{profileOptions(value?.modelProfiles)}</select></label>
+        {!modelOnly && <><label>Path Scope（每行一条）<textarea value={agent.pathScope} onChange={(event) => setAgent({ ...agent, pathScope: event.target.value })} /></label>
+          <label className="wide-field">Agent 提示词<textarea value={agent.prompt} onChange={(event) => setAgent({ ...agent, prompt: event.target.value })} /></label>
+          <label>最大轮次<input type="number" min="1" value={agent.maxTurns} onChange={(event) => setAgent({ ...agent, maxTurns: Number(event.target.value) })} /></label>
+          <label>超时（秒）<input type="number" min="1" value={agent.timeoutSeconds} onChange={(event) => setAgent({ ...agent, timeoutSeconds: Number(event.target.value) })} /></label></>}
+      </div>
+      <div className="button-row"><button type="submit" disabled={saveAgent.isPending}><Plus size={16} />{agentName ? '保存 Agent' : '添加 Agent'}</button>{agentName && <button type="button" className="secondary" onClick={resetAgent}>取消</button>}</div>
+    </form>
 
     {message && <div className="success-text">{message}</div>}
-    {(config.error || saveRole.error || deleteRole.error || savePolicy.error) && <div className="error-text">配置保存失败</div>}
+    {(config.error || saveProfile.error || deleteProfile.error || saveAgent.error || deleteAgent.error) && <div className="error-text">{errorMessage(config.error || saveProfile.error || deleteProfile.error || saveAgent.error || deleteAgent.error)}</div>}
+
+    <dialog ref={dialogRef} className="confirm-dialog config-dialog" aria-labelledby="profile-dialog-title" onClose={() => { setProfileId(''); setProfile(emptyProfile); }}>
+      <form onSubmit={(event) => { event.preventDefault(); saveProfile.mutate(); }}>
+        <div className="config-section-head compact"><div><h2 id="profile-dialog-title">{profileId ? '编辑 Model Profile' : '新增 Model Profile'}</h2><p>{profileId ? 'API Key 留空时保留已有值。' : 'API Key 只写入，不会在页面回显。'}</p></div></div>
+        <div className="config-dialog-fields">
+          <label>Profile 名称<input required value={profile.name} onChange={(event) => setProfile({ ...profile, name: event.target.value })} /></label>
+          <label>Provider<select value={profile.provider} onChange={(event) => setProfile({ ...profile, provider: event.target.value })}><option value="openai-compat">OpenAI Compatible</option><option value="anthropic">Anthropic</option></select></label>
+          <label>模型名称<input required value={profile.model} onChange={(event) => setProfile({ ...profile, model: event.target.value })} /></label>
+          <label>Base URL<input value={profile.baseUrl} onChange={(event) => setProfile({ ...profile, baseUrl: event.target.value })} /></label>
+          <label>API Key<input type="password" autoComplete="new-password" placeholder={profileId ? '留空保留现有 Key' : ''} value={profile.apiKey} onChange={(event) => setProfile({ ...profile, apiKey: event.target.value })} /></label>
+          <label><span><input type="checkbox" checked={profile.supportsVision} onChange={(event) => setProfile({ ...profile, supportsVision: event.target.checked })} /> 支持图片理解</span></label>
+        </div>
+        <div className="button-row"><button type="button" className="secondary" onClick={() => dialogRef.current?.close()}>取消</button><button type="submit" disabled={saveProfile.isPending}>保存 Profile</button></div>
+      </form>
+    </dialog>
   </section>;
 }
 
-function editRole(item: AgentRole, setId: (value: string) => void, setDraft: (value: RoleDraft) => void) {
-  setId(item.id);
-  setDraft({ name: item.name, engine: item.engine, modelProfileRef: item.modelProfileRef, pathScope: item.pathScope.join('\n'), prompt: item.prompt, maxTurns: item.maxTurns ?? 50, timeoutSeconds: item.timeoutSeconds ?? 600 });
+function profileOptions(profiles: ModelProfile[] | undefined) {
+  return (profiles ?? []).map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>);
 }
 
 function profileName(profiles: ModelProfile[], id: string) {
-  return profiles.find((item) => item.id === id)?.name || (id || '无需模型');
+  return profiles.find((item) => item.id === id)?.name || (id || '部署默认');
+}
+
+function providerName(provider: string) {
+  return provider === 'openai-compat' ? 'OpenAI Compatible' : 'Anthropic';
 }
 
 function lines(value: string) {
   return value.split('\n').map((item) => item.trim()).filter(Boolean);
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : '配置保存失败';
 }

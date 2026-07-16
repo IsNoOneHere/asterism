@@ -99,7 +99,7 @@ def test_single_agent_mode_discards_planner_assignments(monkeypatch):
         return []
 
     monkeypatch.setattr(execution_activities, "build_planner_provider", lambda settings: AssignedPlanner())
-    monkeypatch.setattr(execution_activities, "available_role_metadata", no_roles)
+    monkeypatch.setattr(execution_activities, "available_agent_metadata", no_roles)
 
     result = asyncio.run(plan_execution({
         "system_id": "system-1",

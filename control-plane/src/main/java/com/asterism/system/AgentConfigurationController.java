@@ -43,46 +43,25 @@ public class AgentConfigurationController {
         return config.deleteProfile(systemId, profileId);
     }
 
-    @PostMapping("/agent-roles")
-    AgentConfigurationService.AgentConfigurationResponse createRole(@PathVariable String systemId,
-            @RequestBody AgentConfigurationService.AgentRoleRequest request, Authentication actor) {
+    @PostMapping("/agents")
+    AgentConfigurationService.AgentConfigurationResponse createAgent(@PathVariable String systemId,
+            @RequestBody AgentConfigurationService.AgentRequest request, Authentication actor) {
         access.requireOwnerOrAdmin(systemId, actor);
-        return config.createRole(systemId, request);
+        return config.createAgent(systemId, request);
     }
 
-    @PatchMapping("/agent-roles/{roleId}")
-    AgentConfigurationService.AgentConfigurationResponse updateRole(@PathVariable String systemId,
-            @PathVariable String roleId, @RequestBody AgentConfigurationService.AgentRoleRequest request,
+    @PatchMapping("/agents/{agentName}")
+    AgentConfigurationService.AgentConfigurationResponse updateAgent(@PathVariable String systemId,
+            @PathVariable String agentName, @RequestBody AgentConfigurationService.AgentRequest request,
             Authentication actor) {
         access.requireOwnerOrAdmin(systemId, actor);
-        return config.updateRole(systemId, roleId, request);
+        return config.updateAgent(systemId, agentName, request);
     }
 
-    @DeleteMapping("/agent-roles/{roleId}")
-    AgentConfigurationService.AgentConfigurationResponse deleteRole(@PathVariable String systemId,
-            @PathVariable String roleId, Authentication actor) {
+    @DeleteMapping("/agents/{agentName}")
+    AgentConfigurationService.AgentConfigurationResponse deleteAgent(@PathVariable String systemId,
+            @PathVariable String agentName, Authentication actor) {
         access.requireOwnerOrAdmin(systemId, actor);
-        return config.deleteRole(systemId, roleId);
-    }
-
-    @PatchMapping("/default-agent-role")
-    AgentConfigurationService.AgentConfigurationResponse updateDefaultRole(@PathVariable String systemId,
-            @RequestBody AgentConfigurationService.DefaultRoleRequest request, Authentication actor) {
-        access.requireOwnerOrAdmin(systemId, actor);
-        return config.updateDefaultRole(systemId, request);
-    }
-
-    @PatchMapping("/model-routing")
-    AgentConfigurationService.AgentConfigurationResponse updateModelRouting(@PathVariable String systemId,
-            @RequestBody AgentConfigurationService.ModelRoutingRequest request, Authentication actor) {
-        access.requireOwnerOrAdmin(systemId, actor);
-        return config.updateModelRouting(systemId, request);
-    }
-
-    @PatchMapping("/execution-policy")
-    AgentConfigurationService.AgentConfigurationResponse updateExecutionPolicy(@PathVariable String systemId,
-            @RequestBody AgentConfigurationService.ExecutionPolicyRequest request, Authentication actor) {
-        access.requireOwnerOrAdmin(systemId, actor);
-        return config.updateExecutionPolicy(systemId, request);
+        return config.deleteAgent(systemId, agentName);
     }
 }

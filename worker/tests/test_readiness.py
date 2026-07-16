@@ -71,7 +71,7 @@ def test_report_uses_system_claude_config_without_uploading_key(monkeypatch, tmp
             if "/internal/systems/" in url:
                 return Response({
                     "model_profiles": [{"id": "mp-1", "model": "deepseek-v4-pro", "api_key": "system-secret"}],
-                    "agent_roles": [{"id": "role-1", "engine": "claude_sdk", "model_profile_ref": "mp-1"}],
+                    "agents": [{"name": "developer", "kind": "builtin", "engine": "claude_sdk", "model_profile_ref": "mp-1"}],
                 })
             return Response({"ready": True, "model": "business-model"})
 
@@ -103,7 +103,7 @@ def test_report_contains_stage_models_without_keys(monkeypatch, tmp_path):
             if "/internal/systems/" in url:
                 return Response({
                     "model_profiles": [{"id": "mp-1", "model": "deepseek-v4-pro", "api_key": ""}],
-                    "agent_roles": [{"id": "role-1", "engine": "claude_sdk", "model_profile_ref": "mp-1"}],
+                    "agents": [{"name": "developer", "kind": "builtin", "engine": "claude_sdk", "model_profile_ref": "mp-1"}],
                 })
             return Response({"ready": True, "stages": {
                 "prd": {"ready": True, "name": "需求模型", "api_key_configured": True},

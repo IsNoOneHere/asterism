@@ -117,30 +117,27 @@ async def _agent_readiness(client: httpx.AsyncClient, settings: Settings, system
         response.raise_for_status()
         data = response.json()
         profiles = {str(item.get("id")): item for item in data.get("model_profiles", []) if isinstance(item, dict)}
-        roles = [item for item in data.get("agent_roles", []) if isinstance(item, dict)]
+        agents = [item for item in data.get("agents", []) if isinstance(item, dict)]
+        developer = next((item for item in agents if item.get("name") == "developer"), {})
 
         def configured(engine: str) -> tuple[bool, str]:
-            for role in roles:
-                if role.get("engine") != engine:
-                    continue
-                profile = profiles.get(str(role.get("model_profile_ref", "")), {})
-                if profile.get("model") and profile.get("api_key"):
-                    return True, str(profile.get("model"))
+            if developer.get("engine") != engine:
+                return False, ""
+            profile = profiles.get(str(developer.get("model_profile_ref", "")), {})
+            if profile.get("model") and profile.get("api_key"):
+                return True, str(profile.get("model"))
+            if not developer.get("model_profile_ref") and settings.default_model_api_key:
+                return True, settings.default_model
             return False, ""
 
         claude_ready, claude_model = configured("claude_sdk")
         deep_ready, deep_model = configured("deepagents")
-        if not roles and settings.default_model_api_key:
-            claude_ready = settings.default_engine == "claude_sdk"
-            deep_ready = settings.default_engine == "deepagents"
-            claude_model = settings.default_model if claude_ready else ""
-            deep_model = settings.default_model if deep_ready else ""
         return {
             "claude_ready": claude_ready,
             "claude_model": claude_model,
             "deepagents_ready": deep_ready,
             "deepagents_model": deep_model,
-            "source": "system" if roles else "worker_env",
+            "source": "system" if developer.get("model_profile_ref") else "worker_env",
         }
     except httpx.HTTPError:
         # 心跳失败不能泄露配置或影响 Worker 主轮询。

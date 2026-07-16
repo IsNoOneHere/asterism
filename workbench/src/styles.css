@@ -872,8 +872,7 @@ pre {
   grid-column: 1 / -1;
 }
 
-.model-config-layout,
-.agent-config-layout {
+.model-config-layout {
   align-items: start;
   display: grid;
   gap: 18px;
@@ -896,11 +895,6 @@ pre {
   padding: 2px 7px;
 }
 
-.model-routing-panel > button {
-  margin-top: 4px;
-  width: 100%;
-}
-
 .model-profile-table {
   min-width: 820px;
 }
@@ -913,58 +907,6 @@ pre {
   border-top: 1px solid #e5e9ef;
   margin-top: 20px;
   padding-top: 18px;
-}
-
-.agent-policy-column {
-  display: grid;
-  gap: 18px;
-}
-
-.agent-policy-panel .execution-options {
-  display: grid;
-  grid-template-columns: 1fr;
-}
-
-.execution-path-step {
-  align-items: center;
-  border-bottom: 1px solid #e5e9ef;
-  display: grid;
-  gap: 9px;
-  grid-template-columns: 10px minmax(0, 1fr);
-  padding: 10px 0;
-}
-
-.execution-path-step:last-child {
-  border-bottom: 0;
-}
-
-.execution-path-step i {
-  background: #2f7d70;
-  border-radius: 50%;
-  height: 8px;
-  width: 8px;
-}
-
-.config-boundary {
-  align-items: center;
-  background: #edf1f4;
-  border-radius: 8px;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  padding: 14px 18px;
-}
-
-.config-boundary > div {
-  display: grid;
-  gap: 4px;
-}
-
-.config-boundary span,
-.config-boundary b {
-  color: #627386;
-  font-size: 13px;
-  font-weight: 400;
 }
 
 h1,

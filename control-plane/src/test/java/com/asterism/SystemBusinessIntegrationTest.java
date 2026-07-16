@@ -141,7 +141,10 @@ class SystemBusinessIntegrationTest {
 
         mockMvc.perform(get("/api/v5/internal/systems/" + systemId + "/model-config"))
                 .andExpect(status().isUnauthorized());
+        var profileId = jdbc.sql("select model_provider_config #>> '{modelProfiles,0,id}' from systems where system_id = :id")
+                .param("id", systemId).query(String.class).single();
         mockMvc.perform(get("/api/v5/internal/systems/" + systemId + "/model-config")
+                        .queryParam("profile_id", profileId)
                         .header("Authorization", "Bearer test-worker-token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.provider").value("openai-compat"))

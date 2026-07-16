@@ -25,12 +25,12 @@ def create_app(
     @app.post("/plan")
     def plan(request: PlanRequest) -> ExecutionPlan:
         prompt = plan_prompt(request)
-        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "planning")
+        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "planner")
         return _strict_json(llm, prompt, model_config, ExecutionPlan, "planner did not return valid ExecutionPlan JSON")
 
     @app.post("/execute")
     def execute(request: ExecutionRequest) -> ExecutionResult:
-        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "diff", request.model_profile_id)
+        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "developer", request.model_profile_id)
         diff_patch = llm.complete(execute_prompt(request), model_config)
         if "diff --git" not in diff_patch:
             raise HTTPException(status_code=422, detail="execution did not return a unified git diff")
@@ -38,7 +38,7 @@ def create_app(
 
     @app.post("/prd-draft")
     def prd_draft(request: DraftRequest) -> DraftResult:
-        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "prd")
+        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "product")
         return _strict_json(llm, prd_draft_prompt(request), model_config, DraftResult, "prd draft did not return valid DraftResult JSON")
 
     @app.post("/analyze-image")
@@ -64,15 +64,15 @@ def create_app(
 
     @app.get("/healthz")
     def healthz() -> dict:
-        config = resolve_model_config(settings, fetch_model_config, "healthz", "default")
+        config = resolve_model_config(settings, fetch_model_config, "healthz", "product")
         return {"ok": True, "model_config_available": bool(config.model and config.api_key)}
 
     @app.get("/readiness")
     def readiness(system_id: str) -> dict:
         # 仅返回配置状态，禁止把 API key 暴露给 Worker 或页面。
         stages = {
-            stage: resolve_model_config(settings, fetch_model_config, system_id, stage)
-            for stage in ("prd", "planning", "diff")
+            stage: resolve_model_config(settings, fetch_model_config, system_id, agent)
+            for stage, agent in {"prd": "product", "planning": "planner", "diff": "developer"}.items()
         }
         return {
             "ready": all(config.model and config.api_key for config in stages.values()),
@@ -104,11 +104,11 @@ def _strict_json(llm: LlmClient, prompt: str, model_config: ModelConfig, schema,
 
 
 def control_plane_model_config(settings: AgentSettings) -> Callable[[str, str, str], ModelConfig]:
-    def fetch(system_id: str, stage: str, profile_id: str = "") -> ModelConfig:
+    def fetch(system_id: str, agent: str, profile_id: str = "") -> ModelConfig:
         url = settings.control_plane_url.rstrip("/") + f"/api/v5/internal/systems/{system_id}/model-config"
         headers = {"Authorization": f"Bearer {settings.worker_callback_token}"}
         try:
-            params = {"stage": stage}
+            params = {"agent": agent}
             if profile_id:
                 params["profile_id"] = profile_id
             response = httpx.get(url, headers=headers, params=params, timeout=5)
@@ -123,12 +123,8 @@ def control_plane_model_config(settings: AgentSettings) -> Callable[[str, str, s
 
 
 def resolve_model_config(settings: AgentSettings, fetch_model_config: Callable[..., ModelConfig],
-                         system_id: str, stage: str, profile_id: str = "") -> ModelConfig:
-    # 兼容旧测试/部署注入的双参数 fetcher。
-    try:
-        resolved = fetch_model_config(system_id, stage, profile_id)
-    except TypeError:
-        resolved = fetch_model_config(system_id, stage)
+                         system_id: str, agent: str, profile_id: str = "") -> ModelConfig:
+    resolved = fetch_model_config(system_id, agent, profile_id)
     return merge_model_config(default_model_config(settings), resolved)
 
 
@@ -137,8 +133,8 @@ def plan_prompt(request: PlanRequest) -> str:
     return (
         "Return strict JSON for ExecutionPlan with keys steps,target_files,test_plan,risks,assignments.\n"
         "All four values must be JSON arrays of strings: steps,target_files,test_plan,risks.\n"
-        "assignments is optional; when multiple available roles are useful, return ordered objects "
-        "{role,scope_paths,step_refs} using only listed role ids and path scopes.\n"
+        "assignments is optional; when multiple available agents are useful, return ordered objects "
+        "{role,scope_paths,step_refs} using only listed agent names and path scopes.\n"
         "target_files must be real existing paths selected from the repo summary.\n"
         f"PRD: {request.prd.model_dump_json()}\n"
         f"Confirmed target hints (疑似相关，以实际代码为准): "
@@ -146,7 +142,7 @@ def plan_prompt(request: PlanRequest) -> str:
         f"Repo summary:\n{request.repo_summary}\n"
         f"Memories: {json.dumps(request.memories, ensure_ascii=False)}\n"
         f"Allowed paths: {request.allowed_paths}\n"
-        f"Available roles (no secrets): {json.dumps([role.model_dump() for role in request.available_roles], ensure_ascii=False)}\n"
+        f"Available agents (no secrets): {json.dumps([agent.model_dump() for agent in request.available_agents], ensure_ascii=False)}\n"
     )
 
 
