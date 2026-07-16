@@ -3,6 +3,7 @@ package com.asterism.prd;
 import com.asterism.attachment.Attachment;
 import com.asterism.attachment.AttachmentService;
 import com.asterism.event.DomainEventService;
+import com.asterism.git.GitIntegrationService;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.knowledge.KnowledgeMatchService;
 import com.asterism.memory.MemoryItemRepository;
@@ -84,6 +85,11 @@ class PrdScreenshotFlowTest {
         var ids = mock(WorkItemIdGenerator.class);
         when(ids.nextId()).thenReturn("WI202607141234");
         var temporal = mock(TemporalCasePort.class);
+        var git = mock(GitIntegrationService.class);
+        when(git.internal("sys-1")).thenReturn(new GitIntegrationService.InternalGitConfiguration(
+                List.of(new GitIntegrationService.RepoConfig("main", "订单系统", "other", "", "main",
+                        "local", "/repo", List.of("src"), List.of(), List.of("test"))),
+                "local", "auto", "main", List.of(), "", ""));
         var configurations = mock(AgentConfigurationService.class);
         when(configurations.internal("sys-1")).thenReturn(new AgentConfigurationService.InternalAgentConfiguration(
                 List.of(), List.of(new AgentConfigurationService.Agent(
@@ -100,7 +106,8 @@ class PrdScreenshotFlowTest {
                 objectMapper, new PrdDraftCodec(objectMapper), transactions, access, memories, aggregate, attachments, imageAnalysis, knowledge,
                 Runnable::run);
         var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
-                new PrdDraftCodec(objectMapper), transactions, access, systems, configurations, aggregate, ids, readiness);
+                new PrdDraftCodec(objectMapper), transactions, access, systems, configurations, aggregate, ids,
+                readiness, git);
         var controller = new PrdController(conversations, confirmations);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
 

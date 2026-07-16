@@ -117,6 +117,7 @@ export type UiObservation = {
 };
 export type SuspectedTarget = {
   entryId: string;
+  repo?: string;
   kind: string;
   title: string;
   routePath: string;
@@ -134,6 +135,7 @@ export type Attachment = {
 export type KnowledgeEntry = {
   entryId: string;
   systemId: string;
+  repo: string;
   kind: 'route' | 'page' | 'api' | string;
   title: string;
   anchorTexts: string[];

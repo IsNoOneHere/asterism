@@ -167,7 +167,11 @@ public class SystemController {
 
     private void startRouteIndex(SystemProfile profile) {
         try {
-            temporal.startRouteIndex(new TemporalCasePort.RouteIndexCommand(profile.systemId(), profile.repoPath()));
+            var repos = git.internal(profile.systemId()).repos().stream().map(repo -> new TemporalCasePort.RepoSnapshot(
+                    repo.repoId(), repo.name(), repo.kind(), repo.gitlabProject(), repo.defaultBranch(),
+                    repo.cloneMode(), repo.localPath(), repo.allowedPaths(), repo.forbiddenPaths(),
+                    repo.testCommands())).toList();
+            temporal.startRouteIndex(new TemporalCasePort.RouteIndexCommand(profile.systemId(), profile.repoPath(), repos));
         } catch (RuntimeException error) {
             // 系统配置保存成功后索引可由管理员重试，不能反向回滚业务数据。
             log.warn("系统路由索引启动失败 system={}", profile.systemId(), error);

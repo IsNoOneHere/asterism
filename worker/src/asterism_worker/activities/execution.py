@@ -1,16 +1,15 @@
 import asyncio
 import logging
 import subprocess
+from pathlib import Path
 
 from temporalio import activity
 
 from asterism_worker.activities.execution_support import (
     _matches,
     changed_paths,
-    cleanup_workspace,
     collect_file_context,
     git_apply_check,
-    prepare_workspace,
     release_repo,
     run_validation_commands,
     summarize_repo_path,
@@ -19,8 +18,16 @@ from asterism_worker.activities.execution_support import (
 )
 from asterism_worker.agent_config import available_agent_metadata, resolve_agent_config
 from asterism_worker.config.settings import load_settings
-from asterism_worker.contracts import ExecutionRequest, PatchApplyRequest, PatchApplyResult, PlanRequest, PreviousAttempt
+from asterism_worker.contracts import (
+    ExecutionRequest,
+    PatchApplyRequest,
+    PatchApplyResult,
+    PlanRequest,
+    PreviousAttempt,
+    RepoSnapshot,
+)
 from asterism_worker.providers.factory import build_execution_provider, build_planner_provider
+from asterism_worker.repo_source import cleanup_repo_workspace, prepare_repo_workspace
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +39,15 @@ async def run_execution(request: dict) -> dict:
     settings = load_settings()
     parsed = ExecutionRequest.model_validate(request)
     legacy = parsed.model_extra or {}
-    workspace = prepare_workspace(parsed.repo_path, settings.workspace_root)
+    repo = parsed.repo or RepoSnapshot(
+        repo_id="main",
+        name="main",
+        local_path=parsed.repo_path,
+        allowed_paths=parsed.allowed_paths,
+        forbidden_paths=parsed.forbidden_paths,
+        test_commands=parsed.test_commands,
+    )
+    workspace = await prepare_repo_workspace(repo, parsed.system_id, settings)
     try:
         validate_plan_targets(str(workspace), parsed.plan.target_files)
         context = collect_file_context(workspace, parsed.plan.target_files)
@@ -73,7 +88,8 @@ async def run_execution(request: dict) -> dict:
         result = await asyncio.wait_for(provider.run(provider_request), timeout=resolved.engine.timeout_seconds)
         result = result.model_copy(update={"execution_provider": result.execution_provider or provider_name,
                                            "engine": provider_name,
-                                           "role_id": provider_request.role_id})
+                                           "role_id": provider_request.role_id,
+                                           "repo": repo.repo_id})
         if not result.diff_patch.strip():
             return result.model_dump()
         apply_error = git_apply_check(str(workspace), result.diff_patch)
@@ -84,7 +100,8 @@ async def run_execution(request: dict) -> dict:
             })), timeout=resolved.engine.timeout_seconds)
             result = result.model_copy(update={"execution_provider": result.execution_provider or provider_name,
                                                "engine": provider_name,
-                                               "role_id": provider_request.role_id})
+                                               "role_id": provider_request.role_id,
+                                               "repo": repo.repo_id})
             apply_error = git_apply_check(str(workspace), result.diff_patch)
             if apply_error:
                 raise RuntimeError(apply_error)
@@ -103,7 +120,7 @@ async def run_execution(request: dict) -> dict:
             })
         return result.model_copy(update={"changed_paths": paths}).model_dump()
     finally:
-        cleanup_workspace(workspace)
+        cleanup_repo_workspace(workspace)
 
 
 @activity.defn
@@ -139,9 +156,24 @@ async def plan_execution(request: dict) -> dict:
 
 @activity.defn
 async def summarize_repo(request: dict) -> str:
-    summary = summarize_repo_path(request.get("repo_path", ""))
-    log.info("仓库摘要已生成", extra={"repo_path": request.get("repo_path"), "summary_bytes": len(summary.encode())})
-    return summary
+    settings = load_settings()
+    repos = [RepoSnapshot.model_validate(item) for item in request.get("repos", [])]
+    if not repos:
+        repos = [RepoSnapshot(repo_id="main", name="main", local_path=request.get("repo_path", ""))]
+    sections: list[str] = []
+    for repo in repos:
+        temporary = repo.clone_mode == "gitlab"
+        workspace = (await prepare_repo_workspace(repo, request.get("system_id", ""), settings)
+                     if temporary else Path(repo.local_path))
+        try:
+            summary = summarize_repo_path(str(workspace))
+            sections.append(summary if len(repos) == 1 else f"# repo {repo.repo_id} ({repo.kind})\n{summary}")
+        finally:
+            if temporary:
+                cleanup_repo_workspace(workspace)
+    result = "\n\n".join(sections)
+    log.info("仓库摘要已生成", extra={"repo_count": len(repos), "summary_bytes": len(result.encode())})
+    return result
 
 
 @activity.defn
@@ -164,7 +196,21 @@ async def apply_patch_to_repo(request: dict) -> dict:
 
 @activity.defn
 async def validate_plan_targets_activity(request: dict) -> None:
-    validate_plan_targets(request.get("repo_path", ""), request.get("target_files", []))
+    settings = load_settings()
+    repos = [RepoSnapshot.model_validate(item) for item in request.get("repos", [])]
+    if not repos:
+        repos = [RepoSnapshot(repo_id="main", name="main", local_path=request.get("repo_path", ""))]
+    repo_ids = [item.get("repo", "") for item in request.get("assignments", [])]
+    selected = repos if not repo_ids else [repo for repo in repos if repo.repo_id in repo_ids or (not repo_ids[0] and len(repos) == 1)]
+    for repo in selected:
+        temporary = repo.clone_mode == "gitlab"
+        workspace = (await prepare_repo_workspace(repo, request.get("system_id", ""), settings)
+                     if temporary else Path(repo.local_path))
+        try:
+            validate_plan_targets(str(workspace), request.get("target_files", []))
+        finally:
+            if temporary:
+                cleanup_repo_workspace(workspace)
 
 
 @activity.defn

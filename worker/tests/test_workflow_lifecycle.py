@@ -258,6 +258,7 @@ def test_workflow_handoff_uses_role_step_refs_and_unique_stage_keys():
     assert [request["step_refs"] for request in requests] == [["step-web"], ["step-api"]]
     assert requests[1]["handoff"] == [{
         "role": "frontend",
+        "repo": "main",
         "summary": "frontend 完成",
         "diff_patch": "diff --git a/web/app.ts b/web/app.ts\n--- a/web/app.ts\n+++ b/web/app.ts\n"
                       "@@ -1 +1 @@\n-old-web\n+new-web\n",
@@ -298,9 +299,9 @@ def test_stage_failure_rework_resumes_failed_stage_without_replanning():
     blocked = next(event for event in events if event["eventType"] == "WorkerBlocked")
     assert result == "cancelled"
     assert blocked["payload"]["completed_stages"] == [{
-        "role": "frontend", "summary": "frontend 完成", "changed_paths": ["web/app.ts"],
+        "role": "frontend", "repo": "main", "summary": "frontend 完成", "changed_paths": ["web/app.ts"],
     }]
-    assert blocked["payload"]["failed_stage"] == {"index": 1, "role": "backend"}
+    assert blocked["payload"]["failed_stage"] == {"index": 1, "role": "backend", "repo": "main"}
     assert [request["role_id"] for request in requests].count("frontend") == 1
     assert [request["role_id"] for request in requests].count("backend") == 3
     assert counts["fetch_context"] == 1
@@ -372,6 +373,49 @@ def test_workflow_handoff_non_conflicting_diff_reaches_release(tmp_path):
     assert all("api_key" not in str(request).lower() for request in requests)
 
 
+def test_two_repositories_route_assignments_and_diff_gates_independently():
+    requests: list[dict] = []
+    apply_requests: list[dict] = []
+    release_requests: list[dict] = []
+    repos = [
+        {"repo_id": "frontend", "name": "Web", "kind": "frontend", "clone_mode": "local",
+         "local_path": "/repos/web", "allowed_paths": ["src"], "forbidden_paths": ["secrets"],
+         "test_commands": []},
+        {"repo_id": "backend", "name": "API", "kind": "backend", "clone_mode": "local",
+         "local_path": "/repos/api", "allowed_paths": ["src"], "forbidden_paths": ["secrets"],
+         "test_commands": []},
+    ]
+    assignments = [
+        {"role": "frontend", "repo": "frontend", "scope_paths": ["src"], "step_refs": ["web"]},
+        {"role": "backend", "repo": "backend", "scope_paths": ["src"], "step_refs": ["api"]},
+    ]
+
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+        ("validation_passed", "validation-passed-wi-1"),
+        ("release_approved", "release-approved-wi-1"),
+    ], test_commands=[], assignments=assignments, handoff_mode="same-path-cross-repo",
+       observed_requests=requests, observed_apply_requests=apply_requests,
+       observed_release_requests=release_requests, repos=repos))
+
+    assert result == "completed"
+    assert [(request["repo"]["repo_id"], request["repo_path"]) for request in requests] == [
+        ("frontend", "/repos/web"), ("backend", "/repos/api"),
+    ]
+    assert requests[1]["handoff"][0]["repo"] == "frontend"
+    assert requests[1]["handoff"][0]["interface_notes"] == "frontend 对外行为已更新"
+    assert [(request["repo_path"], request["allowed_paths"]) for request in apply_requests] == [
+        ("/repos/web", ["src"]), ("/repos/api", ["src"]),
+    ]
+    assert [request["repo_path"] for request in release_requests] == ["/repos/web", "/repos/api"]
+    modification = next(event for event in events if event["eventType"] == "ModificationCompleted")
+    assert [item["repo"] for item in modification["payload"]["repoDiffs"]] == ["frontend", "backend"]
+    completed = next(event for event in events if event["eventType"] == "ReleaseCompleted")
+    assert [item["repo"] for item in completed["payload"]["repositories"]] == ["frontend", "backend"]
+
+
 def test_snapshot_unknown_assignment_blocks_with_unknown_role():
     events, result = asyncio.run(_run_workflow([
         ("owner_approved", "owner-approved-wi-1"),
@@ -411,7 +455,10 @@ async def _run_workflow(
     assignments: list[dict] | None = None,
     handoff_mode: str = "",
     observed_requests: list[dict] | None = None,
+    observed_apply_requests: list[dict] | None = None,
+    observed_release_requests: list[dict] | None = None,
     repo_path: str = "/tmp/repo",
+    repos: list[dict] | None = None,
     verify_combined_diff: bool = False,
     agent_config_snapshot: dict | None = None,
     fail_role: str = "",
@@ -478,7 +525,8 @@ async def _run_workflow(
                                    blocked_reason="role_scope_violation", blocked_detail="api/app.py").model_dump()
         if assignments:
             frontend = request["role_id"] == "frontend"
-            path = "src/shared.py" if handoff_mode == "conflict" else ("web/app.ts" if frontend else "api/app.py")
+            path = ("src/shared.py" if handoff_mode in {"conflict", "same-path-cross-repo"}
+                    else ("web/app.ts" if frontend else "api/app.py"))
             engine = "claude_sdk" if frontend else "deepagents"
             old = "old-web" if frontend else "old-api"
             new = "new-web" if frontend else "new-api"
@@ -509,6 +557,8 @@ async def _run_workflow(
     @activity.defn(name="apply_patch_to_repo")
     async def fake_apply_patch_to_repo(request: dict) -> dict:
         # patch 应用活动在 workflow 测试中不碰真实仓库。
+        if observed_apply_requests is not None:
+            observed_apply_requests.append(request)
         if failure_mode == "apply_patch":
             raise RuntimeError("git apply exploded")
         if verify_combined_diff:
@@ -522,10 +572,14 @@ async def _run_workflow(
     async def fake_run_release(request: dict) -> dict:
         if failure_mode == "release":
             raise RuntimeError("release exploded")
-        assert request["repo_path"] == repo_path
+        if observed_release_requests is not None:
+            observed_release_requests.append(request)
+        assert request["repo_path"] in ({item["local_path"] for item in repos} if repos else {repo_path})
         assert request["work_item_id"] == "wi-1"
         if verify_combined_diff:
             assert "web/app.ts" in request["diff_patch"] and "api/app.py" in request["diff_patch"]
+        elif assignments:
+            assert "diff --git" in request["diff_patch"]
         else:
             assert request["diff_patch"] == "diff --git a/src/app.py b/src/app.py\n"
         return {"branch": "wi/wi-1", "commit_hash": "abc123", "push_failed": ""}
@@ -572,7 +626,7 @@ async def _run_workflow(
         ):
             handle = await env.client.start_workflow(
                 AsterismCaseWorkflow.run,
-                _case_input(test_commands, repo_path, agent_config_snapshot),
+                _case_input(test_commands, repo_path, agent_config_snapshot, repos),
                 id=f"case-{uuid4()}",
                 task_queue=TASK_QUEUE,
             )
@@ -583,7 +637,7 @@ async def _run_workflow(
 
 
 def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/repo",
-                agent_config_snapshot: dict | None = None) -> CaseInput:
+                agent_config_snapshot: dict | None = None, repos: list[dict] | None = None) -> CaseInput:
     payload = dict(
         case_id="case-1",
         work_item_id="wi-1",
@@ -599,6 +653,7 @@ def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/r
         allowed_paths=["src"],
         forbidden_paths=["secrets"],
         test_commands=["pytest"] if test_commands is None else test_commands,
+        repos=repos or [],
     )
     if agent_config_snapshot is None:
         payload.update(execution_provider="claude_sdk", claude_max_turns=25, execution_timeout_seconds=900)

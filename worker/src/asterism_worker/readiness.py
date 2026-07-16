@@ -38,6 +38,8 @@ async def report_readiness(settings: Settings) -> None:
         target_reports = []
         for target in targets:
             repo_path = str(target.get("repoPath", ""))
+            repos = target.get("repos") or [{"cloneMode": "local", "localPath": repo_path}]
+            local_paths = [str(repo.get("localPath", "")) for repo in repos if repo.get("cloneMode") != "gitlab"]
             model = await _model_readiness(client, settings, str(target["systemId"]))
             agents = await _agent_readiness(client, settings, str(target["systemId"]))
             stages = model.get("stages", {})
@@ -46,8 +48,8 @@ async def report_readiness(settings: Settings) -> None:
             diff = stages.get("diff", {})
             target_reports.append({
                 "systemId": target["systemId"],
-                "repositoryAccessible": Path(repo_path).is_dir(),
-                "gitRepository": _is_git_repository(repo_path),
+                "repositoryAccessible": all(Path(path).is_dir() for path in local_paths),
+                "gitRepository": all(_is_git_repository(path) for path in local_paths),
                 "modelReady": bool(model.get("ready")),
                 "model": str(prd.get("model", model.get("model", ""))),
                 "prdModelReady": bool(prd.get("ready", model.get("ready"))),

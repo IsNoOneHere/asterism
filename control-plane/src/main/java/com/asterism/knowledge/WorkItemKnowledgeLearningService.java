@@ -39,10 +39,25 @@ public class WorkItemKnowledgeLearningService {
         }
         if (anchors.isEmpty()) return;
         var payload = readMap(event.payloadJson());
-        var changedPaths = stringList(payload.getOrDefault("changedPaths", payload.get("changed_paths")));
-        var candidate = new SystemKnowledgeService.CandidateRequest(
-                "page", anchors.getFirst(), List.copyOf(anchors), "", List.of(), changedPaths, event.workItemId());
-        knowledge.writeCandidates(event.systemId(), List.of(candidate), "work_item_learning", "asterism-worker");
+        var candidates = new ArrayList<SystemKnowledgeService.CandidateRequest>();
+        if (payload.get("repositories") instanceof List<?> repositories) {
+            for (var value : repositories) {
+                if (!(value instanceof Map<?, ?> repo)) continue;
+                candidates.add(candidate(repo.get("repo") == null ? "main" : String.valueOf(repo.get("repo")), anchors,
+                        stringList(repo.get("changedPaths")), event.workItemId()));
+            }
+        }
+        if (candidates.isEmpty()) {
+            candidates.add(candidate(String.valueOf(payload.getOrDefault("repo", "main")), anchors,
+                    stringList(payload.getOrDefault("changedPaths", payload.get("changed_paths"))), event.workItemId()));
+        }
+        knowledge.writeCandidates(event.systemId(), candidates, "work_item_learning", "asterism-worker");
+    }
+
+    private SystemKnowledgeService.CandidateRequest candidate(String repo, List<String> anchors,
+                                                               List<String> changedPaths, String workItemId) {
+        return new SystemKnowledgeService.CandidateRequest(repo, "page", anchors.getFirst(), List.copyOf(anchors),
+                "", List.of(), changedPaths, workItemId);
     }
 
     private void add(List<String> target, Object value) {

@@ -4,6 +4,7 @@ import com.asterism.common.ApiException;
 import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventType;
 import com.asterism.identity.SystemAccessService;
+import com.asterism.git.GitIntegrationService;
 import com.asterism.system.AgentConfigurationService;
 import com.asterism.system.ExecutionReadinessService;
 import com.asterism.system.SystemProfileRepository;
@@ -36,6 +37,7 @@ public class PrdConfirmationService {
     private final JdbcAggregateTemplate aggregate;
     private final WorkItemIdGenerator workItemIds;
     private final ExecutionReadinessService readiness;
+    private final GitIntegrationService git;
 
     public PrdConfirmationService(
             PrdSessionRepository sessions,
@@ -49,7 +51,8 @@ public class PrdConfirmationService {
             AgentConfigurationService configurations,
             JdbcAggregateTemplate aggregate,
             WorkItemIdGenerator workItemIds,
-            ExecutionReadinessService readiness) {
+            ExecutionReadinessService readiness,
+            GitIntegrationService git) {
         this.sessions = sessions;
         this.events = events;
         this.temporal = temporal;
@@ -62,6 +65,7 @@ public class PrdConfirmationService {
         this.aggregate = aggregate;
         this.workItemIds = workItemIds;
         this.readiness = readiness;
+        this.git = git;
     }
 
     public PrdConfirmResponse confirm(String prdId, Authentication actor) {
@@ -78,6 +82,7 @@ public class PrdConfirmationService {
         try {
             // Temporal 是外部系统，必须在数据库事务提交后调用。
             var profile = systems.findById(current.systemId()).orElseThrow(() -> new IllegalArgumentException("系统不存在"));
+            var gitConfig = git.internal(current.systemId());
             try {
                 temporal.startCase(new TemporalCasePort.StartCaseCommand(
                         caseId,
@@ -88,6 +93,14 @@ public class PrdConfirmationService {
                         readList(profile.allowedPaths()),
                         readList(profile.forbiddenPaths()),
                         readList(profile.testCommands()),
+                        gitConfig.repos().stream().map(repo -> new TemporalCasePort.RepoSnapshot(
+                                repo.repoId(), repo.name(), repo.kind(), repo.gitlabProject(), repo.defaultBranch(),
+                                repo.cloneMode(), repo.localPath(), repo.allowedPaths(), repo.forbiddenPaths(),
+                                repo.testCommands())).toList(),
+                        gitConfig.releaseMode(),
+                        gitConfig.validationMode(),
+                        gitConfig.mrTargetBranch(),
+                        gitConfig.mrLabels(),
                         agentConfigSnapshot(current.systemId()),
                         prdPayload(current)));
             } catch (WorkflowExecutionAlreadyStarted error) {

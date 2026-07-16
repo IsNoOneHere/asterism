@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -73,7 +74,11 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
                 .setTaskQueue(settings.taskQueue())
                 .build();
         var workflow = client.newUntypedWorkflowStub("AsterismRouteIndexWorkflow", options);
-        workflow.start(Map.of("system_id", command.systemId(), "repo_path", command.repoPath()));
+        var input = new LinkedHashMap<String, Object>();
+        input.put("system_id", command.systemId());
+        input.put("repo_path", command.repoPath());
+        input.put("repos", list(command.repos()));
+        workflow.start(input);
         log.info("Temporal 路由索引已启动 system={} workflowId={}", command.systemId(), workflowId);
         return workflowId;
     }
@@ -90,6 +95,11 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
                 list(command.allowedPaths()),
                 list(command.forbiddenPaths()),
                 list(command.testCommands()),
+                list(command.repos()),
+                text(command.releaseMode()),
+                text(command.validationMode()),
+                text(command.mrTargetBranch()),
+                list(command.mrLabels()),
                 command.agentConfigSnapshot(),
                 new PrdPayloadDto(
                         text(prd.title()),
@@ -119,6 +129,11 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
             List<String> allowedPaths,
             List<String> forbiddenPaths,
             List<String> testCommands,
+            List<RepoSnapshot> repos,
+            String releaseMode,
+            String validationMode,
+            String mrTargetBranch,
+            List<String> mrLabels,
             AgentConfigSnapshot agentConfigSnapshot,
             PrdPayloadDto prd) {
     }

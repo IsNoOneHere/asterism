@@ -10,7 +10,8 @@ public interface SystemKnowledgeRepository extends CrudRepository<SystemKnowledg
 
     List<SystemKnowledge> findBySystemIdAndStatusOrderByCreatedAtDesc(String systemId, String status);
 
-    Optional<SystemKnowledge> findBySystemIdAndRoutePath(String systemId, String routePath);
+    Optional<SystemKnowledge> findBySystemIdAndRepoIdAndRoutePath(String systemId, String repoId, String routePath);
 
-    Optional<SystemKnowledge> findBySystemIdAndSourceAndSourceRef(String systemId, String source, String sourceRef);
+    Optional<SystemKnowledge> findBySystemIdAndRepoIdAndSourceAndSourceRef(String systemId, String repoId,
+                                                                           String source, String sourceRef);
 }

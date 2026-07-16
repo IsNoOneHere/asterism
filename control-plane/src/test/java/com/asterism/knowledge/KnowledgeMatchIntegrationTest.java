@@ -52,6 +52,21 @@ class KnowledgeMatchIntegrationTest {
         assertThat(knowledge.writeCandidates("demo-system", List.of(request), "code_index", "worker")).isZero();
     }
 
+    @Test
+    void sameRouteCanBeIndexedInDifferentRepositories() {
+        var route = "/shared-" + UUID.randomUUID();
+        var frontend = new SystemKnowledgeService.CandidateRequest("frontend", "page", "前端路由",
+                List.of("前端路由"), route, List.of(), List.of("src/app.ts"), route);
+        var backend = new SystemKnowledgeService.CandidateRequest("backend", "api", "后端接口",
+                List.of("后端接口"), route, List.of("GET " + route), List.of("src/App.java"), route);
+
+        assertThat(knowledge.writeCandidates("demo-system", List.of(frontend, backend), "code_index", "worker"))
+                .isEqualTo(2);
+        assertThat(knowledge.list("demo-system", "candidate")).filteredOn(item -> route.equals(item.routePath()))
+                .extracting(SystemKnowledgeService.KnowledgeView::repo)
+                .containsExactlyInAnyOrder("frontend", "backend");
+    }
+
     private SystemKnowledgeService.CandidateRequest candidate(String title, String route, List<String> anchors) {
         return new SystemKnowledgeService.CandidateRequest("page", title, anchors, route,
                 List.of("GET /api/orders"), List.of("src/orders.tsx"), route);

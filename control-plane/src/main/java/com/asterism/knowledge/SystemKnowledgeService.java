@@ -61,7 +61,7 @@ public class SystemKnowledgeService {
         var current = require(systemId, entryId);
         var approved = "approved".equals(status);
         var updated = new SystemKnowledge(
-                current.entryId(), current.systemId(), current.kind(), current.title(), current.anchorTexts(),
+                current.entryId(), current.systemId(), current.repoId(), current.kind(), current.title(), current.anchorTexts(),
                 current.routePath(), current.apiEndpoints(), current.codeRefs(), status, current.source(),
                 current.sourceRef(), current.createdBy(), current.createdAt(), approved ? actor : null,
                 approved ? Instant.now() : null);
@@ -79,21 +79,23 @@ public class SystemKnowledgeService {
     private SystemKnowledge insert(String systemId, CandidateRequest request, String source, String actor) {
         if (!KINDS.contains(request.kind())) throw new IllegalArgumentException("不支持的知识类型: " + request.kind());
         return aggregate.insert(new SystemKnowledge(
-                "knowledge-" + UUID.randomUUID(), systemId, request.kind(), request.title(),
+                "knowledge-" + UUID.randomUUID(), systemId, text(request.repo()).isBlank() ? "main" : request.repo(),
+                request.kind(), request.title(),
                 String.join("\n", list(request.anchorTexts())), text(request.routePath()),
                 json(list(request.apiEndpoints())), json(list(request.codeRefs())), "candidate", source,
                 text(request.sourceRef()), actor, Instant.now(), null, null));
     }
 
     private boolean exists(String systemId, CandidateRequest request, String source) {
+        var repo = text(request.repo()).isBlank() ? "main" : request.repo();
         if (request.routePath() != null && !request.routePath().isBlank()
-                && entries.findBySystemIdAndRoutePath(systemId, request.routePath()).isPresent()) return true;
+                && entries.findBySystemIdAndRepoIdAndRoutePath(systemId, repo, request.routePath()).isPresent()) return true;
         return request.sourceRef() != null && !request.sourceRef().isBlank()
-                && entries.findBySystemIdAndSourceAndSourceRef(systemId, source, request.sourceRef()).isPresent();
+                && entries.findBySystemIdAndRepoIdAndSourceAndSourceRef(systemId, repo, source, request.sourceRef()).isPresent();
     }
 
     private KnowledgeView view(SystemKnowledge entry) {
-        return new KnowledgeView(entry.entryId(), entry.systemId(), entry.kind(), entry.title(),
+        return new KnowledgeView(entry.entryId(), entry.systemId(), entry.repoId(), entry.kind(), entry.title(),
                 entry.anchorTexts().lines().filter(value -> !value.isBlank()).toList(), entry.routePath(),
                 readList(entry.apiEndpoints()), readList(entry.codeRefs()), entry.status(), entry.source(),
                 entry.sourceRef(), entry.createdBy(), entry.createdAt(), entry.approvedBy(), entry.approvedAt());
@@ -123,11 +125,15 @@ public class SystemKnowledgeService {
         return value == null ? "" : value;
     }
 
-    public record CandidateRequest(String kind, String title, List<String> anchorTexts, String routePath,
+    public record CandidateRequest(String repo, String kind, String title, List<String> anchorTexts, String routePath,
                                    List<String> apiEndpoints, List<String> codeRefs, String sourceRef) {
+        public CandidateRequest(String kind, String title, List<String> anchorTexts, String routePath,
+                                List<String> apiEndpoints, List<String> codeRefs, String sourceRef) {
+            this("main", kind, title, anchorTexts, routePath, apiEndpoints, codeRefs, sourceRef);
+        }
     }
 
-    public record KnowledgeView(String entryId, String systemId, String kind, String title,
+    public record KnowledgeView(String entryId, String systemId, String repo, String kind, String title,
                                 List<String> anchorTexts, String routePath, List<String> apiEndpoints,
                                 List<String> codeRefs, String status, String source, String sourceRef,
                                 String createdBy, Instant createdAt, String approvedBy, Instant approvedAt) {

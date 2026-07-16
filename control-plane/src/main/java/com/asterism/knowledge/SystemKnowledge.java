@@ -10,6 +10,7 @@ import java.time.Instant;
 public record SystemKnowledge(
         @Id @Column("entry_id") String entryId,
         @Column("system_id") String systemId,
+        @Column("repo_id") String repoId,
         String kind,
         String title,
         @Column("anchor_texts") String anchorTexts,

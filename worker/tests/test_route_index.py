@@ -26,3 +26,4 @@ def test_extracts_react_vue_spring_and_fastapi_routes(tmp_path):
     assert {"GET /api/orders/{id}", "POST /api/orders/{id}", "POST /api/refunds"} <= endpoints
     assert len([entry for entry in entries if entry["routePath"] == "/api/orders/{id}"]) == 1
     assert next(entry for entry in entries if entry["routePath"] == "/orders")["anchorTexts"] == ["orders", "/orders", "订单列表"]
+    assert {entry["repo"] for entry in extract_route_candidates(str(repo), "backend")} == {"backend"}

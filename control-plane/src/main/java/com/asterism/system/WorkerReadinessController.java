@@ -1,5 +1,6 @@
 package com.asterism.system;
 
+import com.asterism.git.GitIntegrationService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -14,16 +15,19 @@ import java.util.stream.StreamSupport;
 public class WorkerReadinessController {
     private final SystemProfileRepository systems;
     private final ExecutionReadinessService readiness;
+    private final GitIntegrationService git;
 
-    public WorkerReadinessController(SystemProfileRepository systems, ExecutionReadinessService readiness) {
+    public WorkerReadinessController(SystemProfileRepository systems, ExecutionReadinessService readiness,
+                                     GitIntegrationService git) {
         this.systems = systems;
         this.readiness = readiness;
+        this.git = git;
     }
 
     @GetMapping("/execution-targets")
     List<ExecutionTarget> targets() {
         return StreamSupport.stream(systems.findAll().spliterator(), false)
-                .map(system -> new ExecutionTarget(system.systemId(), system.repoPath()))
+                .map(system -> new ExecutionTarget(system.systemId(), system.repoPath(), git.get(system.systemId()).repos()))
                 .toList();
     }
 
@@ -33,6 +37,6 @@ public class WorkerReadinessController {
         readiness.report(report);
     }
 
-    public record ExecutionTarget(String systemId, String repoPath) {
+    public record ExecutionTarget(String systemId, String repoPath, List<GitIntegrationService.RepoConfig> repos) {
     }
 }

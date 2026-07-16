@@ -1,7 +1,5 @@
 import shlex
-import shutil
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -180,30 +178,6 @@ def release_repo(repo_path: str, work_item_id: str, title: str, diff_patch: str,
 
 def tail(value: str) -> str:
     return value[-TAIL_CHARS:]
-
-
-def prepare_workspace(repo_path: str, workspace_root: str) -> Path:
-    """把仓库复制到临时工作区；repo 不存在时保留空目录给 fake/http 使用。"""
-
-    root = Path(workspace_root)
-    root.mkdir(parents=True, exist_ok=True)
-    workspace = Path(tempfile.mkdtemp(prefix="case-", dir=root))
-    source = Path(repo_path).expanduser() if repo_path else None
-    if not source or not source.exists():
-        return workspace
-    target = workspace / "repo"
-    if (source / ".git").exists():
-        subprocess.run(["git", "clone", "--quiet", str(source), str(target)], check=True)
-    else:
-        shutil.copytree(source, target)
-    return target
-
-
-def cleanup_workspace(workspace: Path) -> None:
-    """run_execution 完成后清理临时目录，diff 已经保存在 workflow state。"""
-
-    root = workspace.parent if workspace.name == "repo" and workspace.parent.name.startswith("case-") else workspace
-    shutil.rmtree(root, ignore_errors=True)
 
 
 def validate_patch_paths(diff_patch: str, allowed_paths: list[str], forbidden_paths: list[str]) -> PatchApplyResult:

@@ -12,6 +12,7 @@ class PrdSpec(BaseModel):
 
 class AgentAssignment(BaseModel):
     role: str
+    repo: str = ""
     scope_paths: list[str] = Field(default_factory=list)
     step_refs: list[str] = Field(default_factory=list)
 
@@ -20,6 +21,19 @@ class AvailableAgent(BaseModel):
     name: str
     engine: str
     path_scope: list[str] = Field(default_factory=list)
+
+
+class RepoSnapshot(BaseModel):
+    repo_id: str
+    name: str = ""
+    kind: str = "other"
+    gitlab_project: str = ""
+    default_branch: str = "main"
+    clone_mode: str = "local"
+    local_path: str = ""
+    allowed_paths: list[str] = Field(default_factory=list)
+    forbidden_paths: list[str] = Field(default_factory=list)
+    test_commands: list[str] = Field(default_factory=list)
 
 
 class ModelProfileSnapshot(BaseModel):
@@ -59,6 +73,7 @@ class PlanRequest(BaseModel):
     system_id: str
     prd: PrdSpec
     repo_summary: str = ""
+    repos: list[RepoSnapshot] = Field(default_factory=list)
     memories: list[dict[str, Any]] = Field(default_factory=list)
     allowed_paths: list[str] = Field(default_factory=list)
     context_manifest_id: str
@@ -68,6 +83,7 @@ class PlanRequest(BaseModel):
 
 class HandoffContext(BaseModel):
     role: str
+    repo: str = ""
     summary: str
     diff_patch: str
     interface_notes: str = ""
@@ -80,6 +96,7 @@ class ExecutionRequest(BaseModel):
     work_item_id: str
     system_id: str
     repo_path: str
+    repo: RepoSnapshot | None = None
     goal: str
     acceptance_criteria: list[str] = Field(default_factory=list)
     plan: ExecutionPlan

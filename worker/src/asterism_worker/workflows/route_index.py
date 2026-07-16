@@ -12,7 +12,7 @@ class AsterismRouteIndexWorkflow:
     async def run(self, request: RouteIndexInput) -> int:
         entries = await workflow.execute_activity(
             "index_system_routes",
-            request.model_dump(),
+            request.model_dump(exclude_defaults=True),
             start_to_close_timeout=timedelta(minutes=5),
             retry_policy=RetryPolicy(maximum_attempts=2),
         )

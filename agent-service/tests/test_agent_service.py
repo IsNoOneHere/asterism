@@ -335,11 +335,14 @@ def test_plan_prompt_contains_only_available_agent_metadata():
     response = client.post("/plan", json={
         "system_id": "sys", "prd": {"goal": "g"}, "context_manifest_id": "m",
         "available_agents": [{"name": "frontend", "engine": "claude_sdk", "path_scope": ["web"]}],
+        "repos": [{"repo_id": "web", "name": "Web", "kind": "frontend"}],
     })
 
     assert response.status_code == 200
     assert "frontend" in llm.prompts[0]
     assert "claude_sdk" in llm.prompts[0]
+    assert "Every multi-repository change must set repo" in llm.prompts[0]
+    assert '"repo_id": "web"' in llm.prompts[0]
     assert "api_key" not in llm.prompts[0]
 
 

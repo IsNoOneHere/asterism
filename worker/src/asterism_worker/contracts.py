@@ -44,6 +44,19 @@ class AgentConfigSnapshot(BaseModel):
     agents: list[AgentSnapshot] = Field(default_factory=list)
 
 
+class RepoSnapshot(BaseModel):
+    repo_id: str
+    name: str = ""
+    kind: str = "other"
+    gitlab_project: str = ""
+    default_branch: str = "main"
+    clone_mode: str = "local"
+    local_path: str = ""
+    allowed_paths: list[str] = Field(default_factory=list)
+    forbidden_paths: list[str] = Field(default_factory=list)
+    test_commands: list[str] = Field(default_factory=list)
+
+
 class CaseInput(BaseModel):
     # 旧 history 的散字段保留在 model_extra，仅用于无快照 replay。
     model_config = ConfigDict(extra="allow")
@@ -57,7 +70,25 @@ class CaseInput(BaseModel):
     allowed_paths: list[str] = Field(default_factory=list)
     forbidden_paths: list[str] = Field(default_factory=list)
     test_commands: list[str] = Field(default_factory=list)
+    repos: list[RepoSnapshot] = Field(default_factory=list)
+    release_mode: str = "local"
+    validation_mode: str = "auto"
+    mr_target_branch: str = ""
+    mr_labels: list[str] = Field(default_factory=list)
     agent_config_snapshot: AgentConfigSnapshot | None = None
+
+    def effective_repos(self) -> list[RepoSnapshot]:
+        # 旧 workflow history 没有 repos，继续使用原单仓字段。
+        if self.repos:
+            return self.repos
+        return [RepoSnapshot(
+            repo_id="main",
+            name="main",
+            local_path=self.repo_path,
+            allowed_paths=self.allowed_paths,
+            forbidden_paths=self.forbidden_paths,
+            test_commands=self.test_commands,
+        )]
 
 
 class ProjectionEvent(BaseModel):
@@ -75,6 +106,7 @@ class ProjectionEvent(BaseModel):
 
 class HandoffContext(BaseModel):
     role: str
+    repo: str = ""
     summary: str
     diff_patch: str
     interface_notes: str = ""
@@ -87,6 +119,7 @@ class ExecutionRequest(BaseModel):
     work_item_id: str
     system_id: str
     repo_path: str
+    repo: RepoSnapshot | None = None
     goal: str
     acceptance_criteria: list[str] = Field(default_factory=list)
     plan: "ExecutionPlan"
@@ -148,6 +181,7 @@ class ExecutionResult(BaseModel):
     turns: int | None = None
     token_usage: dict[str, Any] = Field(default_factory=dict)
     role_id: str = ""
+    repo: str = ""
     engine: str = ""
     changed_paths: list[str] = Field(default_factory=list)
     blocked_reason: str = ""
@@ -187,6 +221,7 @@ class ExecutionPlan(BaseModel):
 
 class AgentAssignment(BaseModel):
     role: str
+    repo: str = ""
     scope_paths: list[str] = Field(default_factory=list)
     step_refs: list[str] = Field(default_factory=list)
 
@@ -201,6 +236,7 @@ class PlanRequest(BaseModel):
     system_id: str
     prd: PrdSpec
     repo_summary: str = ""
+    repos: list[RepoSnapshot] = Field(default_factory=list)
     memories: list[dict[str, Any]] = Field(default_factory=list)
     allowed_paths: list[str] = Field(default_factory=list)
     context_manifest_id: str
@@ -210,10 +246,15 @@ class PlanRequest(BaseModel):
 
 class RouteIndexInput(BaseModel):
     system_id: str
-    repo_path: str
+    repo_path: str = ""
+    repos: list[RepoSnapshot] = Field(default_factory=list)
+
+    def effective_repos(self) -> list[RepoSnapshot]:
+        return self.repos or [RepoSnapshot(repo_id="main", name="main", local_path=self.repo_path)]
 
 
 class KnowledgeCandidate(BaseModel):
+    repo: str = "main"
     kind: str
     title: str
     anchorTexts: list[str] = Field(default_factory=list)

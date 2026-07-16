@@ -24,7 +24,7 @@ public class KnowledgeMatchService {
         if (approvedCount == 0 || anchors == null || anchors.isEmpty()) return new MatchResult(List.of(), approvedCount == 0);
         var query = String.join(" ", anchors);
         var targets = jdbc.sql("""
-                        select entry_id, kind, title, route_path, api_endpoints::text, code_refs::text,
+                        select entry_id, repo_id, kind, title, route_path, api_endpoints::text, code_refs::text,
                                greatest(similarity(title, :query), similarity(anchor_texts, :query)) as confidence
                         from system_knowledge
                         where system_id = :systemId and status = 'approved'
@@ -34,7 +34,7 @@ public class KnowledgeMatchService {
                 .param("query", query)
                 .param("systemId", systemId)
                 .query((rs, rowNum) -> new SuspectedTarget(
-                        rs.getString("entry_id"), rs.getString("kind"), rs.getString("title"),
+                        rs.getString("entry_id"), rs.getString("repo_id"), rs.getString("kind"), rs.getString("title"),
                         rs.getString("route_path"), readList(rs.getString("api_endpoints")),
                         readList(rs.getString("code_refs")), rs.getDouble("confidence")))
                 .list();
@@ -49,8 +49,12 @@ public class KnowledgeMatchService {
         }
     }
 
-    public record SuspectedTarget(String entryId, String kind, String title, String routePath,
+    public record SuspectedTarget(String entryId, String repo, String kind, String title, String routePath,
                                   List<String> apiEndpoints, List<String> codeRefs, double confidence) {
+        public SuspectedTarget(String entryId, String kind, String title, String routePath,
+                               List<String> apiEndpoints, List<String> codeRefs, double confidence) {
+            this(entryId, "main", kind, title, routePath, apiEndpoints, codeRefs, confidence);
+        }
     }
 
     public record MatchResult(List<SuspectedTarget> targets, boolean knowledgeEmpty) {

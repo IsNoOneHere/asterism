@@ -13,6 +13,7 @@ export function KnowledgePage() {
   const queryClient = useQueryClient();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [status, setStatus] = useState<Status>('candidate');
+  const [repo, setRepo] = useState('main');
   const [kind, setKind] = useState('page');
   const [title, setTitle] = useState('');
   const [anchors, setAnchors] = useState('');
@@ -24,11 +25,16 @@ export function KnowledgePage() {
     queryFn: () => api.knowledge(systemId, status),
     enabled: Boolean(systemId),
   });
+  const gitConfig = useQuery({
+    queryKey: ['git-config', systemId],
+    queryFn: () => api.gitConfiguration(systemId),
+    enabled: Boolean(systemId),
+  });
   const values = entries.data ?? [];
   const filteredValues = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     if (!keyword) return values;
-    return values.filter((entry) => [entry.title, entry.kind, kindName(entry.kind), entry.routePath, entry.source, ...entry.anchorTexts, ...entry.apiEndpoints]
+    return values.filter((entry) => [entry.title, entry.repo, entry.kind, kindName(entry.kind), entry.routePath, entry.source, ...entry.anchorTexts, ...entry.apiEndpoints]
       .some((value) => value?.toLowerCase().includes(keyword)));
   }, [query, values]);
   // 知识库固定每页 10 条，切换状态时自动回到第一页。
@@ -36,7 +42,7 @@ export function KnowledgePage() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['knowledge', systemId] });
   const create = useMutation({
     mutationFn: () => api.createKnowledge(systemId, {
-      kind, title, anchorTexts: lines(anchors), routePath, apiEndpoints: lines(apiEndpoints), codeRefs: [], sourceRef: '',
+      repo, kind, title, anchorTexts: lines(anchors), routePath, apiEndpoints: lines(apiEndpoints), codeRefs: [], sourceRef: '',
     }),
     onSuccess: () => {
       console.info('v5 workbench 新增知识条目', { systemId, kind, title });
@@ -51,6 +57,7 @@ export function KnowledgePage() {
   const index = useMutation({ mutationFn: () => api.runRouteIndex(systemId) });
 
   function resetDraft() {
+    setRepo(gitConfig.data?.repos[0]?.repoId || 'main');
     setKind('page');
     setTitle('');
     setAnchors('');
@@ -88,7 +95,7 @@ export function KnowledgePage() {
       </div>
       <div className="table-frame"><table className="data-table management-table knowledge-table"><thead><tr><th>知识条目</th><th>类型</th><th>路由 / 接口</th><th>来源</th><th>操作</th></tr></thead><tbody>
         {pagination.pageItems.map((entry) => <tr key={entry.entryId}>
-          <td><div className="table-title"><strong>{entry.title}</strong><span>{entry.anchorTexts.join('、') || '未设置可见文字锚点'}</span></div></td>
+          <td><div className="table-title"><strong>{entry.title}</strong><span>仓库：{entry.repo || 'main'} · {entry.anchorTexts.join('、') || '未设置可见文字锚点'}</span></div></td>
           <td><span className="status-badge info">{kindName(entry.kind)}</span></td>
           <td><div className="table-title"><strong>{entry.routePath || '未设置路由'}</strong><span>{entry.apiEndpoints.join('、') || '未设置接口'}</span></div></td>
           <td>{entry.source || '手工录入'}</td>
@@ -103,6 +110,7 @@ export function KnowledgePage() {
     <dialog ref={dialogRef} className="confirm-dialog config-dialog knowledge-dialog" aria-labelledby="knowledge-dialog-title" onClose={resetDraft}>
       <form onSubmit={(event: FormEvent) => { event.preventDefault(); create.mutate(); }}>
         <div className="config-section-head compact"><div><h2 id="knowledge-dialog-title">新增知识条目</h2><p>新条目会先进入待审批列表。</p></div></div>
+        <label>所属仓库<select value={repo} onChange={(event) => setRepo(event.target.value)}>{(gitConfig.data?.repos || []).map((item) => <option key={item.repoId} value={item.repoId}>{item.name}</option>)}{!gitConfig.data?.repos.length && <option value="main">main</option>}</select></label>
         <label>类型<select value={kind} onChange={(event) => setKind(event.target.value)}><option value="page">页面</option><option value="route">路由</option><option value="api">接口</option></select></label>
         <label>标题<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label>
         {kind !== 'api' && <label>可见文字锚点<span className="field-note">每行一条，用于定位页面。</span><textarea rows={4} value={anchors} onChange={(event) => setAnchors(event.target.value)} /></label>}

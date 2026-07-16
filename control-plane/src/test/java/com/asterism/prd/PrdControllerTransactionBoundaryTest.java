@@ -2,6 +2,7 @@ package com.asterism.prd;
 
 import com.asterism.attachment.Attachment;
 import com.asterism.event.DomainEventService;
+import com.asterism.git.GitIntegrationService;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.knowledge.KnowledgeMatchService;
 import com.asterism.memory.MemoryItemRepository;
@@ -127,6 +128,13 @@ class PrdControllerTransactionBoundaryTest {
         assertThat(holder.command.allowedPaths()).containsExactly("src", "README.md");
         assertThat(holder.command.forbiddenPaths()).containsExactly("secrets");
         assertThat(holder.command.testCommands()).containsExactly("mvn test");
+        assertThat(holder.command.repos()).singleElement().satisfies(repo -> {
+            assertThat(repo.repoId()).isEqualTo("main");
+            assertThat(repo.localPath()).isEqualTo("/repo/demo");
+            assertThat(repo.allowedPaths()).containsExactly("src", "README.md");
+        });
+        assertThat(holder.command.releaseMode()).isEqualTo("local");
+        assertThat(holder.command.toString()).doesNotContainIgnoringCase("token");
         assertThat(holder.command.agentConfigSnapshot().agents()).singleElement().satisfies(agent -> {
             assertThat(agent.name()).isEqualTo("developer");
             assertThat(agent.engine()).isEqualTo("claude_sdk");
@@ -216,11 +224,16 @@ class PrdControllerTransactionBoundaryTest {
         var aggregate = mock(JdbcAggregateTemplate.class);
         var workItemIds = mock(WorkItemIdGenerator.class);
         var readiness = mock(ExecutionReadinessService.class);
+        var git = mock(GitIntegrationService.class);
         when(readiness.readiness(any())).thenReturn(new ExecutionReadinessService.SystemReadiness(
                 "sys-1", true, Instant.now(), "claude_sdk", List.of(), List.of()));
         when(workItemIds.nextId()).thenReturn("WI202607114827");
         when(sessions.findById("prd-1")).thenReturn(Optional.of(session(visibleStatus)), Optional.of(session(lockedStatus)));
         when(systems.findById("sys-1")).thenReturn(Optional.of(system()));
+        when(git.internal("sys-1")).thenReturn(new GitIntegrationService.InternalGitConfiguration(
+                List.of(new GitIntegrationService.RepoConfig("main", "Demo", "other", "", "main", "local",
+                        "/repo/demo", List.of("src", "README.md"), List.of("secrets"), List.of("mvn test"))),
+                "local", "auto", "main", List.of(), "", ""));
         when(configurations.internal("sys-1")).thenReturn(new AgentConfigurationService.InternalAgentConfiguration(
                 List.of(new AgentConfigurationService.ModelProfile(
                         "mp-1", "Claude", "anthropic", "https://example.invalid", "never-in-snapshot",
@@ -258,7 +271,8 @@ class PrdControllerTransactionBoundaryTest {
         };
         var objectMapper = new ObjectMapper();
         var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
-                new PrdDraftCodec(objectMapper), tx, access, systems, configurations, aggregate, workItemIds, readiness);
+                new PrdDraftCodec(objectMapper), tx, access, systems, configurations, aggregate, workItemIds,
+                readiness, git);
         return new PrdController(mock(PrdConversationService.class), confirmations);
     }
 

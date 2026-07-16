@@ -4,7 +4,7 @@ from temporalio.common import RetryPolicy
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, ApplicationError
 
-from asterism_worker.contracts import AgentAssignment, CaseInput, ContextSnapshot, ExecutionPlan, ExecutionResult, HandoffContext, PatchApplyResult, ProjectionEvent, ValidationResult
+from asterism_worker.contracts import AgentAssignment, CaseInput, ContextSnapshot, ExecutionPlan, ExecutionResult, HandoffContext, PatchApplyResult, ProjectionEvent, RepoSnapshot, ValidationResult
 from asterism_worker.workflows.state_machine import CaseState, TERMINAL_STATUSES
 
 HANDOFF_DIFF_LIMIT_BYTES = 32 * 1024
@@ -21,12 +21,15 @@ class AsterismCaseWorkflow:
         self.completed_stage_results: list[ExecutionResult] = []
         self.failed_stage_index: int | None = None
         self.stage_resume_enabled = False
+        self.multi_repo_enabled = False
 
     @workflow.run
     async def run(self, case_input: CaseInput) -> str:
         self.case_input = case_input
         # Patch marker 让部署前已启动的 history 保持原 rework 行为。
         self.stage_resume_enabled = workflow.patched("multi-agent-stage-resume-v1")
+        # 多仓会改变 activity payload，旧 history 必须继续走原单仓命令。
+        self.multi_repo_enabled = workflow.patched("multi-repo-workspace-v1")
         while self.state.status not in TERMINAL_STATUSES:
             await workflow.wait_condition(lambda: bool(self.pending_actions) or self.state.status in TERMINAL_STATUSES)
             while self.pending_actions:
@@ -124,10 +127,17 @@ class AsterismCaseWorkflow:
             await self._block_worker(signal_id, "context_fetch_failed", error)
             return
         snapshot = ContextSnapshot.model_validate(result_payload)
+        invalid_repo = ""
         try:
+            summary_request = {"repo_path": case_input.repo_path}
+            if self.multi_repo_enabled:
+                summary_request.update({
+                    "system_id": case_input.system_id,
+                    "repos": [repo.model_dump() for repo in case_input.effective_repos()],
+                })
             repo_summary = await workflow.execute_activity(
                 "summarize_repo",
-                {"repo_path": case_input.repo_path},
+                summary_request,
                 start_to_close_timeout=timedelta(seconds=20),
                 retry_policy=RetryPolicy(maximum_attempts=1),
             )
@@ -139,6 +149,8 @@ class AsterismCaseWorkflow:
                 "allowed_paths": case_input.allowed_paths,
                 "context_manifest_id": snapshot.manifest_id,
             }
+            if self.multi_repo_enabled:
+                plan_request["repos"] = [repo.model_dump() for repo in case_input.effective_repos()]
             if case_input.agent_config_snapshot is not None:
                 plan_request["agent_config_snapshot"] = case_input.agent_config_snapshot.model_dump()
                 plan_request["available_agents"] = self._available_agents()
@@ -151,25 +163,37 @@ class AsterismCaseWorkflow:
             plan = ExecutionPlan.model_validate(plan_payload)
             if not plan.steps:
                 raise RuntimeError("empty plan")
-            await workflow.execute_activity(
-                "validate_plan_targets_activity",
-                {
-                    "repo_path": case_input.repo_path,
-                    "target_files": plan.target_files,
-                },
-                start_to_close_timeout=timedelta(seconds=20),
-                retry_policy=RetryPolicy(maximum_attempts=1),
-            )
+            invalid_repo = self._invalid_repo(plan) if self.multi_repo_enabled else ""
+            target_request = {
+                "repo_path": case_input.repo_path,
+                "target_files": plan.target_files,
+            }
+            if self.multi_repo_enabled and not invalid_repo:
+                target_request.update({
+                    "system_id": case_input.system_id,
+                    "repos": [repo.model_dump() for repo in case_input.effective_repos()],
+                    "assignments": [assignment.model_dump() for assignment in plan.assignments],
+                })
+            if not invalid_repo:
+                await workflow.execute_activity(
+                    "validate_plan_targets_activity",
+                    target_request,
+                    start_to_close_timeout=timedelta(seconds=20),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                )
         except Exception as error:
             await self._block_worker(signal_id, "planner_failed", error)
             return
         await self._emit("ExecutionPlanDrafted", signal_id, {
-            "plan": plan.model_dump(),
+            "plan": self._plan_payload(plan),
             "contextManifestId": snapshot.manifest_id,
         })
         unknown_role = self._unknown_role(plan)
         if unknown_role:
             await self._block_worker(signal_id, "unknown_role", RuntimeError(unknown_role))
+            return
+        if invalid_repo:
+            await self._block_worker(signal_id, "unknown_repo", RuntimeError(invalid_repo))
             return
         self.execution_plan = plan
         self.context_snapshot = snapshot
@@ -184,7 +208,7 @@ class AsterismCaseWorkflow:
                                    snapshot: ContextSnapshot) -> None:
         self.failed_stage_index = None
         case_input = self._case_input()
-        await self._emit(self.state.modification_finished(result), signal_id, {
+        payload = {
             "summary": result.summary,
             "diffPatch": result.diff_patch,
             "goal": case_input.prd.goal,
@@ -192,17 +216,24 @@ class AsterismCaseWorkflow:
             "executionProvider": result.execution_provider,
             "turns": result.turns,
             "tokenUsage": result.token_usage,
-        })
+        }
+        if self.multi_repo_enabled:
+            payload["repoDiffs"] = [
+                {"repo": repo.repo_id, "diffPatch": diff}
+                for repo, diff in self._repo_diffs()
+            ]
+        await self._emit(self.state.modification_finished(result), signal_id, payload)
 
     async def _run_execution_plan(self, signal_id: str, plan: ExecutionPlan,
                                   snapshot: ContextSnapshot, start_index: int = 0) -> ExecutionResult | None:
         assignments = plan.assignments or [AgentAssignment(role="")]
         results = list(self.completed_stage_results) if start_index else []
-        used_paths: set[str] = set()
+        used_paths: set[str | tuple[str, str]] = set()
         handoff: list[HandoffContext] = []
         for index, result in enumerate(results):
             paths = set(result.changed_paths or self._diff_paths(result.diff_patch))
-            used_paths.update(paths)
+            repo_id = result.repo or self._repo_for_assignment(assignments[index]).repo_id
+            used_paths.update(self._path_keys(repo_id, paths))
             handoff.append(self._handoff_context(assignments[index], result, paths))
         for index in range(start_index, len(assignments)):
             assignment = assignments[index]
@@ -219,6 +250,8 @@ class AsterismCaseWorkflow:
                 await self._block_execution_stage(signal_id, "execution_failed", error, index, assignments, results)
                 return None
             result = ExecutionResult.model_validate(payload)
+            if self.multi_repo_enabled and not result.repo:
+                result = result.model_copy(update={"repo": self._repo_for_assignment(assignment).repo_id})
             if result.blocked_reason:
                 await self._block_execution_stage(
                     signal_id, result.blocked_reason,
@@ -232,13 +265,15 @@ class AsterismCaseWorkflow:
                 )
                 return None
             paths = set(result.changed_paths or self._diff_paths(result.diff_patch))
-            conflict = sorted(used_paths & paths)
+            repo_id = result.repo or self._repo_for_assignment(assignment).repo_id
+            path_keys = self._path_keys(repo_id, paths)
+            conflict = sorted(str(item) for item in used_paths & path_keys)
             if conflict:
                 await self._block_execution_stage(
                     signal_id, "handoff_conflict", RuntimeError(", ".join(conflict)), index, assignments, results,
                 )
                 return None
-            used_paths.update(paths)
+            used_paths.update(path_keys)
             results.append(result)
             handoff.append(self._handoff_context(assignment, result, paths))
             if self._resumable(plan):
@@ -251,7 +286,10 @@ class AsterismCaseWorkflow:
                     "summary": result.summary,
                     "changedPaths": sorted(paths),
                     "tokenUsage": result.token_usage,
+                    **({"repo": repo_id} if self.multi_repo_enabled else {}),
                 }, suffix=f"stage:{index}:{assignment.role}")
+        if self.multi_repo_enabled:
+            self.completed_stage_results = list(results)
         if len(results) == 1:
             return results[0]
         return ExecutionResult(
@@ -259,32 +297,36 @@ class AsterismCaseWorkflow:
             diff_patch="\n".join(result.diff_patch.rstrip() for result in results) + "\n",
             execution_provider="handoff",
             engine="handoff",
-            changed_paths=sorted(used_paths),
+            changed_paths=sorted({path for result in results for path in result.changed_paths}),
             token_usage=self._merge_usage(results),
         )
 
     def _execution_request(self, plan: ExecutionPlan, snapshot: ContextSnapshot,
                            assignment: AgentAssignment, index: int, handoff: list[HandoffContext]) -> dict:
         case_input = self._case_input()
+        repo = self._repo_for_assignment(assignment) if self.multi_repo_enabled else None
         request = {
             "case_id": case_input.case_id,
             "work_item_id": case_input.work_item_id,
             "system_id": case_input.system_id,
-            "repo_path": case_input.repo_path,
+            "repo_path": repo.local_path if repo else case_input.repo_path,
             "goal": case_input.prd.goal,
             "acceptance_criteria": case_input.prd.acceptance_criteria,
-            "plan": plan.model_dump(),
+            "plan": self._plan_payload(plan),
             "memories": snapshot.approved_memories,
             "context_manifest_id": snapshot.manifest_id,
-            "allowed_paths": case_input.allowed_paths,
-            "forbidden_paths": case_input.forbidden_paths,
-            "test_commands": case_input.test_commands,
+            "allowed_paths": repo.allowed_paths if repo else case_input.allowed_paths,
+            "forbidden_paths": repo.forbidden_paths if repo else case_input.forbidden_paths,
+            "test_commands": repo.test_commands if repo else case_input.test_commands,
             "role_id": assignment.role,
             "role_scope": assignment.scope_paths,
-            "handoff": [item.model_dump() for item in handoff],
+            "handoff": [item.model_dump() if self.multi_repo_enabled else item.model_dump(exclude={"repo"})
+                        for item in handoff],
             "assignment_index": index,
             "step_refs": assignment.step_refs,
         }
+        if repo:
+            request["repo"] = repo.model_dump()
         if case_input.agent_config_snapshot is not None:
             request["agent_config_snapshot"] = case_input.agent_config_snapshot.model_dump()
         else:
@@ -317,6 +359,7 @@ class AsterismCaseWorkflow:
         completed = [
             {
                 "role": assignments[stage_index].role,
+                **({"repo": result.repo} if self.multi_repo_enabled else {}),
                 "summary": result.summary,
                 "changed_paths": sorted(result.changed_paths or self._diff_paths(result.diff_patch)),
             }
@@ -324,7 +367,12 @@ class AsterismCaseWorkflow:
         ]
         await self._block_worker(signal_id, reason, error, {
             "completed_stages": completed,
-            "failed_stage": {"index": index, "role": assignments[index].role},
+            "failed_stage": {
+                "index": index,
+                "role": assignments[index].role,
+                **({"repo": self._repo_for_assignment(assignments[index]).repo_id}
+                   if self.multi_repo_enabled else {}),
+            },
         })
 
     def _can_resume(self) -> bool:
@@ -347,6 +395,7 @@ class AsterismCaseWorkflow:
                          paths: set[str]) -> HandoffContext:
         return HandoffContext(
             role=assignment.role or "developer",
+            repo=result.repo or assignment.repo,
             summary=result.summary,
             diff_patch=_handoff_diff(result.diff_patch, sorted(paths)),
             interface_notes=result.interface_notes or "",
@@ -369,6 +418,45 @@ class AsterismCaseWorkflow:
         selected = [assignment.role for assignment in plan.assignments] or ["developer"]
         return next((name for name in selected if name not in names), "")
 
+    def _invalid_repo(self, plan: ExecutionPlan) -> str:
+        repos = self._case_input().effective_repos()
+        if len(repos) > 1 and not plan.assignments:
+            return "多仓计划必须为每个 assignment 指定 repo"
+        known = {repo.repo_id for repo in repos}
+        for assignment in plan.assignments:
+            if not assignment.repo and len(repos) > 1:
+                return "多仓 assignment 缺少 repo"
+            if assignment.repo and assignment.repo not in known:
+                return assignment.repo
+        return ""
+
+    def _repo_for_assignment(self, assignment: AgentAssignment) -> RepoSnapshot:
+        repos = self._case_input().effective_repos()
+        repo_id = assignment.repo or (repos[0].repo_id if len(repos) == 1 else "")
+        return next((repo for repo in repos if repo.repo_id == repo_id), repos[0])
+
+    def _path_keys(self, repo_id: str, paths: set[str]) -> set[str | tuple[str, str]]:
+        if not self.multi_repo_enabled:
+            return set(paths)
+        return {(repo_id, path) for path in paths}
+
+    def _plan_payload(self, plan: ExecutionPlan) -> dict:
+        payload = plan.model_dump()
+        if not self.multi_repo_enabled:
+            for assignment in payload["assignments"]:
+                assignment.pop("repo", None)
+        return payload
+
+    def _repo_diffs(self) -> list[tuple[RepoSnapshot, str]]:
+        repos = self._case_input().effective_repos()
+        if not self.multi_repo_enabled or not self.completed_stage_results:
+            return [(repos[0], self.state.diff_patch)]
+        grouped: dict[str, list[str]] = {}
+        for result in self.completed_stage_results:
+            grouped.setdefault(result.repo or repos[0].repo_id, []).append(result.diff_patch.rstrip())
+        by_id = {repo.repo_id: repo for repo in repos}
+        return [(by_id[repo_id], "\n".join(parts) + "\n") for repo_id, parts in grouped.items()]
+
     def _execution_timeout(self, assignment: AgentAssignment) -> int:
         case_input = self._case_input()
         if case_input.agent_config_snapshot is not None:
@@ -382,27 +470,40 @@ class AsterismCaseWorkflow:
         if self.state.status.value != "modification_completed":
             workflow.logger.warning("非法 patch_apply_approved，已忽略", extra={"status": self.state.status.value})
             return
-        try:
-            result_payload = await workflow.execute_activity(
-                "apply_patch_to_repo",
-                {
-                    "repo_path": case_input.repo_path,
-                    "diff_patch": self.state.diff_patch,
-                    "allowed_paths": case_input.allowed_paths,
-                    "forbidden_paths": case_input.forbidden_paths,
-                },
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=RetryPolicy(maximum_attempts=3),
-            )
-        except (ActivityError, ApplicationError) as error:
-            await self._block_worker(signal_id, "patch_apply_failed", error)
-            return
-        result = PatchApplyResult.model_validate(result_payload)
-        if result.blocked:
-            await self._emit(self.state.patch_apply_blocked(), signal_id, {"reason": result.reason})
-            return
-        await self._emit(self.state.patch_apply_approved(), signal_id, {})
-        if case_input.test_commands:
+        changes = self._repo_diffs() if self.multi_repo_enabled else [
+            (case_input.effective_repos()[0], self.state.diff_patch)
+        ]
+        applied = []
+        for repo, diff_patch in changes:
+            try:
+                result_payload = await workflow.execute_activity(
+                    "apply_patch_to_repo",
+                    {
+                        "repo_path": repo.local_path,
+                        "diff_patch": diff_patch,
+                        "allowed_paths": repo.allowed_paths,
+                        "forbidden_paths": repo.forbidden_paths,
+                    },
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+            except (ActivityError, ApplicationError) as error:
+                await self._revert_changes(applied, signal_id)
+                await self._block_worker(signal_id, "patch_apply_failed", error,
+                                         {"repo": repo.repo_id} if self.multi_repo_enabled else None)
+                return
+            result = PatchApplyResult.model_validate(result_payload)
+            if result.blocked:
+                await self._revert_changes(applied, signal_id)
+                await self._emit(self.state.patch_apply_blocked(), signal_id, {
+                    "reason": result.reason,
+                    **({"repo": repo.repo_id} if self.multi_repo_enabled else {}),
+                })
+                return
+            applied.append((repo, diff_patch))
+        await self._emit(self.state.patch_apply_approved(), signal_id,
+                         {"repositories": [repo.repo_id for repo, _ in changes]} if self.multi_repo_enabled else {})
+        if any(repo.test_commands for repo, _ in changes):
             await self._run_validation(signal_id)
 
     async def _release(self, signal_id: str) -> None:
@@ -410,65 +511,90 @@ class AsterismCaseWorkflow:
         if self.state.status.value != "validation_passed":
             workflow.logger.warning("非法 release_approved，已忽略", extra={"status": self.state.status.value})
             return
-        try:
-            result = await workflow.execute_activity(
-                "run_release",
-                {
-                    "repo_path": case_input.repo_path,
-                    "work_item_id": case_input.work_item_id,
-                    "title": case_input.prd.title,
-                    "diff_patch": self.state.diff_patch,
-                },
-                start_to_close_timeout=timedelta(minutes=2),
-                retry_policy=RetryPolicy(maximum_attempts=1),
-            )
-        except (ActivityError, ApplicationError) as error:
-            await self._block_worker(signal_id, "release_failed", error)
-            return
-        await self._emit(self.state.release_approved(), signal_id, {
-            "branch": result.get("branch", ""),
-            "commitHash": result.get("commit_hash", ""),
-            "pushFailed": result.get("push_failed", ""),
-            "changedPaths": self._diff_paths(self.state.diff_patch),
-        })
+        releases = []
+        for repo, diff_patch in self._repo_diffs():
+            try:
+                result = await workflow.execute_activity(
+                    "run_release",
+                    {
+                        "repo_path": repo.local_path,
+                        "work_item_id": case_input.work_item_id,
+                        "title": case_input.prd.title,
+                        "diff_patch": diff_patch,
+                    },
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                )
+            except (ActivityError, ApplicationError) as error:
+                await self._block_worker(signal_id, "release_failed", error,
+                                         {"repo": repo.repo_id} if self.multi_repo_enabled else None)
+                return
+            releases.append({
+                "repo": repo.repo_id,
+                "branch": result.get("branch", ""),
+                "commitHash": result.get("commit_hash", ""),
+                "pushFailed": result.get("push_failed", ""),
+                "changedPaths": self._diff_paths(diff_patch),
+            })
+        first = releases[0]
+        payload = {
+            "branch": first["branch"],
+            "commitHash": first["commitHash"],
+            "pushFailed": first["pushFailed"],
+            "changedPaths": (sorted({path for item in releases for path in item["changedPaths"]})
+                             if self.multi_repo_enabled else self._diff_paths(self.state.diff_patch)),
+        }
+        if self.multi_repo_enabled:
+            payload["repositories"] = releases
+        await self._emit(self.state.release_approved(), signal_id, payload)
 
     async def _revert_if_needed(self, signal_id: str) -> None:
         if not self.state.diff_patch:
             return
-        try:
-            await workflow.execute_activity(
-                "revert_patch",
-                {
-                    "repo_path": self._case_input().repo_path,
-                    "diff_patch": self.state.diff_patch,
-                },
-                start_to_close_timeout=timedelta(minutes=1),
-                retry_policy=RetryPolicy(maximum_attempts=1),
-            )
-        except (ActivityError, ApplicationError):
-            workflow.logger.warning("回滚 patch activity 失败，继续处理信号", extra={"signal_id": signal_id})
+        await self._revert_changes(self._repo_diffs(), signal_id)
 
     async def _run_validation(self, signal_id: str) -> None:
-        case_input = self._case_input()
-        result_payload = await workflow.execute_activity(
-            "run_validation",
-            {
-                "repo_path": case_input.repo_path,
-                "test_commands": case_input.test_commands,
-            },
-            start_to_close_timeout=timedelta(minutes=10),
-            retry_policy=RetryPolicy(maximum_attempts=1),
-        )
-        result = ValidationResult.model_validate(result_payload)
-        payload = {
-            "commands": [command.model_dump() for command in result.commands],
-            "failedCommand": result.failed_command,
-            "stderrTail": result.stderr_tail,
-        }
-        if result.passed:
-            await self._emit(self.state.validation_passed(), signal_id, payload)
-            return
-        await self._emit(self.state.validation_rejected(), signal_id, payload)
+        commands = []
+        for repo, _ in self._repo_diffs():
+            if not repo.test_commands:
+                continue
+            result_payload = await workflow.execute_activity(
+                "run_validation",
+                {"repo_path": repo.local_path, "test_commands": repo.test_commands},
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+            result = ValidationResult.model_validate(result_payload)
+            commands.extend([
+                {**command.model_dump(), **({"repo": repo.repo_id} if self.multi_repo_enabled else {})}
+                for command in result.commands
+            ])
+            if not result.passed:
+                await self._emit(self.state.validation_rejected(), signal_id, {
+                    "commands": commands,
+                    "failedCommand": result.failed_command,
+                    "stderrTail": result.stderr_tail,
+                    **({"repo": repo.repo_id} if self.multi_repo_enabled else {}),
+                })
+                return
+        await self._emit(self.state.validation_passed(), signal_id, {
+            "commands": commands,
+            "failedCommand": "",
+            "stderrTail": "",
+        })
+
+    async def _revert_changes(self, changes: list, signal_id: str) -> None:
+        for repo, diff_patch in changes:
+            try:
+                await workflow.execute_activity(
+                    "revert_patch",
+                    {"repo_path": repo.local_path, "diff_patch": diff_patch},
+                    start_to_close_timeout=timedelta(minutes=1),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                )
+            except (ActivityError, ApplicationError):
+                workflow.logger.warning("回滚 patch activity 失败，继续处理信号",
+                                        extra={"signal_id": signal_id, "repo": repo.repo_id})
 
     async def _emit(self, event_type: str | None, signal_id: str, payload: dict, suffix: str = "") -> None:
         if event_type is None:
