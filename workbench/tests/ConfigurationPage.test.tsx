@@ -66,3 +66,26 @@ test('builtin product only edits its profile and cannot be deleted', async () =>
   fireEvent.click(screen.getByRole('button', { name: '保存 Agent' }));
   await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/agents/product', expect.objectContaining({ method: 'PATCH' })));
 });
+
+test('git publishing configuration edits multiple repositories without rendering token', async () => {
+  renderApp('/systems');
+  fireEvent.click((await screen.findAllByRole('button', { name: '编辑' }))[0]);
+
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog).toHaveTextContent('Git 与发布');
+  expect(screen.getByLabelText('GitLab Token')).toHaveAttribute('placeholder', '留空保留现有 Token');
+  fireEvent.change(screen.getByLabelText('发布模式'), { target: { value: 'gitlab' } });
+  fireEvent.change(screen.getByLabelText('GitLab Token'), { target: { value: 'temporary-value' } });
+  fireEvent.click(screen.getByRole('button', { name: '添加仓库' }));
+  fireEvent.change(screen.getByLabelText('仓库 2 GitLab Project'), { target: { value: 'alpha/api' } });
+  fireEvent.change(screen.getByLabelText('仓库 2 克隆方式'), { target: { value: 'gitlab' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存系统' }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/git-config', expect.objectContaining({ method: 'PUT' })));
+  const call = vi.mocked(fetch).mock.calls.find(([path, init]) => path === '/api/v5/systems/alpha-system/git-config' && init?.method === 'PUT');
+  const body = JSON.parse(String(call?.[1]?.body));
+  expect(body.releaseMode).toBe('gitlab');
+  expect(body.repos).toHaveLength(2);
+  expect(body.repos[1].gitlabProject).toBe('alpha/api');
+  expect(screen.queryByText('temporary-value')).not.toBeInTheDocument();
+});

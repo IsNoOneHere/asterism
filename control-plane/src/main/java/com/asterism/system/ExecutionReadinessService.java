@@ -1,9 +1,11 @@
 package com.asterism.system;
 
+import com.asterism.git.GitIntegrationService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -19,9 +21,17 @@ public class ExecutionReadinessService {
 
     private final Map<String, WorkerReadinessReport> workers = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper;
+    private final GitIntegrationService git;
 
-    public ExecutionReadinessService(ObjectMapper objectMapper) {
+    @Autowired
+    public ExecutionReadinessService(ObjectMapper objectMapper, GitIntegrationService git) {
         this.objectMapper = objectMapper;
+        this.git = git;
+    }
+
+    ExecutionReadinessService(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+        this.git = null;
     }
 
     public void report(WorkerReadinessReport report) {
@@ -34,6 +44,9 @@ public class ExecutionReadinessService {
                 .filter(report -> report.receivedAt() != null && Duration.between(report.receivedAt(), now).compareTo(HEARTBEAT_TTL) <= 0)
                 .toList();
         var executionProvider = developerEngine(readMap(profile.modelProviderConfig()));
+        var gitConfig = git == null ? null : git.get(profile.systemId());
+        var gitlabMode = gitConfig != null && "gitlab".equals(gitConfig.releaseMode());
+        var gitReadiness = gitlabMode ? git.readiness(profile.systemId()) : null;
         var targetReports = live.stream()
                 .flatMap(worker -> worker.targets().stream().map(target -> new WorkerTarget(worker, target)))
                 .filter(item -> profile.systemId().equals(item.target().systemId()))
@@ -43,7 +56,8 @@ public class ExecutionReadinessService {
         var prdReady = targetReports.stream().anyMatch(item -> item.target().prdModelReady());
         var planningReady = targetReports.stream().anyMatch(item -> item.target().planningModelReady());
         var diffReady = targetReports.stream().anyMatch(item -> item.target().diffModelReady());
-        var repositoryReady = targetReports.stream().anyMatch(item -> item.target().repositoryAccessible() && item.target().gitRepository());
+        var repositoryReady = gitlabMode ? gitReadiness.ready()
+                : targetReports.stream().anyMatch(item -> item.target().repositoryAccessible() && item.target().gitRepository());
         var workerReady = targetReports.stream().anyMatch(item -> switch (executionProvider) {
             case "http" -> item.worker().capabilities().contains("http") && item.worker().httpProviderReachable()
                     && item.target().diffModelReady();
@@ -52,7 +66,9 @@ public class ExecutionReadinessService {
             case "fake" -> item.worker().capabilities().contains("fake");
             default -> false;
         });
-        var validationReady = !readList(profile.testCommands()).isEmpty();
+        var validationReady = gitConfig == null ? !readList(profile.testCommands()).isEmpty()
+                : "skip".equals(gitConfig.validationMode())
+                || gitConfig.repos().stream().allMatch(repo -> repo.testCommands() != null && !repo.testCommands().isEmpty());
         var claudeFallback = "claude_sdk".equals(executionProvider) && targetReports.stream()
                 .anyMatch(item -> "worker_env".equals(item.target().claudeConfigSource()));
 
@@ -65,9 +81,18 @@ public class ExecutionReadinessService {
         else if (!executionProvider.isBlank() && !"fake".equals(executionProvider) && !workerReady) {
             error(issues, "EXECUTION_CAPABILITY_UNAVAILABLE", "在线 Worker 不具备所选执行能力");
         }
-        if (!repositoryReady) error(issues, "REPOSITORY_NOT_READY", "Worker 无法访问有效 Git 仓库");
+        if (gitlabMode && (gitConfig.effectiveGitlabBaseUrl().isBlank() || !gitConfig.tokenSet())) {
+            error(issues, "GITLAB_CONNECTION_NOT_READY", "GitLab 地址或访问 token 未配置");
+        } else if (gitlabMode && !gitReadiness.ready()) {
+            error(issues, "GITLAB_PROJECT_NOT_READY", "GitLab 项目不可访问: "
+                    + String.join(", ", gitReadiness.unavailableProjects()));
+        } else if (!repositoryReady) {
+            error(issues, "REPOSITORY_NOT_READY", "Worker 无法访问有效 Git 仓库");
+        }
         if (!validationReady) error(issues, "TEST_COMMAND_REQUIRED", "至少配置一条测试命令");
-        if (readList(profile.allowedPaths()).isEmpty()) {
+        var unrestricted = gitConfig == null ? readList(profile.allowedPaths()).isEmpty()
+                : gitConfig.repos().stream().anyMatch(repo -> repo.allowedPaths() == null || repo.allowedPaths().isEmpty());
+        if (unrestricted) {
             issues.add(new ReadinessIssue("ALLOWED_PATHS_EMPTY", "warning", "修改范围未限制"));
         }
         if (claudeFallback) {
@@ -79,8 +104,11 @@ public class ExecutionReadinessService {
                 new ReadinessStage("planning", planningReady, modelDetail(targetReports, "planning", planningReady)),
                 new ReadinessStage("codeExecution", workerReady && !"fake".equals(executionProvider),
                         executionDetail(executionProvider, targetReports)),
-                new ReadinessStage("repository", repositoryReady, repositoryReady ? "Git 仓库可访问" : "仓库不可访问"),
-                new ReadinessStage("validation", validationReady, validationReady ? "测试命令已配置" : "缺少测试命令")
+                new ReadinessStage("repository", repositoryReady,
+                        repositoryReady ? (gitlabMode ? "GitLab 项目可访问" : "Git 仓库可访问") : "仓库不可访问"),
+                new ReadinessStage("validation", validationReady,
+                        validationReady ? (gitConfig != null && "skip".equals(gitConfig.validationMode())
+                                ? "由 MR CI 与人工验证" : "测试命令已配置") : "缺少测试命令")
         );
         var checkedAt = live.stream().map(WorkerReadinessReport::checkedAt).filter(java.util.Objects::nonNull)
                 .max(Comparator.naturalOrder()).orElse(null);

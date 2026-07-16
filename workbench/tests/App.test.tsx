@@ -25,11 +25,12 @@ test('system configuration uses Chinese field labels', async () => {
   renderApp('/systems');
 
   expect(await screen.findByLabelText('系统编号')).toBeInTheDocument();
-  expect(screen.getByLabelText('代码仓库绝对路径')).toBeInTheDocument();
   expect(screen.getByLabelText('系统负责人')).toBeInTheDocument();
-  expect(screen.getByLabelText(/允许修改路径/)).toBeInTheDocument();
-  expect(screen.getByLabelText(/禁止修改路径/)).toBeInTheDocument();
-  expect(screen.getByLabelText(/测试命令/)).toBeInTheDocument();
+  expect(screen.getByText('Git 与发布')).toBeInTheDocument();
+  expect(screen.getByLabelText('仓库 1 本地路径')).toBeInTheDocument();
+  expect(screen.getByLabelText('仓库 1 允许修改路径')).toBeInTheDocument();
+  expect(screen.getByLabelText('仓库 1 禁止修改路径')).toBeInTheDocument();
+  expect(screen.getByLabelText('仓库 1 测试命令')).toBeInTheDocument();
 });
 
 test('shows login page when auth check fails', async () => {
@@ -61,7 +62,7 @@ test.each([
   const actions = await screen.findAllByRole('button', { name: button });
   fireEvent.click(actions[0]);
 
-  expect(screen.getByRole('dialog')).toHaveAttribute('open');
+  expect(await screen.findByRole('dialog')).toHaveAttribute('open');
   expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
 });
 

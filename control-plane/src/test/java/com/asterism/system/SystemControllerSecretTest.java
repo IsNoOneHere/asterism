@@ -33,7 +33,8 @@ class SystemControllerSecretTest {
             return call.getArgument(0);
         });
         var controller = new SystemController(repo, mock(SystemMembershipRepository.class), mock(SystemAccessService.class),
-                aggregate, new ObjectMapper(), mock(com.asterism.temporal.TemporalCasePort.class));
+                aggregate, new ObjectMapper(), mock(com.asterism.temporal.TemporalCasePort.class),
+                mock(com.asterism.git.GitIntegrationService.class));
         var request = new SystemController.UpsertSystemRequest("sys-1", "Demo", "demo", "/repo", "owner",
                 List.of(), List.of(), List.of("git diff --check"));
 

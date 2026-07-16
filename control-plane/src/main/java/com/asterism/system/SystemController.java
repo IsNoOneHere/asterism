@@ -1,5 +1,6 @@
 package com.asterism.system;
 
+import com.asterism.git.GitIntegrationService;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.identity.SystemMembershipRepository;
 import com.asterism.temporal.TemporalCasePort;
@@ -30,16 +31,18 @@ public class SystemController {
     private final JdbcAggregateTemplate aggregate;
     private final ObjectMapper objectMapper;
     private final TemporalCasePort temporal;
+    private final GitIntegrationService git;
 
     public SystemController(SystemProfileRepository systems, SystemMembershipRepository memberships,
                             SystemAccessService access, JdbcAggregateTemplate aggregate, ObjectMapper objectMapper,
-                            TemporalCasePort temporal) {
+                            TemporalCasePort temporal, GitIntegrationService git) {
         this.systems = systems;
         this.memberships = memberships;
         this.access = access;
         this.aggregate = aggregate;
         this.objectMapper = objectMapper;
         this.temporal = temporal;
+        this.git = git;
     }
 
     @GetMapping
@@ -51,12 +54,14 @@ public class SystemController {
     }
 
     @PostMapping
+    @Transactional
     SystemProfile create(@RequestBody UpsertSystemRequest request, Authentication actor) {
         if (systems.existsById(request.systemId())) {
             throw new IllegalStateException("系统已存在");
         }
         var saved = aggregate.insert(toProfile(request.systemId(), request, null, actor.getName()));
         memberships.upsertMembership(saved.systemId(), actor.getName(), "owner", actor.getName());
+        git.initialize(saved.systemId(), null);
         startRouteIndex(saved);
         return maskProfile(saved);
     }

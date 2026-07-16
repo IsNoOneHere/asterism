@@ -1,5 +1,6 @@
 package com.asterism.system;
 
+import com.asterism.git.GitIntegrationService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -7,6 +8,8 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ExecutionReadinessServiceTest {
     @Test
@@ -71,6 +74,26 @@ class ExecutionReadinessServiceTest {
         assertThat(claude.stages()).filteredOn(stage -> stage.name().equals("planning"))
                 .singleElement().extracting(ExecutionReadinessService.ReadinessStage::detail)
                 .isEqualTo("规划模型");
+    }
+
+    @Test
+    void gitlabModeRequiresEveryConfiguredProject() {
+        var git = mock(GitIntegrationService.class);
+        var repo = new GitIntegrationService.RepoConfig("web", "Web", "frontend", "group/web", "main",
+                "gitlab", "", List.of("src"), List.of(), List.of("npm test"));
+        when(git.get("sys-1")).thenReturn(new GitIntegrationService.PublicGitConfiguration(
+                List.of(repo), "gitlab", "auto", "main", List.of(), "", "http://gitlab.test", true, true));
+        when(git.readiness("sys-1")).thenReturn(new GitIntegrationService.GitReadiness(false, List.of("group/web")));
+        var service = new ExecutionReadinessService(new ObjectMapper(), git);
+        service.report(new ExecutionReadinessService.WorkerReadinessReport(
+                "worker-1", "asterism", "http", List.of("http"), true, false,
+                Instant.now(), List.of(new ExecutionReadinessService.TargetReadiness(
+                        "sys-1", false, false, true, "model", false, "", "system")), null));
+
+        assertThat(service.readiness(profile("http")).issues())
+                .extracting(ExecutionReadinessService.ReadinessIssue::code)
+                .contains("GITLAB_PROJECT_NOT_READY")
+                .doesNotContain("REPOSITORY_NOT_READY");
     }
 
     private SystemProfile profile(String provider) {

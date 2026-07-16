@@ -18,4 +18,12 @@ public class SystemConfigLock {
                 .query((rs, rowNum) -> true)
                 .single();
     }
+
+    public void lockGitConfiguration(String systemId) {
+        // Git 配置与模型配置分层存储，各自串行更新。
+        jdbc.sql("select pg_advisory_xact_lock(hashtext('asterism-git-config'), hashtext(:systemId))")
+                .param("systemId", systemId)
+                .query((rs, rowNum) -> true)
+                .single();
+    }
 }

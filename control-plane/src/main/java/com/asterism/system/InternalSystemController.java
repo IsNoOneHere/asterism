@@ -1,5 +1,6 @@
 package com.asterism.system;
 
+import com.asterism.git.GitIntegrationService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -13,9 +14,11 @@ import java.util.Map;
 @RequestMapping("/api/v5/internal/systems")
 public class InternalSystemController {
     private final AgentConfigurationService configurations;
+    private final GitIntegrationService git;
 
-    public InternalSystemController(AgentConfigurationService configurations) {
+    public InternalSystemController(AgentConfigurationService configurations, GitIntegrationService git) {
         this.configurations = configurations;
+        this.git = git;
     }
 
     @GetMapping("/{systemId}/model-config")
@@ -50,6 +53,30 @@ public class InternalSystemController {
         if (selected != null) applyProfile(response, selected);
         response.put("model_profiles", config.modelProfiles().stream().map(this::profileMap).toList());
         response.put("agents", config.agents().stream().map(this::agentMap).toList());
+        return response;
+    }
+
+    @GetMapping("/{systemId}/git-config")
+    Map<String, Object> gitConfig(@PathVariable String systemId) {
+        var config = git.internal(systemId);
+        var response = new LinkedHashMap<String, Object>();
+        response.put("repos", config.repos().stream().map(repo -> Map.of(
+                "repo_id", repo.repoId(),
+                "name", repo.name(),
+                "kind", repo.kind(),
+                "gitlab_project", repo.gitlabProject(),
+                "default_branch", repo.defaultBranch(),
+                "clone_mode", repo.cloneMode(),
+                "local_path", repo.localPath(),
+                "allowed_paths", repo.allowedPaths(),
+                "forbidden_paths", repo.forbiddenPaths(),
+                "test_commands", repo.testCommands())).toList());
+        response.put("release_mode", config.releaseMode());
+        response.put("validation_mode", config.validationMode());
+        response.put("mr_target_branch", config.mrTargetBranch());
+        response.put("mr_labels", config.mrLabels());
+        response.put("base_url", config.baseUrl());
+        response.put("token", config.token());
         return response;
     }
 

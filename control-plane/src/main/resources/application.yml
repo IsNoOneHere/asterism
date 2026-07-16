@@ -32,6 +32,9 @@ asterism:
     url: ${V5_IMAGE_ANALYSIS_URL:http://127.0.0.1:8090/analyze-image}
   storage:
     root: ${V5_ATTACHMENT_ROOT:runtime/attachments}
+  gitlab:
+    base-url: ${ASTERISM_GITLAB_BASE_URL:}
+    token: ${ASTERISM_GITLAB_TOKEN:}
 
 springdoc:
   api-docs:

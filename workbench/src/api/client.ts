@@ -15,6 +15,29 @@ export type SystemProfile = Schemas['SystemProfile'] & {
   agentConfig?: string;
   modelProviderConfig?: string;
 };
+export type RepoConfig = {
+  repoId: string;
+  name: string;
+  kind: 'frontend' | 'backend' | 'other';
+  gitlabProject: string;
+  defaultBranch: string;
+  cloneMode: 'gitlab' | 'local';
+  localPath: string;
+  allowedPaths: string[];
+  forbiddenPaths: string[];
+  testCommands: string[];
+};
+export type GitConfiguration = {
+  repos: RepoConfig[];
+  releaseMode: 'local' | 'gitlab';
+  validationMode: 'auto' | 'skip';
+  mrTargetBranch: string;
+  mrLabels: string[];
+  gitlabBaseUrl: string;
+  effectiveGitlabBaseUrl: string;
+  tokenSet: boolean;
+  usingGlobalToken: boolean;
+};
 export type WorkItem = Schemas['WorkItemView'] & {
   workItemId: string;
   systemId: string;
@@ -249,6 +272,12 @@ export const api = {
     request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId), { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body) }),
   updateSystemProfile: (systemId: string, body: unknown) =>
     request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId) + '/profile', { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body) }),
+  gitConfiguration: (systemId: string) =>
+    request<GitConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/git-config'),
+  updateGitConfiguration: (systemId: string, body: unknown) =>
+    request<GitConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/git-config', {
+      method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body),
+    }),
   agentConfiguration: (systemId: string) =>
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agent-config'),
   createModelProfile: (systemId: string, body: unknown) =>

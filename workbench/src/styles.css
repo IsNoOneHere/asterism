@@ -1761,7 +1761,35 @@ h1 {
 }
 
 .system-config-dialog {
-  width: min(760px, calc(100vw - 32px));
+  width: min(900px, calc(100vw - 32px));
+}
+
+.config-subsection {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin: 14px 0;
+  padding: 16px;
+}
+
+.config-subsection legend {
+  font-weight: 700;
+  padding: 0 8px;
+}
+
+.repo-config-list {
+  display: grid;
+  gap: 12px;
+}
+
+.repo-config-card {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.repo-config-card h4 {
+  margin: 0;
 }
 
 .knowledge-dialog {

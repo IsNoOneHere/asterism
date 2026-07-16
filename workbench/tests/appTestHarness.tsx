@@ -85,6 +85,7 @@ let candidateMemories: unknown[] = [];
 let conversationMessages: unknown[] = [];
 let workItems: unknown[] = [];
 let agentConfiguration: any;
+let gitConfiguration: any;
 let prdPostCount = 0;
 let responseOverrides: Record<string, unknown> = {};
 
@@ -112,12 +113,25 @@ export function resetAppTestState() {
     ],
     engines: ['claude_sdk', 'deepagents', 'http', 'fake'],
   };
+  gitConfiguration = {
+    repos: [{ repoId: 'main', name: 'Alpha Web', kind: 'frontend', gitlabProject: 'alpha/web',
+      defaultBranch: 'main', cloneMode: 'local', localPath: '/tmp/alpha', allowedPaths: ['src'],
+      forbiddenPaths: ['secrets'], testCommands: ['npm test'] }],
+    releaseMode: 'local', validationMode: 'auto', mrTargetBranch: 'main', mrLabels: [],
+    gitlabBaseUrl: '', effectiveGitlabBaseUrl: 'http://gitlab.internal', tokenSet: true, usingGlobalToken: true,
+  };
   prdPostCount = 0;
   responseOverrides = {};
   // 测试只关心前端请求路径，不启动真实控制面。
   vi.stubGlobal('fetch', vi.fn((path: string, init?: RequestInit) => {
     if (path.startsWith('/api/v5/work-items?')) return jsonResponse(workItems);
     if (path === '/api/v5/systems/alpha-system/agent-config' && !init?.method) return jsonResponse(agentConfiguration);
+    if (path === '/api/v5/systems/alpha-system/git-config' && !init?.method) return jsonResponse(gitConfiguration);
+    if (path === '/api/v5/systems/alpha-system/git-config' && init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body));
+      gitConfiguration = { ...gitConfiguration, ...body, gitlabToken: undefined, tokenSet: true };
+      return jsonResponse(gitConfiguration);
+    }
     if (path === '/api/v5/systems/alpha-system/model-profiles' && init?.method === 'POST') {
       const body = JSON.parse(String(init.body));
       agentConfiguration = { ...agentConfiguration, modelProfiles: [...agentConfiguration.modelProfiles, { ...body, id: 'mp-2', apiKeySet: Boolean(body.apiKey), apiKey: undefined }] };
