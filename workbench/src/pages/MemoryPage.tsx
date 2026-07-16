@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, MemoryCategory, MemoryDraft, MemoryItem } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
+import { errorMessage, ErrorState } from '../components/Display';
 import { MemoryEditorDialog } from '../components/MemoryEditorDialog';
 import { Pagination, usePagination } from '../components/Pagination';
 import { useCurrentSystem } from '../SystemContext';
@@ -11,7 +12,7 @@ type Tab = 'candidate' | 'approved' | 'closed';
 
 export function MemoryPage() {
   const queryClient = useQueryClient();
-  const { systemId } = useCurrentSystem();
+  const { systemId, canManageCurrentSystem, systemAccessLoading, systemAccessError } = useCurrentSystem();
   const [tab, setTab] = useState<Tab>('candidate');
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<MemoryItem | null>(null);
@@ -41,12 +42,16 @@ export function MemoryPage() {
     return [...(rejected.data ?? []), ...(disabled.data ?? [])];
   }, [approved.data, candidate.data, disabled.data, rejected.data, tab]);
   const pagination = usePagination(items, systemId + ':' + tab);
+  const activeQueries = tab === 'candidate' ? [candidate] : tab === 'approved' ? [approved] : [rejected, disabled];
+  const loadError = activeQueries.find((query) => query.error)?.error;
+  const loading = activeQueries.some((query) => query.isLoading);
 
   return <section>
     <header className="page-head">
       <div><h1>系统记忆</h1><p>沉淀跨工作项长期有效的工程规则。</p></div>
-      <button type="button" onClick={() => setCreating(true)} disabled={!systemId}>新增记忆</button>
+      <button type="button" onClick={() => { create.reset(); setCreating(true); }} disabled={!systemId || !canManageCurrentSystem}>新增记忆</button>
     </header>
+    {!systemAccessLoading && !systemAccessError && !canManageCurrentSystem && <div className="notice">当前账号在此系统中为只读成员，记忆维护操作已禁用。</div>}
     <div className="notice memory-guidance">
       <span><strong>应该沉淀：</strong>兼容性约束、工程约定、问题原因与已验证解法。</span>
       <span><strong>不要沉淀：</strong>一次性改动、完整 diff、运行日志和测试结果；权限类硬约束请放到系统配置。</span>
@@ -57,16 +62,20 @@ export function MemoryPage() {
         <button type="button" className={tab === 'approved' ? 'active' : ''} onClick={() => setTab('approved')}>生效中 {approved.data?.length ?? 0}</button>
         <button type="button" className={tab === 'closed' ? 'active' : ''} onClick={() => setTab('closed')}>已归档 {(rejected.data?.length ?? 0) + (disabled.data?.length ?? 0)}</button>
       </div>
+      {loadError ? <ErrorState title="系统记忆加载失败" error={loadError} onRetry={() => activeQueries.forEach((query) => query.refetch())} /> :
+      loading ? <div className="empty" role="status">系统记忆加载中…</div> : <>
       {pagination.pageItems.map((item) => <MemoryRow
         key={item.memoryId}
         item={item}
         tab={tab}
-        onApprove={() => setEditing(item)}
+        canManage={canManageCurrentSystem}
+        onApprove={() => { approve.reset(); setEditing(item); }}
         onReject={() => { reject.reset(); setConfirmAction({ type: 'reject', item }); }}
         onDisable={() => { disable.reset(); setConfirmAction({ type: 'disable', item }); }}
       />)}
       {!items.length && <div className="empty">暂无记忆。</div>}
       <Pagination total={items.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
+      </>}
     </div>
     <MemoryEditorDialog
       open={creating || Boolean(editing)}
@@ -74,8 +83,9 @@ export function MemoryPage() {
       submitLabel={editing ? '批准并生效' : '加入待审批'}
       initial={editing ? memoryDraft(editing) : undefined}
       workItemId={editing?.workItemId ?? undefined}
-      pending={editing ? approve.isPending : create.isPending}
-      onClose={() => { setCreating(false); setEditing(null); }}
+      pending={!canManageCurrentSystem || (editing ? approve.isPending : create.isPending)}
+      error={editing ? approve.error : create.error}
+      onClose={() => { setCreating(false); setEditing(null); create.reset(); approve.reset(); }}
       onSubmit={(draft) => editing ? approve.mutate({ memoryId: editing.memoryId, draft }) : create.mutate(draft)}
     />
     <ActionConfirmDialog
@@ -93,7 +103,7 @@ export function MemoryPage() {
     <ActionConfirmDialog
       open={Boolean(reject.error || disable.error)}
       title="操作失败"
-      description={String(reject.error || disable.error || '')}
+      description={errorMessage(reject.error || disable.error, '记忆操作失败')}
       confirmLabel="知道了"
       alert
       showCancel={false}
@@ -103,9 +113,10 @@ export function MemoryPage() {
   </section>;
 }
 
-function MemoryRow({ item, tab, onApprove, onReject, onDisable }: {
+function MemoryRow({ item, tab, canManage, onApprove, onReject, onDisable }: {
   item: MemoryItem;
   tab: Tab;
+  canManage: boolean;
   onApprove: () => void;
   onReject: () => void;
   onDisable: () => void;
@@ -117,8 +128,8 @@ function MemoryRow({ item, tab, onApprove, onReject, onDisable }: {
       <p>{legacyEvent ? '原始 JSON、diff 和日志仅保留在事件审计中，不作为系统记忆展示。' : item.content}</p>
       <span>{item.workItemId ? <Link className="action-link" to={'/work-items/' + item.workItemId}>来源工作项 {item.workItemId}</Link> : legacyEvent ? '已归档至事件审计' : '手工录入'} · {formatTime(item.createdAt)}</span>
     </div>
-    {tab === 'candidate' && <div className="button-row"><button type="button" onClick={onApprove}>编辑并批准</button><button type="button" className="secondary" onClick={onReject}>拒绝</button></div>}
-    {tab === 'approved' && <button type="button" className="secondary" onClick={onDisable}>停用</button>}
+    {canManage && tab === 'candidate' && <div className="button-row"><button type="button" onClick={onApprove}>编辑并批准</button><button type="button" className="secondary" onClick={onReject}>拒绝</button></div>}
+    {canManage && tab === 'approved' && <button type="button" className="secondary" onClick={onDisable}>停用</button>}
   </article>;
 }
 

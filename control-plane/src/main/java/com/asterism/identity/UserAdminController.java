@@ -27,8 +27,13 @@ public class UserAdminController {
     }
 
     @PostMapping("/{userId}/disable")
-    void disable(@PathVariable String userId) {
-        users.disableUser(userId);
+    void disable(@PathVariable String userId, Authentication actor) {
+        users.disableUser(userId, actor.getName());
+    }
+
+    @PostMapping("/{userId}/enable")
+    void enable(@PathVariable String userId, Authentication actor) {
+        users.enableUser(userId, actor.getName());
     }
 
     @DeleteMapping("/{userId}")

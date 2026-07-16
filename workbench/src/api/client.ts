@@ -346,6 +346,7 @@ export const api = {
     request<UserAccount>('/api/v5/users', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
   deleteUser: (userId: string) => requestVoid('/api/v5/users/' + encodeURIComponent(userId), { method: 'DELETE' }),
   disableUser: (userId: string) => requestVoid('/api/v5/users/' + encodeURIComponent(userId) + '/disable', { method: 'POST' }),
+  enableUser: (userId: string) => requestVoid('/api/v5/users/' + encodeURIComponent(userId) + '/enable', { method: 'POST' }),
   resetPassword: (userId: string, password: string) =>
     requestVoid('/api/v5/users/' + encodeURIComponent(userId) + '/reset-password', {
       method: 'POST',

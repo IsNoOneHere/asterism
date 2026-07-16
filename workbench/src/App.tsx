@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { Bot, BrainCircuit, ClipboardList, Cpu, LogOut, Map, Settings2, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { api, CurrentUser } from './api/client';
+import { api, ApiError, CurrentUser } from './api/client';
 import { BrandMark } from './components/BrandMark';
 import { AgentConfigPage } from './pages/AgentConfigPage';
 import { LoginPage } from './pages/LoginPage';
@@ -18,6 +18,7 @@ import { UsersPage } from './pages/UsersPage';
 import { KnowledgePage } from './pages/KnowledgePage';
 import { SystemProvider, useCurrentSystem } from './SystemContext';
 import { SystemSelect } from './components/SystemSelect';
+import { ErrorState } from './components/Display';
 
 type NavigationItem = { to: string; label: string; icon: LucideIcon; adminOnly?: boolean };
 
@@ -43,13 +44,21 @@ export function App() {
   const systems = useQuery({ queryKey: ['systems'], queryFn: api.systems, enabled: Boolean(me.data), retry: false });
 
   useEffect(() => {
-    const expired = () => queryClient.setQueryData(['auth', 'me'], null);
+    const expired = () => {
+      // 会话失效时同步清理业务缓存，重新登录后不能看到上一账号的数据。
+      queryClient.setQueryData(['auth', 'me'], null);
+      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== 'auth' });
+    };
     window.addEventListener('v5:auth-expired', expired);
     return () => window.removeEventListener('v5:auth-expired', expired);
   }, [queryClient]);
 
   if (me.isLoading) {
     return <div className="center-note">登录状态检查中...</div>;
+  }
+
+  if (me.isError && (!(me.error instanceof ApiError) || me.error.status !== 401)) {
+    return <div className="center-note"><ErrorState title="登录状态检查失败" error={me.error} onRetry={() => me.refetch()} /></div>;
   }
 
   if (me.isError || !me.data) {
@@ -66,8 +75,12 @@ export function App() {
     return <div className="center-note">系统加载中...</div>;
   }
 
+  if (systems.isError) {
+    return <div className="center-note"><ErrorState title="系统列表加载失败" error={systems.error} onRetry={() => systems.refetch()} /></div>;
+  }
+
   return (
-    <SystemProvider systems={systems.data ?? []}>
+    <SystemProvider systems={systems.data ?? []} currentUser={user}>
       <AuthenticatedShell user={user} visibleGroups={visibleGroups} onLogout={() => {
         // 先清理本地登录态，让页面立即返回登录页，再异步结束服务端会话。
         queryClient.setQueryData(['auth', 'me'], null);
@@ -79,7 +92,7 @@ export function App() {
 }
 
 function AuthenticatedShell({ user, visibleGroups, onLogout }: { user: CurrentUser; visibleGroups: typeof navigationGroups; onLogout: () => void }) {
-  const { systems, systemId, setSystemId } = useCurrentSystem();
+  const { systems, systemId, setSystemId, systemAccessError, retrySystemAccess } = useCurrentSystem();
   const { pathname } = useLocation();
   const showSystemContext = shouldShowSystemContext(pathname);
   const page = pageContext(pathname);
@@ -124,6 +137,7 @@ function AuthenticatedShell({ user, visibleGroups, onLogout }: { user: CurrentUs
           )}
         </header>
         <main className="main">
+          {Boolean(systemAccessError) && <ErrorState title="系统权限加载失败" error={systemAccessError} onRetry={retrySystemAccess} />}
           <Routes>
           <Route path="/" element={<Navigate to="/work-items" replace />} />
           <Route element={<WorkItemCenterLayout />}>
@@ -140,7 +154,8 @@ function AuthenticatedShell({ user, visibleGroups, onLogout }: { user: CurrentUs
           <Route path="/agents" element={<AgentConfigPage section="agents" />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
-          <Route path="/users" element={isAdmin(user) ? <UsersPage /> : <Navigate to="/work-items" replace />} />
+          <Route path="/users" element={isAdmin(user) ? <UsersPage currentUserId={user.userId} /> : <Navigate to="/work-items" replace />} />
+          <Route path="*" element={<Navigate to="/work-items" replace />} />
           </Routes>
         </main>
       </div>

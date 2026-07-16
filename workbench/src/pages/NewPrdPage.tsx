@@ -1,13 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useBlocker, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { api, PrdMessageResult, SuspectedTarget, UiObservation } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
-import { StatusBadge } from '../components/Display';
+import { errorMessage, ErrorState, StatusBadge } from '../components/Display';
 import { SystemSelect } from '../components/SystemSelect';
 import { useCurrentSystem } from '../SystemContext';
 
@@ -38,8 +38,11 @@ export function NewPrdPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [optimisticUser, setOptimisticUser] = useState<{ content: string; display: string }>();
   const [draftEditor, setDraftEditor] = useState<DraftEditorValue>({ title: '', goal: '', acceptanceCriteria: [] });
+  const [savedDraftEditor, setSavedDraftEditor] = useState<DraftEditorValue>({ title: '', goal: '', acceptanceCriteria: [] });
   const [confirmOpen, setConfirmOpen] = useState(false);
   const completedAssistant = useRef<string>();
+  const loadedPrdId = useRef<string>();
+  const allowNavigation = useRef(false);
   const sessionPrdId = routePrdId || prdId;
   const draftSession = useQuery({
     queryKey: ['prd-session', sessionPrdId],
@@ -60,6 +63,10 @@ export function NewPrdPage() {
   });
   const selectedSystemId = form.watch('systemId');
   const content = form.watch('content');
+  const draftDirty = Boolean(prdId) && JSON.stringify(draftEditor) !== JSON.stringify(savedDraftEditor);
+  const hasUnsavedChanges = Boolean(content.trim() || files.length || draftDirty);
+  const shouldBlock = useCallback(() => hasUnsavedChanges && !allowNavigation.current, [hasUnsavedChanges]);
+  const blocker = useBlocker(shouldBlock);
   const readinessSystemId = draftSession.data?.systemId || selectedSystemId;
   const readiness = useQuery({
     queryKey: ['system-readiness', readinessSystemId],
@@ -76,14 +83,22 @@ export function NewPrdPage() {
   useEffect(() => {
     const session = draftSession.data;
     if (!session) return;
+    const incomingDraft = editorValue(session.draft, session.title, session.goal);
+    const firstLoad = loadedPrdId.current !== session.prdId;
     // 刷新编辑地址时，恢复草稿原始系统和对话。
     setSystemId(session.systemId);
-    form.reset({ systemId: session.systemId, content: '' });
+    if (firstLoad) form.reset({ systemId: session.systemId, content: '' });
     setPrdId(session.prdId);
     setConversationId(session.conversationId);
     setResult({ status: session.status, draft: session.draft, missingFields: session.missingFields, workItemId: session.workItemId });
-    setDraftEditor(editorValue(session.draft, session.title, session.goal));
-  }, [draftSession.data, form, setSystemId]);
+    setDraftEditor((current) => firstLoad || JSON.stringify(current) === JSON.stringify(savedDraftEditor) ? incomingDraft : current);
+    setSavedDraftEditor((current) => JSON.stringify(current) === JSON.stringify(incomingDraft) ? current : incomingDraft);
+    loadedPrdId.current = session.prdId;
+  }, [draftSession.data, form, savedDraftEditor, setSystemId]);
+
+  useEffect(() => {
+    allowNavigation.current = false;
+  }, [routePrdId]);
 
   const send = useMutation({
     mutationFn: async (value: FormValue) => {
@@ -92,12 +107,21 @@ export function NewPrdPage() {
     },
     onSuccess: (data) => {
       console.info('v5 workbench PRD 对话发送成功', { prdId: data.prdId });
-      if (!prdId && data.prdId) navigate('/work-items/new/' + data.prdId, { replace: true });
+      if (data.draft) {
+        const nextDraft = editorValue(data.draft);
+        setDraftEditor(nextDraft);
+        setSavedDraftEditor(nextDraft);
+      }
+      form.resetField('content');
+      setFiles([]);
+      if (!prdId && data.prdId) {
+        // 首次发送后的地址替换是保存流程的一部分，不触发离页确认。
+        allowNavigation.current = true;
+        navigate('/work-items/new/' + data.prdId, { replace: true });
+      }
       setPrdId(data.prdId);
       setConversationId(data.conversationId);
       setResult(data);
-      form.resetField('content');
-      setFiles([]);
       queryClient.invalidateQueries({ queryKey: ['conversation', data.conversationId] });
       queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
     },
@@ -115,8 +139,10 @@ export function NewPrdPage() {
   const saveDraft = useMutation({
     mutationFn: () => api.updatePrdDraft(prdId!, draftEditor),
     onSuccess: (data) => {
+      const nextDraft = editorValue(data.draft, data.title, data.goal);
       setResult((current) => ({ ...current, status: data.status, draft: data.draft, missingFields: data.missingFields }));
-      setDraftEditor(editorValue(data.draft, data.title, data.goal));
+      setDraftEditor(nextDraft);
+      setSavedDraftEditor(nextDraft);
       queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] });
       queryClient.invalidateQueries({ queryKey: ['prd-session', prdId] });
       queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
@@ -146,37 +172,17 @@ export function NewPrdPage() {
   }, [conversation.data, optimisticUser, prdId, queryClient]);
 
   useEffect(() => {
-    if (prdId || (!content.trim() && files.length === 0)) return;
+    if (!hasUnsavedChanges) return;
     const beforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
     };
-    const guardLink = (event: MouseEvent) => {
-      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
-      if (!anchor || anchor.getAttribute('target') === '_blank') return;
-      const url = new URL(anchor.getAttribute('href') || '', window.location.href);
-      if (url.origin !== window.location.origin || window.confirm(unsavedMessage)) return;
-      event.preventDefault();
-      event.stopPropagation();
-    };
     window.addEventListener('beforeunload', beforeUnload);
-    document.addEventListener('click', guardLink, true);
-    return () => {
-      window.removeEventListener('beforeunload', beforeUnload);
-      document.removeEventListener('click', guardLink, true);
-    };
-  }, [content, files.length, prdId]);
+    return () => window.removeEventListener('beforeunload', beforeUnload);
+  }, [hasUnsavedChanges]);
 
   function reset() {
-    if (routePrdId) navigate('/work-items/new');
-    setPrdId(undefined);
-    setConversationId(undefined);
-    setResult({ status: 'waiting_input' });
-    setOptimisticUser(undefined);
-    setDraftEditor({ title: '', goal: '', acceptanceCriteria: [] });
-    form.reset({ systemId: selectedSystemId, content: '' });
-    setFiles([]);
+    navigate('/work-items/new');
   }
 
   function confirmPrd() {
@@ -211,11 +217,12 @@ export function NewPrdPage() {
           <p>通过 AI 沟通明确目标和验收标准，确认后生成工作项。</p>
         </div>
       </header>
-      {routePrdId && draftSession.isLoading && prdId !== routePrdId ? <div className="panel">草稿加载中...</div> :
-      routePrdId && draftSession.isError && prdId !== routePrdId ? <div className="panel error-text">草稿加载失败。</div> :
+      {routePrdId && draftSession.isLoading ? <div className="panel">草稿加载中...</div> :
+      routePrdId && draftSession.isError ? <ErrorState title="草稿加载失败" error={draftSession.error} onRetry={() => draftSession.refetch()} /> :
       <div className="split wide-left create-workspace-grid">
       <div className="panel chat-panel">
         <h2>AI 需求沟通</h2>
+        {systems.length === 0 && <div className="notice">还没有可用系统，请先前往 <Link className="action-link" to="/systems">系统配置</Link> 创建系统。</div>}
         <SystemSelect systems={systems} value={selectedSystemId} label="所属系统" disabled={Boolean(prdId)} onChange={(value) => { setSystemId(value); form.setValue('systemId', value); }} />
         <div className="message-list">
           {conversationMessages.map((message) => (
@@ -243,7 +250,7 @@ export function NewPrdPage() {
             && <div className="bubble user">{optimisticUser.display}</div>}
           {pendingAssistant && <PendingAssistantBubble />}
           {confirmable && !pendingAssistant && (
-            <button type="button" className="primary-strong chat-confirm-prd" onClick={confirmPrd} disabled={!readiness.data?.ready || confirm.isPending}>
+            <button type="button" className="primary-strong chat-confirm-prd" onClick={confirmPrd} disabled={draftDirty || !readiness.data?.ready || confirm.isPending}>
               确认 PRD
             </button>
           )}
@@ -251,6 +258,8 @@ export function NewPrdPage() {
         {Boolean(result.missingFields?.length) && (
           <div className="warning">AI 需要你补充：{result.missingFields?.map((field) => fieldNames[field] || field).join('、')}</div>
         )}
+        {conversation.error && <ErrorState title="对话加载失败" error={conversation.error} onRetry={() => conversation.refetch()} />}
+        {send.error && <ErrorState title="消息发送失败" error={send.error} />}
         <form onSubmit={form.handleSubmit((value) => {
           if (value.content.trim() || files.length) {
             setOptimisticUser({ content: value.content.trim(), display: value.content.trim() || `已发送 ${files.length} 张图片` });
@@ -307,19 +316,24 @@ export function NewPrdPage() {
           <div><strong>{target.title}</strong><span>{target.apiEndpoints?.join('、') || target.routePath || target.kind} · 置信度 {Math.round((target.confidence || 0) * 100)}%</span></div>
           <button type="button" disabled={confirmTarget.isPending || confirmedTargets.some((item) => item.entryId === target.entryId)} onClick={() => confirmTarget.mutate({ entryId: target.entryId, accepted: true })}>{confirmedTargets.some((item) => item.entryId === target.entryId) ? '已确认' : '确认页面'}</button>
         </div>)}</div>}
-        <button type="button" className={confirmable ? 'primary-strong' : ''} onClick={confirmPrd} disabled={!prdId || !confirmable || pendingAssistant || !readiness.data?.ready || confirm.isPending}>
+        <button type="button" className={confirmable ? 'primary-strong' : ''} onClick={confirmPrd} disabled={!prdId || !confirmable || pendingAssistant || draftDirty || !readiness.data?.ready || confirm.isPending}>
           确认并生成工作项
         </button>
-        {!readiness.data?.ready && <div className="warning">系统尚未具备真实执行条件</div>}
+        {draftDirty && <div className="warning">预览内容有未保存修改，请先保存草稿。</div>}
+        {readiness.isLoading && <div className="notice" role="status">正在检查系统执行条件…</div>}
+        {readiness.isError && <ErrorState title="执行条件检查失败" error={readiness.error} onRetry={() => readiness.refetch()} />}
+        {readiness.data && !readiness.data.ready && <div className="warning">
+          <strong>系统尚未具备真实执行条件</strong>
+          {readiness.data.issues?.length > 0 && <ul>{readiness.data.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}</ul>}
+        </div>}
         {result.workItemId && (
           <div className="success-text">
             工作项已生成 <Link className="action-link" to={'/work-items/' + result.workItemId}>查看工作项</Link>
           </div>
         )}
         {prdId && <button type="button" className="secondary" onClick={reset}>创建另一项</button>}
-        {send.isError && <div className="error-text">{String(send.error)}</div>}
-        {confirmTarget.isError && <div className="error-text">{String(confirmTarget.error)}</div>}
-        {saveDraft.isError && <div className="error-text">{String(saveDraft.error)}</div>}
+        {confirmTarget.error && <ErrorState title="页面确认失败" error={confirmTarget.error} />}
+        {saveDraft.error && <ErrorState title="草稿保存失败" error={saveDraft.error} />}
       </div>
       </div>}
       <ActionConfirmDialog
@@ -335,12 +349,21 @@ export function NewPrdPage() {
       <ActionConfirmDialog
         open={Boolean(confirm.error)}
         title="生成工作项失败"
-        description={String(confirm.error || '')}
+        description={errorMessage(confirm.error, '工作项生成失败')}
         confirmLabel="知道了"
         alert
         showCancel={false}
         onClose={() => confirm.reset()}
         onConfirm={() => confirm.reset()}
+      />
+      <ActionConfirmDialog
+        open={blocker.state === 'blocked'}
+        title="离开当前页面？"
+        description={unsavedMessage}
+        confirmLabel="确认离开"
+        tone="danger"
+        onClose={() => blocker.state === 'blocked' && blocker.reset()}
+        onConfirm={() => blocker.state === 'blocked' && blocker.proceed()}
       />
     </section>
   );

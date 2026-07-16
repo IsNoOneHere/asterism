@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render } from '@testing-library/react';
-import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
+import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { vi } from 'vitest';
 import { App } from '../src/App';
 
@@ -80,7 +80,6 @@ const responses: Record<string, unknown> = {
     },
   ],
 };
-const routerFuture = { v7_startTransition: true, v7_relativeSplatPath: true };
 let candidateMemories: unknown[] = [];
 let conversationMessages: unknown[] = [];
 let workItems: unknown[] = [];
@@ -137,6 +136,11 @@ export function resetAppTestState() {
       agentConfiguration = { ...agentConfiguration, modelProfiles: [...agentConfiguration.modelProfiles, { ...body, id: 'mp-2', apiKeySet: Boolean(body.apiKey), apiKey: undefined }] };
       return jsonResponse(agentConfiguration);
     }
+    if (path.startsWith('/api/v5/systems/alpha-system/model-profiles/') && init?.method === 'DELETE') {
+      const id = decodeURIComponent(path.split('/').pop() || '');
+      agentConfiguration = { ...agentConfiguration, modelProfiles: agentConfiguration.modelProfiles.filter((item: any) => item.id !== id) };
+      return jsonResponse(agentConfiguration);
+    }
     if (path === '/api/v5/systems/alpha-system/agents' && init?.method === 'POST') {
       const body = JSON.parse(String(init.body));
       agentConfiguration = { ...agentConfiguration, agents: [...agentConfiguration.agents, { ...body, kind: 'custom' }] };
@@ -146,6 +150,11 @@ export function resetAppTestState() {
       const body = JSON.parse(String(init.body));
       const name = decodeURIComponent(path.split('/').pop() || '');
       agentConfiguration = { ...agentConfiguration, agents: agentConfiguration.agents.map((item: any) => item.name === name ? { ...item, ...body, name } : item) };
+      return jsonResponse(agentConfiguration);
+    }
+    if (path.startsWith('/api/v5/systems/alpha-system/agents/') && init?.method === 'DELETE') {
+      const name = decodeURIComponent(path.split('/').pop() || '');
+      agentConfiguration = { ...agentConfiguration, agents: agentConfiguration.agents.filter((item: any) => item.name !== name) };
       return jsonResponse(agentConfiguration);
     }
     if (path.endsWith('/readiness')) return jsonResponse({ ready: true, stages: [], issues: [], effectiveExecutionProvider: 'claude_sdk' });
@@ -236,13 +245,7 @@ export function setApiResponse(path: string, value: unknown) {
 }
 
 export function renderApp(path: string) {
-  render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryRouter initialEntries={[path]} future={routerFuture}>
-        <App />
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
+  return renderAppWithRouter(path);
 }
 
 export function renderAppWithRouter(path: string) {

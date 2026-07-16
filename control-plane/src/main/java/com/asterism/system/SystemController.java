@@ -61,16 +61,20 @@ public class SystemController {
         }
         var saved = aggregate.insert(toProfile(request.systemId(), request, null, actor.getName()));
         memberships.upsertMembership(saved.systemId(), actor.getName(), "owner", actor.getName());
-        git.initialize(saved.systemId(), null);
+        ensureConfiguredOwner(saved, actor);
+        git.initialize(saved.systemId(), request.gitConfiguration());
         startRouteIndex(saved);
         return maskProfile(saved);
     }
 
     @PutMapping("/{systemId}")
+    @Transactional
     SystemProfile update(@PathVariable String systemId, @RequestBody UpsertSystemRequest request, Authentication actor) {
         access.requireOwnerOrAdmin(systemId, actor);
         var existing = systems.findById(systemId).orElseThrow(() -> new IllegalArgumentException("系统不存在"));
         var saved = aggregate.update(toProfile(systemId, request, existing, existing.createdBy()));
+        ensureConfiguredOwner(saved, actor);
+        if (request.gitConfiguration() != null) git.update(systemId, request.gitConfiguration());
         if (!existing.repoPath().equals(saved.repoPath())) startRouteIndex(saved);
         return maskProfile(saved);
     }
@@ -94,6 +98,7 @@ public class SystemController {
     }
 
     @PatchMapping("/{systemId}/profile")
+    @Transactional
     SystemProfile updateProfile(@PathVariable String systemId, @Valid @RequestBody ProfileRequest request, Authentication actor) {
         access.requireOwnerOrAdmin(systemId, actor);
         var existing = systems.findById(systemId).orElseThrow(() -> new IllegalArgumentException("系统不存在"));
@@ -101,6 +106,8 @@ public class SystemController {
                 existing.systemId(), request.name(), request.description(), request.repoPath(), request.ownerUserId(),
                 json(request.allowedPaths()), json(request.forbiddenPaths()), json(request.testCommands()),
                 existing.agentConfig(), existing.modelProviderConfig(), existing.createdBy(), existing.createdAt(), Instant.now()));
+        ensureConfiguredOwner(saved, actor);
+        if (request.gitConfiguration() != null) git.update(systemId, request.gitConfiguration());
         log.info("系统基础配置已更新 system={} actor={}", systemId, actor.getName());
         if (!existing.repoPath().equals(saved.repoPath())) startRouteIndex(saved);
         return maskProfile(saved);
@@ -138,6 +145,11 @@ public class SystemController {
                 createdBy,
                 existing == null ? now : existing.createdAt(),
                 now);
+    }
+
+    private void ensureConfiguredOwner(SystemProfile profile, Authentication actor) {
+        // 配置负责人必须拥有系统权限；其它 owner 仍由成员页面独立管理。
+        memberships.upsertMembership(profile.systemId(), profile.ownerUserId(), "owner", actor.getName());
     }
 
     private String json(Object value) {
@@ -241,12 +253,14 @@ public class SystemController {
             @NotBlank String ownerUserId,
             List<String> allowedPaths,
             List<String> forbiddenPaths,
-            List<String> testCommands) {
+            List<String> testCommands,
+            GitIntegrationService.UpdateGitConfiguration gitConfiguration) {
     }
 
     public record ProfileRequest(@NotBlank String name, String description, @NotBlank String repoPath,
                                  @NotBlank String ownerUserId, List<String> allowedPaths,
-                                 List<String> forbiddenPaths, List<String> testCommands) {
+                                 List<String> forbiddenPaths, List<String> testCommands,
+                                 GitIntegrationService.UpdateGitConfiguration gitConfiguration) {
     }
 
 }

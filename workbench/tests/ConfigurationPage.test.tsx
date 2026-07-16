@@ -1,6 +1,6 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { renderApp, resetAppTestState } from './appTestHarness';
+import { jsonResponse, renderApp, resetAppTestState, setApiResponse } from './appTestHarness';
 
 beforeEach(resetAppTestState);
 
@@ -11,7 +11,7 @@ test.each([
   renderApp(path);
 
   expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: list })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: list })).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: absent })).not.toBeInTheDocument();
 });
 
@@ -69,6 +69,63 @@ test('builtin product only edits its profile and cannot be deleted', async () =>
   await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/agents/product', expect.objectContaining({ method: 'PATCH' })));
 });
 
+test.each([
+  { path: '/models', button: '删除 Claude 主模型', requestPath: '/api/v5/systems/alpha-system/model-profiles/mp-1' },
+  { path: '/agents', button: '删除 frontend-dev', requestPath: '/api/v5/systems/alpha-system/agents/frontend-dev' },
+])('$path asks for confirmation before deleting configuration', async ({ path, button, requestPath }) => {
+  renderApp(path);
+  fireEvent.click(await screen.findByRole('button', { name: button }));
+
+  const dialog = screen.getByRole('dialog');
+  expect(fetch).not.toHaveBeenCalledWith(requestPath, expect.objectContaining({ method: 'DELETE' }));
+  fireEvent.click(within(dialog).getByRole('button', { name: '确认删除' }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(requestPath, expect.objectContaining({ method: 'DELETE' })));
+});
+
+test.each([
+  { path: '/models', createButton: '新增 Profile', editButton: '编辑 Claude 主模型' },
+  { path: '/agents', createButton: '新增 Agent', editButton: '编辑 product' },
+])('$path disables configuration changes for non-owner members', async ({ path, createButton, editButton }) => {
+  setApiResponse('/api/v5/auth/me', { userId: 'reader', roles: [] });
+  setApiResponse('/api/v5/systems/alpha-system/members', [
+    { systemId: 'alpha-system', userId: 'reader', displayName: 'Reader', role: 'requester' },
+  ]);
+  renderApp(path);
+
+  expect(await screen.findByText('当前账号在此系统中为只读成员，配置操作已禁用。')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: createButton })).toBeDisabled();
+  expect(screen.getByRole('button', { name: editButton })).toBeDisabled();
+});
+
+test('system admin members can manage configuration like the backend allows', async () => {
+  setApiResponse('/api/v5/auth/me', { userId: 'system-admin', roles: [] });
+  setApiResponse('/api/v5/systems/alpha-system/members', [
+    { systemId: 'alpha-system', userId: 'system-admin', displayName: 'System Admin', role: 'admin' },
+  ]);
+  renderApp('/models');
+
+  const create = await screen.findByRole('button', { name: '新增 Profile' });
+  await waitFor(() => expect(create).toBeEnabled());
+  expect(screen.getByRole('button', { name: '编辑 Claude 主模型' })).toBeEnabled();
+  expect(screen.queryByText('当前账号在此系统中为只读成员，配置操作已禁用。')).not.toBeInTheDocument();
+});
+
+test('knowledge creation is disabled when repository configuration cannot load', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/v5/systems/alpha-system/git-config' && !init?.method) {
+      return jsonResponse({ message: '仓库配置暂时不可用' }, false, 503);
+    }
+    return fallback(input, init);
+  });
+  renderApp('/knowledge');
+
+  expect(await screen.findByText('仓库配置加载失败')).toBeInTheDocument();
+  expect(screen.getByText('仓库配置暂时不可用')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '新增条目' })).toBeDisabled();
+});
+
 test('git publishing configuration edits multiple repositories without rendering token', async () => {
   renderApp('/systems');
   fireEvent.click((await screen.findAllByRole('button', { name: '编辑' }))[0]);
@@ -83,11 +140,13 @@ test('git publishing configuration edits multiple repositories without rendering
   fireEvent.change(screen.getByLabelText('仓库 2 克隆方式'), { target: { value: 'gitlab' } });
   fireEvent.click(screen.getByRole('button', { name: '保存系统' }));
 
-  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/git-config', expect.objectContaining({ method: 'PUT' })));
-  const call = vi.mocked(fetch).mock.calls.find(([path, init]) => path === '/api/v5/systems/alpha-system/git-config' && init?.method === 'PUT');
-  const body = JSON.parse(String(call?.[1]?.body));
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/profile', expect.objectContaining({ method: 'PATCH' })));
+  const call = vi.mocked(fetch).mock.calls.find(([path, init]) => path === '/api/v5/systems/alpha-system/profile' && init?.method === 'PATCH');
+  const body = JSON.parse(String(call?.[1]?.body)).gitConfiguration;
   expect(body.releaseMode).toBe('gitlab');
   expect(body.repos).toHaveLength(2);
   expect(body.repos[1].gitlabProject).toBe('alpha/api');
+  expect(vi.mocked(fetch).mock.calls.filter(([path, init]) => path === '/api/v5/systems/alpha-system/profile' && init?.method === 'PATCH')).toHaveLength(1);
+  expect(fetch).not.toHaveBeenCalledWith('/api/v5/systems/alpha-system/git-config', expect.objectContaining({ method: 'PUT' }));
   expect(screen.queryByText('temporary-value')).not.toBeInTheDocument();
 });

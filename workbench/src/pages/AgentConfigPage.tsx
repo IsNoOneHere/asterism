@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Agent, AgentConfiguration, api, ModelProfile } from '../api/client';
+import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
+import { errorMessage, ErrorState } from '../components/Display';
 import { useCurrentSystem } from '../SystemContext';
 
 type ProfileDraft = { name: string; provider: string; model: string; baseUrl: string; apiKey: string; supportsVision: boolean };
@@ -12,7 +14,7 @@ const emptyAgent: AgentDraft = { name: '', engine: 'http', modelProfileRef: '', 
 const builtinPurpose: Record<string, string> = { product: 'PRD 对话', planner: '执行规划', developer: '默认执行' };
 
 export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
-  const { systemId } = useCurrentSystem();
+  const { systemId, canManageCurrentSystem, systemAccessLoading, systemAccessError } = useCurrentSystem();
   const queryClient = useQueryClient();
   const profileDialogRef = useRef<HTMLDialogElement>(null);
   const agentDialogRef = useRef<HTMLDialogElement>(null);
@@ -21,10 +23,12 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const [agentName, setAgentName] = useState('');
   const [agent, setAgent] = useState<AgentDraft>(emptyAgent);
   const [message, setMessage] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'profile' | 'agent'; id: string; name: string } | null>(null);
   const config = useQuery({
     queryKey: ['agent-config', systemId],
     queryFn: () => api.agentConfiguration(systemId),
     enabled: Boolean(systemId),
+    retry: false,
   });
   const accept = (value: AgentConfiguration, text: string) => {
     queryClient.setQueryData(['agent-config', systemId], value);
@@ -42,6 +46,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const deleteProfile = useMutation({
     mutationFn: (id: string) => api.deleteModelProfile(systemId, id),
     onSuccess: (value) => accept(value, '模型 Profile 已删除'),
+    onSettled: () => setDeleteTarget(null),
   });
   const saveAgent = useMutation({
     mutationFn: () => {
@@ -66,12 +71,14 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const deleteAgent = useMutation({
     mutationFn: (name: string) => api.deleteAgent(systemId, name),
     onSuccess: (value) => accept(value, 'Agent 已删除'),
+    onSettled: () => setDeleteTarget(null),
   });
 
   const value = config.data;
   const modelSection = section === 'models';
   const modelOnly = agentName === 'product' || agentName === 'planner';
   const openProfile = (item?: ModelProfile) => {
+    saveProfile.reset();
     setProfileId(item?.id ?? '');
     setProfile(item
       ? { name: item.name, provider: item.provider, model: item.model, baseUrl: item.baseUrl, apiKey: '', supportsVision: Boolean(item.supportsVision) }
@@ -80,6 +87,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
     profileDialogRef.current?.showModal();
   };
   const openAgent = (item?: Agent) => {
+    saveAgent.reset();
     setAgentName(item?.name ?? '');
     setAgent(item
       ? { name: item.name, engine: item.engine || 'http', modelProfileRef: item.modelProfileRef,
@@ -99,11 +107,13 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
       <div><h1>{modelSection ? '模型配置' : 'Agent 配置'}</h1><p>{modelSection ? '维护模型接入地址和凭证' : '维护 Agent 使用的模型和执行范围'}</p></div>
       <span className="config-count">{modelSection ? `${value?.modelProfiles.length ?? 0} 个模型` : `${value?.agents.length ?? 0} 个 Agent`}</span>
     </header>
+    {!systemAccessLoading && !systemAccessError && !canManageCurrentSystem && <div className="notice">当前账号在此系统中为只读成员，配置操作已禁用。</div>}
 
-    {modelSection ? <div className="panel business-model-panel">
+    {config.isLoading ? <div className="panel empty" role="status">配置加载中…</div> : config.isError ?
+    <ErrorState title="Agent 配置加载失败" error={config.error} onRetry={() => config.refetch()} /> : modelSection ? <div className="panel business-model-panel">
         <div className="config-section-head">
           <div><h2>模型列表</h2><p>API Key 只维护一次，页面不会回显明文。</p></div>
-          <button type="button" className="icon-text-button" onClick={() => openProfile()}><Plus size={16} />新增 Profile</button>
+          <button type="button" className="icon-text-button" disabled={!canManageCurrentSystem} onClick={() => openProfile()}><Plus size={16} />新增 Profile</button>
         </div>
         <div className="table-frame"><table className="data-table model-profile-table"><thead><tr><th>名称</th><th>协议 / 模型</th><th>状态</th><th>操作</th></tr></thead><tbody>
           {(value?.modelProfiles ?? []).map((item) => <tr key={item.id}>
@@ -111,8 +121,8 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
             <td>{providerName(item.provider)} · {item.model}</td>
             <td><span className={`key-status ${item.apiKeySet ? 'configured' : ''}`}><KeyRound size={14} aria-hidden="true" />{item.apiKeySet ? 'Key 已配置' : 'Key 未配置'}{item.supportsVision ? ' · Vision' : ''}</span></td>
             <td className="config-action-cell"><div className="button-row compact-actions">
-              <button type="button" className="icon-button" title="编辑 Profile" aria-label={`编辑 ${item.name || item.id}`} onClick={() => openProfile(item)}><Pencil size={16} /></button>
-              <button type="button" className="icon-button danger" title="删除 Profile" aria-label={`删除 ${item.name || item.id}`} onClick={() => deleteProfile.mutate(item.id)}><Trash2 size={16} /></button>
+              <button type="button" className="icon-button" title="编辑 Profile" aria-label={`编辑 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => openProfile(item)}><Pencil size={16} /></button>
+              <button type="button" className="icon-button danger" title="删除 Profile" aria-label={`删除 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => { deleteProfile.reset(); setDeleteTarget({ type: 'profile', id: item.id, name: item.name || item.id }); }}><Trash2 size={16} /></button>
             </div></td>
           </tr>)}
           {value?.modelProfiles.length === 0 && <tr><td className="empty-cell" colSpan={4}>还没有模型连接</td></tr>}
@@ -120,7 +130,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
       </div> : <div className="panel execution-agent-panel">
         <div className="config-section-head">
           <div><h2>Agent 列表</h2><p>内置 Agent 固定置顶，自定义 Agent 供 Planner 按名称分配。</p></div>
-          <button type="button" className="icon-text-button" onClick={() => openAgent()}><Plus size={16} />新增 Agent</button>
+          <button type="button" className="icon-text-button" disabled={!canManageCurrentSystem} onClick={() => openAgent()}><Plus size={16} />新增 Agent</button>
         </div>
         <div className="table-frame"><table className="data-table agent-role-table"><thead><tr><th>Agent</th><th>Engine / Profile</th><th>范围</th><th>操作</th></tr></thead><tbody>
           {(value?.agents ?? []).map((item) => <tr key={item.name}>
@@ -128,15 +138,14 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
             <td>{item.engine ? `${item.engine} · ` : ''}{profileName(value?.modelProfiles ?? [], item.modelProfileRef)}</td>
             <td>{item.pathScope.join(', ') || (item.name === 'product' || item.name === 'planner' ? '不执行代码' : '跟随系统')}</td>
             <td className="config-action-cell"><div className="button-row compact-actions">
-              <button type="button" className="icon-button" title="编辑 Agent" aria-label={`编辑 ${item.name}`} onClick={() => openAgent(item)}><Pencil size={16} /></button>
-              {item.kind === 'custom' && <button type="button" className="icon-button danger" title="删除 Agent" aria-label={`删除 ${item.name}`} onClick={() => deleteAgent.mutate(item.name)}><Trash2 size={16} /></button>}
+              <button type="button" className="icon-button" title="编辑 Agent" aria-label={`编辑 ${item.name}`} disabled={!canManageCurrentSystem} onClick={() => openAgent(item)}><Pencil size={16} /></button>
+              {item.kind === 'custom' && <button type="button" className="icon-button danger" title="删除 Agent" aria-label={`删除 ${item.name}`} disabled={!canManageCurrentSystem} onClick={() => { deleteAgent.reset(); setDeleteTarget({ type: 'agent', id: item.name, name: item.name }); }}><Trash2 size={16} /></button>}
             </div></td>
           </tr>)}
         </tbody></table></div>
       </div>}
 
     {message && <div className="success-text">{message}</div>}
-    {(config.error || (modelSection ? deleteProfile.error : deleteAgent.error)) && <div className="error-text">{errorMessage(config.error || (modelSection ? deleteProfile.error : deleteAgent.error))}</div>}
 
     {modelSection && <dialog ref={profileDialogRef} className="confirm-dialog config-dialog" aria-labelledby="profile-dialog-title" onClose={() => { setProfileId(''); setProfile(emptyProfile); }}>
       <form onSubmit={(event) => { event.preventDefault(); saveProfile.mutate(); }}>
@@ -150,7 +159,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
           <label className="checkbox-field"><input type="checkbox" checked={profile.supportsVision} onChange={(event) => setProfile({ ...profile, supportsVision: event.target.checked })} /><span>支持图片理解</span></label>
         </div>
         {saveProfile.error && <div className="error-text">{errorMessage(saveProfile.error)}</div>}
-        <div className="button-row"><button type="button" className="secondary" onClick={() => profileDialogRef.current?.close()}>取消</button><button type="submit" disabled={saveProfile.isPending}>保存 Profile</button></div>
+        <div className="button-row"><button type="button" className="secondary" onClick={() => profileDialogRef.current?.close()}>取消</button><button type="submit" disabled={!canManageCurrentSystem || saveProfile.isPending}>保存 Profile</button></div>
       </form>
     </dialog>}
 
@@ -167,9 +176,31 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
             <label>超时（秒）<input type="number" min="1" value={agent.timeoutSeconds} onChange={(event) => setAgent({ ...agent, timeoutSeconds: Number(event.target.value) })} /></label></>}
         </div>
         {saveAgent.error && <div className="error-text">{errorMessage(saveAgent.error)}</div>}
-        <div className="button-row"><button type="button" className="secondary" onClick={() => agentDialogRef.current?.close()}>取消</button><button type="submit" disabled={saveAgent.isPending}>{agentName ? '保存 Agent' : '添加 Agent'}</button></div>
+        <div className="button-row"><button type="button" className="secondary" onClick={() => agentDialogRef.current?.close()}>取消</button><button type="submit" disabled={!canManageCurrentSystem || saveAgent.isPending}>{agentName ? '保存 Agent' : '添加 Agent'}</button></div>
       </form>
     </dialog>}
+    <ActionConfirmDialog
+      open={Boolean(deleteTarget)}
+      title={`删除${deleteTarget?.type === 'profile' ? '模型 Profile' : '自定义 Agent'}？`}
+      description={`“${deleteTarget?.name || ''}”删除后无法恢复。`}
+      confirmLabel="确认删除"
+      pending={deleteProfile.isPending || deleteAgent.isPending}
+      onClose={() => setDeleteTarget(null)}
+      onConfirm={() => {
+        if (deleteTarget?.type === 'profile') deleteProfile.mutate(deleteTarget.id);
+        if (deleteTarget?.type === 'agent') deleteAgent.mutate(deleteTarget.id);
+      }}
+    />
+    <ActionConfirmDialog
+      open={Boolean(deleteProfile.error || deleteAgent.error)}
+      title="删除失败"
+      description={errorMessage(deleteProfile.error || deleteAgent.error)}
+      confirmLabel="知道了"
+      alert
+      showCancel={false}
+      onClose={() => { deleteProfile.reset(); deleteAgent.reset(); }}
+      onConfirm={() => { deleteProfile.reset(); deleteAgent.reset(); }}
+    />
   </section>;
 }
 
@@ -187,8 +218,4 @@ function providerName(provider: string) {
 
 function lines(value: string) {
   return value.split('\n').map((item) => item.trim()).filter(Boolean);
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : '配置保存失败';
 }

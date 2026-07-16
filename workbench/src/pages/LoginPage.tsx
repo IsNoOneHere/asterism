@@ -10,10 +10,13 @@ export function LoginPage({ onLoggedIn }: Props) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [pending, setPending] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (pending) return;
     setError('');
+    setPending(true);
     try {
       // Spring Security form login 写入 session cookie，后续接口复用同一登录态。
       await api.login(username, password);
@@ -22,6 +25,8 @@ export function LoginPage({ onLoggedIn }: Props) {
       onLoggedIn();
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : '登录失败');
+    } finally {
+      setPending(false);
     }
   }
 
@@ -51,7 +56,7 @@ export function LoginPage({ onLoggedIn }: Props) {
             <input type="password" autoComplete="current-password" placeholder="请输入密码" value={password} onChange={(event) => setPassword(event.target.value)} />
           </label>
           {error && <div className="login-error" role="alert"><strong>登录失败</strong><span>{error}</span></div>}
-          <button type="submit" disabled={!username || !password}>进入星群</button>
+          <button type="submit" disabled={!username || !password || pending}>{pending ? '登录中…' : '进入星群'}</button>
           <small className="login-footnote">Asterism Workbench · 安全会话</small>
         </form>
       </div>

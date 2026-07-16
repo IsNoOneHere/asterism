@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { PendingAssistantBubble } from '../src/pages/NewPrdPage';
-import { jsonResponse, renderApp, resetAppTestState } from './appTestHarness';
+import { jsonResponse, renderApp, renderAppWithRouter, resetAppTestState } from './appTestHarness';
 
 beforeEach(resetAppTestState);
 
@@ -41,7 +41,6 @@ test('new prd page renders two chat turns as four bubbles', async () => {
 });
 
 test('warns before leaving an unsaved work item description', async () => {
-  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
   renderApp('/work-items/new');
 
   fireEvent.change(await screen.findByLabelText('需求描述'), { target: { value: '尚未保存的需求' } });
@@ -50,9 +49,31 @@ test('warns before leaving an unsaved work item description', async () => {
   expect(unload.defaultPrevented).toBe(true);
 
   fireEvent.click(screen.getByRole('link', { name: '返回工作项中心' }));
-  expect(confirm).toHaveBeenCalledWith('内容尚未保存，是否离开？');
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog).toHaveTextContent('内容尚未保存，是否离开？');
+  fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
   expect(screen.getByRole('heading', { name: '创建工作项' })).toBeInTheDocument();
-  confirm.mockRestore();
+});
+
+test('browser back is blocked for unsent content on an existing draft', async () => {
+  const router = renderAppWithRouter('/work-items');
+  await act(async () => { await router.navigate('/work-items/new/prd-1'); });
+  fireEvent.change(await screen.findByLabelText('需求描述'), { target: { value: '草稿里尚未发送的补充' } });
+
+  act(() => { void router.navigate(-1); });
+
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog).toHaveTextContent('离开当前页面？');
+  expect(screen.getByRole('heading', { name: '继续创建工作项' })).toBeInTheDocument();
+});
+
+test('manual draft edits are protected until saved', async () => {
+  renderApp('/work-items/new/prd-1');
+  const title = await screen.findByLabelText('PRD 标题');
+  fireEvent.change(title, { target: { value: '尚未保存的新标题' } });
+  fireEvent.click(screen.getByRole('link', { name: '返回需求草稿' }));
+
+  expect(await screen.findByRole('dialog')).toHaveTextContent('内容尚未保存，是否离开？');
 });
 
 test('prd draft list shows creator display name and account', async () => {

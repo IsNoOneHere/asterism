@@ -43,6 +43,44 @@ test('shows login page when auth check fails', async () => {
   expect(document.querySelector('.star-field')).toBeInTheDocument();
 });
 
+test('auth service failure shows retry instead of pretending the user is logged out', async () => {
+  vi.mocked(fetch).mockImplementationOnce(() => jsonResponse({ message: '认证服务暂时不可用' }, false, 503));
+  renderApp('/work-items');
+
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('登录状态检查失败');
+  expect(alert).toHaveTextContent('认证服务暂时不可用');
+  expect(screen.queryByRole('heading', { name: '登录' })).not.toBeInTheDocument();
+});
+
+test('login shows a pending state and prevents duplicate submission', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  let initialAuthCheck = true;
+  let completeLogin!: () => void;
+  const loginResponse = new Promise<Response>((resolve) => {
+    completeLogin = () => { void jsonResponse(undefined).then(resolve); };
+  });
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/auth/me' && initialAuthCheck) {
+      initialAuthCheck = false;
+      return jsonResponse('unauthorized', false);
+    }
+    if (path === '/api/v5/auth/login') return loginResponse;
+    return fallback(input, init);
+  });
+  renderApp('/work-items');
+
+  fireEvent.change(await screen.findByLabelText('用户名'), { target: { value: 'admin' } });
+  fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'secret' } });
+  fireEvent.click(screen.getByRole('button', { name: '进入星群' }));
+
+  expect(await screen.findByRole('button', { name: '登录中…' })).toBeDisabled();
+  expect(vi.mocked(fetch).mock.calls.filter(([path]) => path === '/api/v5/auth/login')).toHaveLength(1);
+  await act(async () => completeLogin());
+  expect(await screen.findByText('工作项中心')).toBeInTheDocument();
+});
+
 test('logout immediately returns to login page', async () => {
   renderApp('/work-items');
 
@@ -50,6 +88,54 @@ test('logout immediately returns to login page', async () => {
 
   expect(await screen.findByRole('heading', { name: '登录' })).toBeInTheDocument();
   expect(fetch).toHaveBeenCalledWith('/logout', expect.objectContaining({ method: 'POST' }));
+});
+
+test('system list failure shows a retry action instead of an empty workspace', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  let failSystems = true;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/v5/systems' && failSystems) {
+      failSystems = false;
+      return jsonResponse({ message: '系统服务暂时不可用' }, false, 503);
+    }
+    return fallback(input, init);
+  });
+  renderApp('/systems');
+
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('系统列表加载失败');
+  expect(alert).toHaveTextContent('系统服务暂时不可用');
+  fireEvent.click(within(alert).getByRole('button', { name: '重新加载' }));
+
+  expect(await screen.findByRole('heading', { name: '系统配置' })).toBeInTheDocument();
+});
+
+test('system page exposes owner list loading failures', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/v5/users') return jsonResponse({ message: '用户列表暂时不可用' }, false, 503);
+    return fallback(input, init);
+  });
+  renderApp('/systems');
+
+  expect(await screen.findByText('负责人列表加载失败')).toBeInTheDocument();
+  expect(screen.getByText('用户列表暂时不可用')).toBeInTheDocument();
+});
+
+test('permission lookup failure is shown as an error instead of a read-only notice', async () => {
+  setApiResponse('/api/v5/auth/me', { userId: 'reader', roles: [] });
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/v5/systems/alpha-system/members') {
+      return jsonResponse({ message: '权限服务暂时不可用' }, false, 503);
+    }
+    return fallback(input, init);
+  });
+  renderApp('/models');
+
+  expect(await screen.findByText('系统权限加载失败')).toBeInTheDocument();
+  expect(screen.getByText('权限服务暂时不可用')).toBeInTheDocument();
+  expect(screen.queryByText('当前账号在此系统中为只读成员，配置操作已禁用。')).not.toBeInTheDocument();
 });
 
 test.each([
@@ -60,6 +146,7 @@ test.each([
   renderApp(path);
 
   const actions = await screen.findAllByRole('button', { name: button });
+  await waitFor(() => expect(actions[0]).toBeEnabled());
   fireEvent.click(actions[0]);
 
   expect(await screen.findByRole('dialog')).toHaveAttribute('open');
@@ -99,6 +186,19 @@ test('system deletion failure is shown in the unified alert dialog', async () =>
   expect(alert).toHaveTextContent('系统已有业务数据，无法删除');
   fireEvent.click(within(alert).getByRole('button', { name: '知道了' }));
   await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+});
+
+test('disabled users require an explicit enable action and current user cannot disable itself', async () => {
+  setApiResponse('/api/v5/users', [
+    { userId: 'admin', displayName: 'Admin', enabled: true },
+    { userId: 'disabled-user', displayName: 'Disabled User', enabled: false },
+  ]);
+  renderApp('/users');
+
+  expect(await screen.findByRole('button', { name: '禁用' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: '启用' }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/users/disabled-user/enable', expect.objectContaining({ method: 'POST' })));
 });
 
 test('work item page loads selected system from systems api', async () => {
@@ -165,7 +265,7 @@ test('browser back restores work item query state', async () => {
   fireEvent.change(await screen.findByLabelText('搜索工作项'), { target: { value: '登录' } });
   await waitFor(() => expect(router.state.location.state).toMatchObject({ workItemList: { q: '登录' } }));
   fireEvent.click(await screen.findByRole('link', { name: 'wi-1' }));
-  expect(await screen.findByText('ExecutionPlanDrafted')).toBeInTheDocument();
+  expect(await screen.findByText('执行计划已生成')).toBeInTheDocument();
 
   await act(async () => { await router.navigate(-1); });
   expect(await screen.findByLabelText('搜索工作项')).toHaveValue('登录');
@@ -177,7 +277,7 @@ test('work item detail shows drafted execution plan from event timeline', async 
   expect(await screen.findByText('登录页错误提示')).toBeInTheDocument();
   expect(screen.queryByLabelText('当前工作系统')).not.toBeInTheDocument();
   expect(await screen.findByText('alpha-system')).toBeInTheDocument();
-  expect(await screen.findByText('ExecutionPlanDrafted')).toBeInTheDocument();
+  expect(await screen.findByText('执行计划已生成')).toBeInTheDocument();
   expect(await screen.findByText('执行步骤')).toBeInTheDocument();
   expect(await screen.findByText(/错误密码时显示提示/)).toBeInTheDocument();
   expect(await screen.findByText('目标文件')).toBeInTheDocument();
@@ -192,7 +292,7 @@ test('work item detail shows drafted execution plan from event timeline', async 
 test('work item detail shows execution provider and token summary', async () => {
   renderApp('/work-items/wi-1');
 
-  expect(await screen.findByText('ModificationCompleted')).toBeInTheDocument();
+  expect(await screen.findByText('修改已完成')).toBeInTheDocument();
   expect((await screen.findAllByText('claude_sdk')).length).toBeGreaterThan(0);
   expect(await screen.findByText('输入 320 / 输出 80')).toBeInTheDocument();
   expect(await screen.findByText('代码 diff')).toBeInTheDocument();
@@ -202,10 +302,26 @@ test('work item detail shows execution provider and token summary', async () => 
 test('work item detail shows agent stage handoff metadata', async () => {
   renderApp('/work-items/wi-1');
 
-  expect(await screen.findByText('AgentStageCompleted')).toBeInTheDocument();
+  expect(await screen.findByText('Agent 阶段已完成')).toBeInTheDocument();
   expect(await screen.findByText('frontend')).toBeInTheDocument();
   expect(await screen.findByText('前端修改完成')).toBeInTheDocument();
   expect((await screen.findAllByText('src/login.tsx')).length).toBeGreaterThan(0);
+});
+
+test('work item detail translates waiting role and merge request status', async () => {
+  setApiResponse('/api/v5/work-items/wi-1/events', [{
+    sequence: 1,
+    eventId: 'evt-mr',
+    eventType: 'MergeRequestCreated',
+    payloadJson: JSON.stringify({ repo: 'frontend', mrIid: 12, mrUrl: 'https://gitlab.example/mr/12', state: 'opened' }),
+    causationId: 'attempt-1:mr:frontend',
+    createdAt: '2026-07-05T12:00:00Z',
+  }]);
+  renderApp('/work-items/wi-1');
+
+  expect(await screen.findByText('系统负责人')).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: 'GitLab 合并请求' })).toBeInTheDocument();
+  expect(screen.getByText('已打开')).toBeInTheDocument();
 });
 
 test('work item detail shows completed and failed agent stages', async () => {
@@ -258,7 +374,7 @@ test('waiting merge shows each GitLab MR and verified merge action', async () =>
   expect(await screen.findByRole('link', { name: 'frontend !1' })).toHaveAttribute('href', 'https://gitlab/web/1');
   expect(screen.getByRole('link', { name: 'backend !2' })).toHaveAttribute('href', 'https://gitlab/api/2');
   expect(screen.getByRole('button', { name: '标记已合并' })).toBeInTheDocument();
-  expect(screen.getByText('merged')).toBeInTheDocument();
+  expect(screen.getByText('已合并')).toBeInTheDocument();
 });
 
 test('memory approve moves candidate out of pending tab', async () => {

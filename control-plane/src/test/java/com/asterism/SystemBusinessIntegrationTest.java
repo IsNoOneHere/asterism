@@ -37,7 +37,7 @@ class SystemBusinessIntegrationTest {
     private JdbcUserAccountService users;
 
     @Test
-    void systemCreateIsInsertOnlyAndCreatorBecomesOwner() throws Exception {
+    void systemCreateIsInsertOnlyAndCreatorAndConfiguredOwnerCanControl() throws Exception {
         var systemId = id("sys-create");
 
         createSystem(systemId, "e2e-user")
@@ -53,6 +53,11 @@ class SystemBusinessIntegrationTest {
                 .query(Long.class)
                 .single();
         assertThat(ownerCount).isEqualTo(1);
+        assertThat(jdbc.sql("""
+                        select count(*) from system_memberships
+                        where system_id = :systemId and user_id = 'e2e-owner' and role = 'owner'
+                        """)
+                .param("systemId", systemId).query(Long.class).single()).isEqualTo(1);
     }
 
     @Test
@@ -75,6 +80,25 @@ class SystemBusinessIntegrationTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(ownerList).contains(systemId);
+    }
+
+    @Test
+    void combinedConfigurationFailureRollsBackProfileChanges() throws Exception {
+        var systemId = id("sys-atomic-config");
+        createSystem(systemId, "e2e-owner").andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/v5/systems/" + systemId + "/profile")
+                        .with(httpBasic("e2e-owner", "asterism"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"不应保存","description":"demo","repoPath":"/tmp/changed",
+                                 "ownerUserId":"e2e-owner","allowedPaths":[],"forbiddenPaths":[],"testCommands":[],
+                                 "gitConfiguration":{"repos":[]}}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        assertThat(jdbc.sql("select name from systems where system_id = :systemId")
+                .param("systemId", systemId).query(String.class).single()).isEqualTo("Demo");
     }
 
     @Test

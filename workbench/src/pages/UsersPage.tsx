@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyRound, Pencil, Plus, Trash2, UserPlus } from 'lucide-react';
 import { api, UserAccount } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
+import { errorMessage, ErrorState } from '../components/Display';
 import { Pagination, usePagination } from '../components/Pagination';
 import { SearchField } from '../components/SearchField';
 import { useCurrentSystem } from '../SystemContext';
@@ -13,7 +14,7 @@ type UserConfirmAction =
   | { type: 'delete'; userId: string; name: string }
   | { type: 'remove-member'; userId: string; role: string };
 
-export function UsersPage() {
+export function UsersPage({ currentUserId }: { currentUserId: string }) {
   const queryClient = useQueryClient();
   const users = useQuery({ queryKey: ['users'], queryFn: api.users, retry: false });
   const { systemId } = useCurrentSystem();
@@ -73,6 +74,13 @@ export function UsersPage() {
     },
     onSettled: () => setConfirmAction(null),
   });
+  const enable = useMutation({
+    mutationFn: api.enableUser,
+    onSuccess: () => {
+      setMessage('用户已启用');
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    },
+  });
   const reset = useMutation({
     mutationFn: (value: { userId: string; password: string }) => api.resetPassword(value.userId, value.password),
     onSuccess: () => {
@@ -108,11 +116,12 @@ export function UsersPage() {
     },
     onSettled: () => setConfirmAction(null),
   });
-  const operationError = removeUser.error || disable.error || removeMembership.error;
+  const operationError = removeUser.error || disable.error || enable.error || removeMembership.error;
   const confirmation = confirmAction ? confirmationCopy(confirmAction) : null;
-  const operationPending = removeUser.isPending || disable.isPending || removeMembership.isPending;
+  const operationPending = removeUser.isPending || disable.isPending || enable.isPending || removeMembership.isPending;
 
   function openUserEditor(user?: UserAccount) {
+    upsert.reset();
     setEditingUser(Boolean(user));
     setUserForm(user
       ? { userId: user.userId, displayName: user.displayName, email: user.email || '', password: '' }
@@ -123,12 +132,14 @@ export function UsersPage() {
   }
 
   function openMemberEditor() {
+    saveMembership.reset();
     setMembership({ systemId, userId: '', role: 'requester' });
     setMessage('');
     memberDialogRef.current?.showModal();
   }
 
   function openPasswordReset(userId: string) {
+    reset.reset();
     setResetForm({ userId, password: '', confirm: '' });
     resetDialogRef.current?.showModal();
   }
@@ -136,6 +147,7 @@ export function UsersPage() {
   function openConfirmation(action: UserConfirmAction) {
     removeUser.reset();
     disable.reset();
+    enable.reset();
     removeMembership.reset();
     setMessage('');
     setConfirmAction(action);
@@ -151,6 +163,7 @@ export function UsersPage() {
   function clearOperationError() {
     removeUser.reset();
     disable.reset();
+    enable.reset();
     removeMembership.reset();
   }
 
@@ -182,7 +195,8 @@ export function UsersPage() {
           <span className="result-summary">显示 {tab === 'users' ? filteredUsers.length : filteredMembers.length} / {tab === 'users' ? userValues.length : memberValues.length}</span>
         </div>
 
-        {tab === 'users' ? <>
+        {tab === 'users' ? users.isLoading ? <div className="empty" role="status">用户加载中…</div> : users.isError ?
+          <ErrorState title="用户列表加载失败" error={users.error} onRetry={() => users.refetch()} /> : <>
           <div className="table-frame"><table className="data-table management-table users-table"><thead><tr><th>用户</th><th>邮箱</th><th>状态</th><th>操作</th></tr></thead><tbody>
             {userPagination.pageItems.map((user) => <tr key={user.userId}>
               <td><div className="table-title"><strong>{user.displayName}</strong><span>{user.userId}</span></div></td>
@@ -191,15 +205,18 @@ export function UsersPage() {
               <td><div className="button-row compact-actions">
                 <button type="button" className="secondary icon-text-button" onClick={() => openUserEditor(user)}><Pencil size={15} />编辑</button>
                 <button type="button" className="secondary icon-text-button" onClick={() => openPasswordReset(user.userId)}><KeyRound size={15} />重置密码</button>
-                <button type="button" className="danger-outline" onClick={() => openConfirmation({ type: 'disable', userId: user.userId, name: user.displayName || user.userId })} disabled={!user.enabled}>禁用</button>
-                <button type="button" className="danger-outline icon-text-button" aria-label={`删除用户 ${user.userId}`} disabled={removeUser.isPending} onClick={() => openConfirmation({ type: 'delete', userId: user.userId, name: user.displayName || user.userId })}><Trash2 size={15} />删除</button>
+                {user.enabled ? <button type="button" className="danger-outline" title={user.userId === currentUserId ? '不能禁用当前登录用户' : undefined}
+                  onClick={() => openConfirmation({ type: 'disable', userId: user.userId, name: user.displayName || user.userId })} disabled={user.userId === currentUserId}>禁用</button>
+                  : <button type="button" className="secondary" disabled={enable.isPending} onClick={() => { clearOperationError(); setMessage(''); enable.mutate(user.userId); }}>启用</button>}
+                <button type="button" className="danger-outline icon-text-button" aria-label={`删除用户 ${user.userId}`} title={user.userId === currentUserId ? '不能删除当前登录用户' : undefined}
+                  disabled={removeUser.isPending || user.userId === currentUserId} onClick={() => openConfirmation({ type: 'delete', userId: user.userId, name: user.displayName || user.userId })}><Trash2 size={15} />删除</button>
               </div></td>
             </tr>)}
             {!filteredUsers.length && <tr><td className="empty-cell" colSpan={4}>{query ? '没有匹配的用户' : '暂无用户'}</td></tr>}
           </tbody></table></div>
-          {users.isError && <div className="empty">用户接口不可用或无管理员权限。</div>}
           <Pagination total={filteredUsers.length} page={userPagination.page} totalPages={userPagination.totalPages} onPageChange={userPagination.setPage} />
-        </> : <>
+        </> : members.isLoading ? <div className="empty" role="status">成员加载中…</div> : members.isError ?
+          <ErrorState title="成员列表加载失败" error={members.error} onRetry={() => members.refetch()} /> : <>
           <div className="table-frame"><table className="data-table management-table"><thead><tr><th>成员</th><th>角色</th><th>所属系统</th><th>操作</th></tr></thead><tbody>
             {memberPagination.pageItems.map((member) => <tr key={member.userId + member.role}>
               <td><div className="table-title"><strong>{member.displayName || member.userId}</strong><span>{member.userId}</span></div></td>
@@ -242,8 +259,8 @@ export function UsersPage() {
             <label>邮箱<input type="email" value={userForm.email} onChange={(event) => setUserForm({ ...userForm, email: event.target.value })} /></label>
             <label>密码<input type="password" autoComplete="new-password" placeholder={editingUser ? '留空则不修改' : ''} value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} /></label>
           </div>
-          {upsert.error && <div className="error-text">用户保存失败。</div>}
-          <div className="button-row"><button type="button" className="secondary" onClick={() => userDialogRef.current?.close()}>取消</button><button type="submit" disabled={!userForm.userId || !userForm.displayName || upsert.isPending}>保存用户</button></div>
+          {upsert.error && <div className="error-text">{upsert.error.message}</div>}
+          <div className="button-row"><button type="button" className="secondary" onClick={() => userDialogRef.current?.close()}>取消</button><button type="submit" disabled={!userForm.userId || !userForm.displayName || (!editingUser && !userForm.password) || upsert.isPending}>保存用户</button></div>
         </form>
       </dialog>
 
@@ -252,7 +269,7 @@ export function UsersPage() {
           <div className="config-section-head compact"><div><h2 id="member-dialog-title">添加系统成员</h2><p>成员将加入当前系统 {systemId}。</p></div></div>
           <label>用户<select required value={membership.userId} onChange={(event) => setMembership({ ...membership, userId: event.target.value })}><option value="">请选择用户</option>{enabledUsers.map((user) => <option key={user.userId} value={user.userId}>{user.displayName || user.userId}</option>)}</select></label>
           <label>角色<select value={membership.role} onChange={(event) => setMembership({ ...membership, role: event.target.value })}><option value="requester">需求方</option><option value="owner">负责人</option><option value="admin">管理员</option></select></label>
-          {saveMembership.error && <div className="error-text">成员保存失败。</div>}
+          {saveMembership.error && <div className="error-text" role="alert">{errorMessage(saveMembership.error, '成员保存失败')}</div>}
           <div className="button-row"><button type="button" className="secondary" onClick={() => memberDialogRef.current?.close()}>取消</button><button type="submit" disabled={!membership.userId || saveMembership.isPending}>保存成员</button></div>
         </form>
       </dialog>
@@ -263,7 +280,7 @@ export function UsersPage() {
           <label>新密码<input type="password" autoComplete="new-password" value={resetForm.password} onChange={(event) => setResetForm({ ...resetForm, password: event.target.value })} /></label>
           <label>再次输入<input type="password" autoComplete="new-password" value={resetForm.confirm} onChange={(event) => setResetForm({ ...resetForm, confirm: event.target.value })} /></label>
           {resetForm.confirm && resetForm.password !== resetForm.confirm && <div className="error-text">两次密码不一致</div>}
-          {reset.error && <div className="error-text">密码重置失败。</div>}
+          {reset.error && <div className="error-text" role="alert">{errorMessage(reset.error, '密码重置失败')}</div>}
           <div className="button-row"><button type="button" className="secondary" onClick={() => resetDialogRef.current?.close()}>取消</button><button type="submit" disabled={!resetForm.password || resetForm.password !== resetForm.confirm || reset.isPending}>确认重置</button></div>
         </form>
       </dialog>

@@ -6,21 +6,22 @@ import { useFieldArray, useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { api, GitConfiguration, SystemProfile } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
+import { ErrorState } from '../components/Display';
 import { Pagination, usePagination } from '../components/Pagination';
 import { SearchField } from '../components/SearchField';
 import { useCurrentSystem } from '../SystemContext';
 
 const repoSchema = z.object({
-  repoId: z.string().min(1), name: z.string().min(1), kind: z.enum(['frontend', 'backend', 'other']),
-  gitlabProject: z.string(), defaultBranch: z.string().min(1), cloneMode: z.enum(['gitlab', 'local']),
+  repoId: z.string().min(1, '请输入仓库编号'), name: z.string().min(1, '请输入仓库名称'), kind: z.enum(['frontend', 'backend', 'other']),
+  gitlabProject: z.string(), defaultBranch: z.string().min(1, '请输入默认分支'), cloneMode: z.enum(['gitlab', 'local']),
   localPath: z.string(), allowedPaths: z.string(), forbiddenPaths: z.string(), testCommands: z.string(),
 });
 
 const schema = z.object({
-  systemId: z.string().min(1), name: z.string().min(1), description: z.string(), ownerUserId: z.string().min(1),
+  systemId: z.string().min(1, '请输入系统编号'), name: z.string().min(1, '请输入系统名称'), description: z.string(), ownerUserId: z.string().min(1, '请选择系统负责人'),
   releaseMode: z.enum(['local', 'gitlab']), validationMode: z.enum(['auto', 'skip']),
   mrTargetBranch: z.string(), mrLabels: z.string(), gitlabBaseUrl: z.string(), gitlabToken: z.string(),
-  repos: z.array(repoSchema).min(1),
+  repos: z.array(repoSchema).min(1, '至少配置一个代码仓库'),
 });
 
 type FormValue = z.infer<typeof schema>;
@@ -36,8 +37,8 @@ const emptyForm: FormValue = {
 
 export function SystemsPage() {
   const queryClient = useQueryClient();
-  const users = useQuery({ queryKey: ['users'], queryFn: api.users, retry: false });
-  const { systems, systemId, setSystemId } = useCurrentSystem();
+  const { systems, systemId, setSystemId, currentUser, isAdmin, systemMembers, canManageCurrentSystem } = useCurrentSystem();
+  const users = useQuery({ queryKey: ['users'], queryFn: api.users, enabled: isAdmin, retry: false });
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [mode, setMode] = useState<'edit' | 'new'>('new');
   const [message, setMessage] = useState('');
@@ -45,7 +46,17 @@ export function SystemsPage() {
   const [deleteTarget, setDeleteTarget] = useState<SystemProfile | null>(null);
   const [tokenSet, setTokenSet] = useState(false);
   const [effectiveGitLabUrl, setEffectiveGitLabUrl] = useState('');
-  const enabledUsers = (users.data ?? []).filter((user) => user.enabled);
+  const [editingSystem, setEditingSystem] = useState<SystemProfile | null>(null);
+  const [editorLoading, setEditorLoading] = useState(false);
+  const [editorError, setEditorError] = useState<unknown>();
+  const enabledUsers = useMemo(() => {
+    const values = isAdmin
+      ? (users.data ?? []).filter((user) => user.enabled).map((user) => ({ userId: user.userId, displayName: user.displayName }))
+      : systemMembers.map((member) => ({ userId: member.userId, displayName: member.displayName || member.userId }));
+    values.push({ userId: currentUser.userId, displayName: currentUser.userId });
+    if (editingSystem) values.push({ userId: editingSystem.ownerUserId, displayName: editingSystem.ownerUserId });
+    return [...new Map(values.map((user) => [user.userId, user])).values()];
+  }, [currentUser.userId, editingSystem, isAdmin, systemMembers, users.data]);
   const filteredSystems = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     if (!keyword) return systems;
@@ -56,14 +67,12 @@ export function SystemsPage() {
   const form = useForm<FormValue>({ resolver: zodResolver(schema), defaultValues: emptyForm });
   const repos = useFieldArray({ control: form.control, name: 'repos' });
   const releaseMode = form.watch('releaseMode');
+  const validationError = firstError(form.formState.errors);
 
   const save = useMutation({
     mutationFn: async (value: FormValue) => {
-      const saved = mode === 'new'
-        ? await api.createSystem(toProfileRequest(value))
-        : await api.updateSystemProfile(value.systemId, toProfileRequest(value));
-      await api.updateGitConfiguration(saved.systemId, toGitRequest(value));
-      return saved;
+      const body = { ...toProfileRequest(value), gitConfiguration: toGitRequest(value) };
+      return mode === 'new' ? api.createSystem(body) : api.updateSystemProfile(value.systemId, body);
     },
     onSuccess: (saved) => {
       console.info('v5 workbench 保存系统', { systemId: saved.systemId });
@@ -87,9 +96,14 @@ export function SystemsPage() {
 
   async function openEditor(system?: SystemProfile) {
     setMode(system ? 'edit' : 'new');
+    setEditingSystem(system ?? null);
     setMessage('');
     save.reset();
+    setEditorError(undefined);
+    setEditorLoading(Boolean(system));
+    if (!dialogRef.current?.open) dialogRef.current?.showModal();
     if (system) {
+      form.reset({ ...emptyForm, systemId: system.systemId, name: system.name, ownerUserId: system.ownerUserId });
       try {
         const git = await queryClient.fetchQuery({
           queryKey: ['git-config', system.systemId], queryFn: () => api.gitConfiguration(system.systemId),
@@ -98,16 +112,16 @@ export function SystemsPage() {
         setTokenSet(git.tokenSet);
         setEffectiveGitLabUrl(git.effectiveGitlabBaseUrl);
       } catch (error) {
-        setMessage(String(error));
-        return;
+        setEditorError(error);
+      } finally {
+        setEditorLoading(false);
       }
     } else {
       form.reset(emptyForm);
       setTokenSet(false);
       setEffectiveGitLabUrl('');
+      setEditorLoading(false);
     }
-    // 复用浏览器原生 dialog，避免额外弹窗依赖。
-    dialogRef.current?.showModal();
   }
 
   return (
@@ -118,6 +132,7 @@ export function SystemsPage() {
       </header>
 
       {message && <div className="success-text" role="status">{message}</div>}
+      {users.isError && <ErrorState title="负责人列表加载失败" error={users.error} onRetry={() => users.refetch()} />}
 
       <div className="panel management-panel">
         <div className="config-section-head">
@@ -129,16 +144,18 @@ export function SystemsPage() {
           <span className="result-summary">显示 {filteredSystems.length} / {systems.length}</span>
         </div>
         <div className="table-frame"><table className="data-table management-table system-table"><thead><tr><th>系统</th><th>代码仓库</th><th>负责人</th><th>状态</th><th>操作</th></tr></thead><tbody>
-          {pagination.pageItems.map((system) => <tr key={system.systemId}>
+          {pagination.pageItems.map((system) => {
+            const canManage = isAdmin || system.ownerUserId === currentUser.userId || (system.systemId === systemId && canManageCurrentSystem);
+            return <tr key={system.systemId}>
             <td><div className="table-title"><strong>{system.name}</strong><span>{system.systemId}{system.description ? ` · ${system.description}` : ''}</span></div></td>
             <td className="path-cell">{system.repoPath}</td>
             <td>{ownerName(enabledUsers, system.ownerUserId)}</td>
             <td>{system.systemId === systemId ? <span className="status-badge success">当前系统</span> : <span className="status-badge neutral">可用</span>}</td>
             <td><div className="button-row compact-actions">
-              <button type="button" className="secondary icon-text-button" onClick={() => void openEditor(system)}><Pencil size={15} />编辑</button>
-              <button type="button" className="danger-outline icon-text-button" aria-label={`删除系统 ${system.systemId}`} disabled={removeSystem.isPending} onClick={() => setDeleteTarget(system)}><Trash2 size={15} />删除</button>
+              <button type="button" className="secondary icon-text-button" title={canManage ? undefined : '只有系统 owner/admin 可以编辑'} disabled={!canManage} onClick={() => void openEditor(system)}><Pencil size={15} />编辑</button>
+              <button type="button" className="danger-outline icon-text-button" aria-label={`删除系统 ${system.systemId}`} title={canManage ? undefined : '只有系统 owner/admin 可以删除'} disabled={!canManage || removeSystem.isPending} onClick={() => setDeleteTarget(system)}><Trash2 size={15} />删除</button>
             </div></td>
-          </tr>)}
+          </tr>;})}
           {!filteredSystems.length && <tr><td className="empty-cell" colSpan={5}>{query ? '没有匹配的系统' : '还没有系统配置'}</td></tr>}
         </tbody></table></div>
         <Pagination total={filteredSystems.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
@@ -154,11 +171,14 @@ export function SystemsPage() {
       <dialog ref={dialogRef} className="confirm-dialog config-dialog system-config-dialog" aria-labelledby="system-dialog-title">
         <form onSubmit={form.handleSubmit((value) => save.mutate(value))}>
           <div className="config-section-head compact"><div><h2 id="system-dialog-title">{mode === 'new' ? '新建系统' : '编辑系统配置'}</h2><p>仓库范围和发布配置会随新工作项快照。</p></div></div>
+          {editorLoading && <div className="notice" role="status">正在加载 Git 与发布配置…</div>}
+          {Boolean(editorError) && <ErrorState title="系统配置加载失败" error={editorError} onRetry={() => void openEditor(editingSystem ?? undefined)} />}
+          <fieldset className="dialog-fieldset" disabled={editorLoading || Boolean(editorError)}>
           <div className="config-dialog-fields system-dialog-fields">
             <label>系统编号<input {...form.register('systemId')} readOnly={mode === 'edit'} /></label>
             <label>名称<input {...form.register('name')} /></label>
             <label className="wide-field">描述<textarea rows={2} {...form.register('description')} /></label>
-            <label>系统负责人<select {...form.register('ownerUserId')}><option value="">请选择用户</option>{enabledUsers.map((user) => <option key={user.userId} value={user.userId}>{user.displayName || user.userId}</option>)}</select></label>
+            <label>系统负责人<select {...form.register('ownerUserId')} disabled={isAdmin && users.isLoading}><option value="">{users.isLoading ? '用户加载中…' : '请选择用户'}</option>{enabledUsers.map((user) => <option key={user.userId} value={user.userId}>{user.displayName || user.userId}</option>)}</select></label>
           </div>
 
           <fieldset className="config-subsection"><legend>Git 与发布</legend>
@@ -194,9 +214,11 @@ export function SystemsPage() {
               </section>)}
             </div>
           </fieldset>
+          </fieldset>
 
-          {save.isError && <div className="error-text">{String(save.error)}</div>}
-          <div className="button-row"><button type="button" className="secondary" onClick={() => dialogRef.current?.close()}>取消</button><button type="submit" disabled={save.isPending}>保存系统</button></div>
+          {validationError && <div className="error-text" role="alert">{validationError}</div>}
+          {save.isError && <div className="error-text" role="alert">{save.error.message}</div>}
+          <div className="button-row"><button type="button" className="secondary" onClick={() => dialogRef.current?.close()}>取消</button><button type="submit" disabled={editorLoading || Boolean(editorError) || save.isPending}>保存系统</button></div>
         </form>
       </dialog>
     </section>
@@ -233,4 +255,15 @@ function lines(value: string) {
 
 function ownerName(users: { userId: string; displayName: string }[], ownerUserId: string) {
   return users.find((user) => user.userId === ownerUserId)?.displayName || ownerUserId;
+}
+
+function firstError(value: unknown): string {
+  // 表单校验只展示首条可行动的信息，避免用户面对一串内部字段名。
+  if (!value || typeof value !== 'object') return '';
+  if ('message' in value && typeof value.message === 'string') return value.message;
+  for (const child of Object.values(value)) {
+    const message = firstError(child);
+    if (message) return message;
+  }
+  return '';
 }

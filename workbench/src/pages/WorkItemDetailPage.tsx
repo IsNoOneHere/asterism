@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { api, MemoryDraft, WorkItemEvent } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
+import { errorMessage, ErrorState, StatusBadge } from '../components/Display';
 import { MemoryEditorDialog } from '../components/MemoryEditorDialog';
 import { WorkItemNavigationState } from '../workItemListState';
 
@@ -84,25 +85,21 @@ export function WorkItemDetailPage() {
               <dt>所属系统</dt>
               <dd>{workItem.systemId}</dd>
               <dt>生命周期</dt>
-              <dd>{workItem.lifecycleStatus}</dd>
+              <dd><StatusBadge value={workItem.lifecycleStatus} /></dd>
               <dt>等待角色</dt>
-              <dd>{workItem.waitingFor || '-'}</dd>
+              <dd>{waitingRoleName(workItem.waitingFor)}</dd>
               <dt>执行权限</dt>
               <dd>{workItem.executionAllowed ? '允许' : '关闭'}</dd>
               <dt>确认目标</dt>
               <dd>{workItem.targets?.map((target) => `${target.title}${target.apiEndpoints?.length ? `（${target.apiEndpoints.join('、')}）` : ''}`).join('；') || '-'}</dd>
             </dl>
-            {mergeRequests.length > 0 && <div className="merge-request-list"><h3>GitLab Merge Requests</h3><ul>{mergeRequests.map((mr) => <li key={`${mr.repo}-${mr.iid}`}><a href={mr.url} target="_blank" rel="noreferrer">{mr.repo} !{mr.iid}</a><span className={`status-badge ${mr.status === 'merged' ? 'success' : mr.status === 'closed' ? 'danger' : 'info'}`}>{mr.status}</span></li>)}</ul></div>}
+            {mergeRequests.length > 0 && <div className="merge-request-list"><h3>GitLab 合并请求</h3><ul>{mergeRequests.map((mr) => <li key={`${mr.repo}-${mr.iid}`}><a href={mr.url} target="_blank" rel="noreferrer">{mr.repo} !{mr.iid}</a><span className={`status-badge ${mr.status === 'merged' ? 'success' : mr.status === 'closed' ? 'danger' : 'info'}`}>{mergeRequestStatusName(mr.status)}</span></li>)}</ul></div>}
             {canAct && actions.length > 0 ? (
               <div className="button-row wrap">
                 {actions.map((action) => (
                   <button key={action.label} type="button" disabled={runAction.isPending} onClick={() => {
-                    if (needsConfirmation(action)) {
-                      runAction.reset();
-                      setConfirmAction(action);
-                    } else {
-                      runAction.mutate(action);
-                    }
+                    runAction.reset();
+                    setConfirmAction(action);
                   }}>
                     {action.label}
                   </button>
@@ -111,7 +108,7 @@ export function WorkItemDetailPage() {
             ) : (
               <div className="empty">当前用户仅可查看，或该阶段无需人工动作。</div>
             )}
-            <div className="button-row memory-work-item-action"><button type="button" className="secondary" onClick={() => setMemoryOpen(true)}>沉淀为记忆</button></div>
+            <div className="button-row memory-work-item-action"><button type="button" className="secondary" onClick={() => { createMemory.reset(); setMemoryOpen(true); }}>沉淀为记忆</button></div>
             {memoryMessage && <div className="success-text">{memoryMessage}</div>}
           </div>
           <div className="panel">
@@ -120,13 +117,15 @@ export function WorkItemDetailPage() {
             {events.data?.map((event) => (
               <TimelineEvent key={event.eventId || event.sequence} event={event} />
             ))}
-            {events.isError && <div className="empty">事件接口待后端补齐：/api/v5/work-items/{workItemId}/events。</div>}
-            {!events.isError && (events.data ?? []).length === 0 && <div className="empty">暂无事件。</div>}
+            {events.isLoading && <div className="empty" role="status">事件加载中…</div>}
+            {events.isError && <ErrorState title="事件加载失败" error={events.error} onRetry={() => events.refetch()} />}
+            {events.isSuccess && (events.data ?? []).length === 0 && <div className="empty">暂无事件。</div>}
           </div>
         </div>
       )}
-      {item.isError && <div className="empty">工作项不存在或无权限。</div>}
-      <MemoryEditorDialog open={memoryOpen} title="从工作项沉淀记忆" submitLabel="加入待审批" workItemId={workItemId} pending={createMemory.isPending} onClose={() => setMemoryOpen(false)} onSubmit={(draft) => createMemory.mutate(draft)} />
+      {item.isLoading && <div className="panel empty" role="status">工作项加载中…</div>}
+      {item.isError && <ErrorState title="工作项加载失败" error={item.error} onRetry={() => item.refetch()} />}
+      <MemoryEditorDialog open={memoryOpen} title="从工作项沉淀记忆" submitLabel="加入待审批" workItemId={workItemId} pending={createMemory.isPending} error={createMemory.error} onClose={() => { setMemoryOpen(false); createMemory.reset(); }} onSubmit={(draft) => createMemory.mutate(draft)} />
       <ActionConfirmDialog
         open={Boolean(confirmAction)}
         title={`确认${confirmAction?.label || ''}？`}
@@ -140,7 +139,7 @@ export function WorkItemDetailPage() {
       <ActionConfirmDialog
         open={Boolean(runAction.error)}
         title="操作失败"
-        description={String(runAction.error || '')}
+        description={errorMessage(runAction.error, '工作项操作失败')}
         confirmLabel="知道了"
         alert
         showCancel={false}
@@ -174,8 +173,8 @@ function TimelineEvent({ event }: { event: WorkItemEvent }) {
   return (
     <div className="timeline-item">
       <div>
-        <strong>{event.eventType}</strong>
-        <span>{formatTime(event.createdAt)} · {event.actorId || event.source || 'system'}</span>
+        <strong>{eventName(event.eventType)}</strong>
+        <span>{formatTime(event.createdAt)} · {event.actorId || event.source || '系统'}</span>
       </div>
       {plan ? <ExecutionPlanView plan={plan} /> : agentStage ? <AgentStageView stage={agentStage} /> : modification ? <ModificationView modification={modification} /> : release ? <ReleaseView release={release} /> : event.payloadJson && (
         <details>
@@ -274,18 +273,32 @@ function stageAction(code: string): StageAction | null {
   return code === 'check_merge_status' ? { label: labels[code], mergeCheck: true } : { label: labels[code], signalName: code };
 }
 
-function needsConfirmation(action: StageAction) {
-  return action.ownerApproval || action.mergeCheck
-    || ['owner_rejected', 'cancel_case', 'patch_apply_approved', 'release_approved'].includes(action.signalName || '');
-}
-
 function confirmText(action: StageAction) {
   return ({
     owner_approved: '批准后工作项将进入可执行状态，是否继续？', owner_rejected: '拒绝后工作项将结束，是否继续？',
     cancel_case: '取消后工作项将结束，是否继续？', patch_apply_approved: '该操作会修改真实仓库，是否继续？',
+    start_modification: '确认后 Agent 将开始修改真实仓库，是否继续？', rework: '确认后将重新执行当前工作项，是否继续？',
+    patch_apply_rejected: '确认后将退回修改阶段重新处理，是否继续？', validation_passed: '确认测试已通过并进入下一阶段，是否继续？',
+    validation_rejected: '确认后将退回修改阶段重新处理，是否继续？',
     release_approved: '该操作会创建发布分支和提交，是否继续？',
     check_merge_status: '后端将实时核验所有 GitLab MR，只有确实合并后才会完成工作项，是否继续？',
   } as Record<string, string>)[action.ownerApproval ? 'owner_approved' : action.mergeCheck ? 'check_merge_status' : action.signalName || ''] || '是否继续？';
+}
+
+function eventName(eventType: string) {
+  return ({
+    ExecutionPlanDrafted: '执行计划已生成', AgentStageCompleted: 'Agent 阶段已完成', ModificationCompleted: '修改已完成',
+    ReleaseCompleted: '发布已完成', WorkerBlocked: '执行已阻塞', MergeRequestCreated: '合并请求已创建',
+    MergeRequestMerged: '合并请求已合并', MergeRequestClosed: '合并请求已关闭',
+  } as Record<string, string>)[eventType] || eventType;
+}
+
+function waitingRoleName(role?: string) {
+  return ({ owner: '系统负责人', worker: 'Agent', gitlab: 'GitLab' } as Record<string, string>)[role || ''] || role || '-';
+}
+
+function mergeRequestStatusName(status: string) {
+  return ({ opened: '已打开', open: '已打开', merged: '已合并', closed: '已关闭' } as Record<string, string>)[status] || status;
 }
 
 function buildMergeRequests(events: WorkItemEvent[]): MergeRequestView[] {

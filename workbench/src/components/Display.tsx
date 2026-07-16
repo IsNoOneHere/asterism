@@ -1,3 +1,5 @@
+import { AlertTriangle, RotateCw } from 'lucide-react';
+
 const labels: Record<string, string> = {
   waiting_owner_approval: '待负责人审批',
   activated: '执行中',
@@ -12,6 +14,7 @@ const labels: Record<string, string> = {
   cancelled: '已取消',
   rejected: '已拒绝',
   pending: '待处理',
+  submitted: '已提交',
   approved: '已批准',
   waiting_input: '待输入',
   need_clarification: '待补充',
@@ -22,8 +25,10 @@ const labels: Record<string, string> = {
   imported: '历史导入',
   imported_pending: '历史待处理',
   imported_completed: '历史已完成',
+  allocated: '已分配',
   candidate: '待审批',
   disabled: '已停用',
+  unknown: '未知',
 };
 
 const danger = new Set(['worker_blocked', 'patch_rejected', 'validation_failed', 'case_start_failed', 'rejected']);
@@ -51,4 +56,18 @@ export function formatDateTime(value?: string | null) {
     second: '2-digit',
     hour12: false,
   }).format(date);
+}
+
+export function errorMessage(error: unknown, fallback = '请求没有成功，请稍后重试。') {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+export function ErrorState({ title = '加载失败', error, onRetry }: { title?: string; error?: unknown; onRetry?: () => void }) {
+  // 查询失败统一使用与确认弹窗一致的视觉层级，避免误显示成空数据。
+  const message = errorMessage(error);
+  return <div className="error-state" role="alert">
+    <span className="error-state-icon" aria-hidden="true"><AlertTriangle size={20} /></span>
+    <div><strong>{title}</strong><p>{message}</p></div>
+    {onRetry && <button type="button" className="secondary icon-text-button" onClick={onRetry}><RotateCw size={15} />重新加载</button>}
+  </div>;
 }

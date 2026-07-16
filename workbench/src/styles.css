@@ -559,6 +559,45 @@ pre {
   justify-content: center;
 }
 
+.error-state {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow-card);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 18px 20px;
+}
+
+.center-note .error-state {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.error-state-icon {
+  align-items: center;
+  background: var(--danger-soft);
+  border-radius: 50%;
+  color: var(--danger);
+  display: inline-flex;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+
+.error-state strong {
+  color: var(--text-strong);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.error-state p {
+  color: var(--muted-strong);
+  line-height: 1.45;
+  margin: 0;
+}
+
 .login-screen {
   align-items: center;
   background: #07080b;
@@ -1804,6 +1843,13 @@ h1 {
   padding: 16px;
 }
 
+.dialog-fieldset {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
 .config-subsection legend {
   font-weight: 700;
   padding: 0 8px;
@@ -2184,7 +2230,12 @@ label {
 }
 
 .users-table th:last-child {
-  width: 290px;
+  min-width: 350px;
+  width: 350px;
+}
+
+.users-table .compact-actions {
+  flex-wrap: wrap;
 }
 
 .button-row.wrap {

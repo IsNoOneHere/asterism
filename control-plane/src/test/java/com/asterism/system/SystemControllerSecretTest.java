@@ -36,7 +36,7 @@ class SystemControllerSecretTest {
                 aggregate, new ObjectMapper(), mock(com.asterism.temporal.TemporalCasePort.class),
                 mock(com.asterism.git.GitIntegrationService.class));
         var request = new SystemController.UpsertSystemRequest("sys-1", "Demo", "demo", "/repo", "owner",
-                List.of(), List.of(), List.of("git diff --check"));
+                List.of(), List.of(), List.of("git diff --check"), null);
 
         controller.update("sys-1", request, new UsernamePasswordAuthenticationToken("admin", "n/a"));
 

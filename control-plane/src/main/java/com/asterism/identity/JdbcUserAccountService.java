@@ -59,41 +59,56 @@ public class JdbcUserAccountService implements UserDetailsService {
     public UserAccountView upsertUser(String userId, String displayName, String email, String password) {
         // 不传密码时只允许更新已有账号，生产不再创建固定默认凭证。
         if (password == null || password.isBlank()) {
-            var updated = jdbc.sql("""
-                            update users set display_name = :displayName, email = :email,
-                                enabled = true, updated_at = now()
+            var enabled = jdbc.sql("""
+                            update users set display_name = :displayName, email = :email, updated_at = now()
                             where user_id = :userId
+                            returning enabled
                             """)
                     .param("userId", userId)
                     .param("displayName", displayName)
                     .param("email", email)
-                    .update();
-            if (updated == 0) throw new IllegalArgumentException("新用户必须设置初始密码");
-            return new UserAccountView(userId, displayName, email, true);
+                    .query(Boolean.class)
+                    .optional()
+                    .orElseThrow(() -> new IllegalArgumentException("新用户必须设置初始密码"));
+            return new UserAccountView(userId, displayName, email, enabled);
         }
         // 密码只写 BCrypt hash，不对外返回。
-        jdbc.sql("""
+        var enabled = jdbc.sql("""
                         insert into users(user_id, display_name, email, password_hash, enabled, created_by, updated_at)
                         values (:userId, :displayName, :email, :passwordHash, true, current_user, now())
                         on conflict (user_id) do update
                         set display_name = excluded.display_name,
                             email = excluded.email,
                             password_hash = excluded.password_hash,
-                            enabled = true,
                             updated_at = now()
+                        returning enabled
                         """)
                 .param("userId", userId)
                 .param("displayName", displayName)
                 .param("email", email)
                 .param("passwordHash", encoder.encode(password))
-                .update();
-        return new UserAccountView(userId, displayName, email, true);
+                .query(Boolean.class)
+                .single();
+        return new UserAccountView(userId, displayName, email, enabled);
     }
 
-    public void disableUser(String userId) {
-        jdbc.sql("update users set enabled = false, updated_at = now() where user_id = :userId")
+    public void disableUser(String userId, String actor) {
+        if (userId.equals(actor)) throw new IllegalStateException("不能禁用当前登录用户");
+        setEnabled(userId, false);
+        log.info("用户已禁用 user={} actor={}", userId, actor);
+    }
+
+    public void enableUser(String userId, String actor) {
+        setEnabled(userId, true);
+        log.info("用户已启用 user={} actor={}", userId, actor);
+    }
+
+    private void setEnabled(String userId, boolean enabled) {
+        var updated = jdbc.sql("update users set enabled = :enabled, updated_at = now() where user_id = :userId")
                 .param("userId", userId)
+                .param("enabled", enabled)
                 .update();
+        if (updated == 0) throw new IllegalArgumentException("用户不存在");
     }
 
     public void resetPassword(String userId, String password) {

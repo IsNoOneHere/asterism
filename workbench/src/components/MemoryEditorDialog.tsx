@@ -3,13 +3,14 @@ import { MemoryCategory, MemoryDraft } from '../api/client';
 
 const emptyDraft: MemoryDraft = { category: 'constraint', title: '', content: '' };
 
-export function MemoryEditorDialog({ open, title, submitLabel = '保存', initial, workItemId, pending, onClose, onSubmit }: {
+export function MemoryEditorDialog({ open, title, submitLabel = '保存', initial, workItemId, pending, error, onClose, onSubmit }: {
   open: boolean;
   title: string;
   submitLabel?: string;
   initial?: MemoryDraft;
   workItemId?: string;
   pending: boolean;
+  error?: unknown;
   onClose: () => void;
   onSubmit: (draft: MemoryDraft) => void;
 }) {
@@ -39,6 +40,7 @@ export function MemoryEditorDialog({ open, title, submitLabel = '保存', initia
         <label>标题<input maxLength={80} required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
         <label>正文<textarea maxLength={1000} required rows={6} value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} /></label>
       </div>
+      {Boolean(error) && <div className="error-text" role="alert">{error instanceof Error ? error.message : '记忆保存失败'}</div>}
       <div className="button-row"><button type="button" className="secondary" onClick={() => dialogRef.current?.close()}>取消</button><button type="submit" disabled={pending || !draft.title.trim() || !draft.content.trim()}>{submitLabel}</button></div>
     </form>
   </dialog>;

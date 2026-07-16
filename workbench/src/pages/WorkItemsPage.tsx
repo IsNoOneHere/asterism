@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api, WorkItem } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
-import { formatDateTime, StatusBadge } from '../components/Display';
+import { errorMessage, ErrorState, formatDateTime, StatusBadge } from '../components/Display';
 import { Pagination, usePagination } from '../components/Pagination';
 import { useCurrentSystem } from '../SystemContext';
 import { readWorkItemListState, WorkItemNavigationState } from '../workItemListState';
@@ -78,8 +78,9 @@ export function WorkItemsPage() {
                 onApprove={() => { approve.reset(); setApprovalTarget(item); }}
               />
             ))}
-            {items.isError && <tr><td colSpan={8}>工作项加载失败。</td></tr>}
-            {!items.isError && values.length === 0 && <tr><td colSpan={8}>暂无工作项。</td></tr>}
+            {items.isLoading && <tr><td className="empty-cell" colSpan={8}>工作项加载中…</td></tr>}
+            {items.isError && <tr><td colSpan={8}><ErrorState title="工作项加载失败" error={items.error} onRetry={() => items.refetch()} /></td></tr>}
+            {items.isSuccess && values.length === 0 && <tr><td className="empty-cell" colSpan={8}>暂无工作项。</td></tr>}
           </tbody>
         </table>
         <Pagination total={values.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
@@ -97,7 +98,7 @@ export function WorkItemsPage() {
       <ActionConfirmDialog
         open={Boolean(approve.error)}
         title="审批失败"
-        description={String(approve.error || '')}
+        description={errorMessage(approve.error, '工作项审批失败')}
         confirmLabel="知道了"
         alert
         showCancel={false}

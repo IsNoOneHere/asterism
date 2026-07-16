@@ -67,7 +67,7 @@ class UserAccountIntegrationTest {
     void disabledUserCannotAuthenticate() throws Exception {
         var userId = "disabled-" + UUID.randomUUID();
         users.upsertUser(userId, "Disabled User", userId + "@local", "secret-one");
-        users.disableUser(userId);
+        users.disableUser(userId, "admin");
 
         mockMvc.perform(get("/api/v5/auth/me").with(httpBasic(userId, "secret-one")))
                 .andExpect(status().isUnauthorized());
@@ -99,6 +99,22 @@ class UserAccountIntegrationTest {
                 .single();
         assertThat(encoder.matches("secret-one", passwordHash)).isTrue();
         assertThat(encoder.matches("asterism", passwordHash)).isFalse();
+    }
+
+    @Test
+    void editingDisabledUserDoesNotEnableIt() {
+        var userId = "keep-disabled-" + UUID.randomUUID();
+        users.upsertUser(userId, "Disabled", userId + "@local", "secret-one");
+        users.disableUser(userId, "admin");
+
+        var updated = users.upsertUser(userId, "Disabled Updated", userId + "-2@local", null);
+
+        assertThat(updated.enabled()).isFalse();
+        assertThat(jdbc.sql("select enabled from users where user_id = :userId")
+                .param("userId", userId).query(Boolean.class).single()).isFalse();
+        users.enableUser(userId, "admin");
+        assertThat(jdbc.sql("select enabled from users where user_id = :userId")
+                .param("userId", userId).query(Boolean.class).single()).isTrue();
     }
 
     @Test
@@ -140,6 +156,8 @@ class UserAccountIntegrationTest {
 
     @Test
     void currentUserAndSystemOwnerCannotBeDeleted() throws Exception {
+        mockMvc.perform(post("/api/v5/users/admin/disable").with(httpBasic("admin", "asterism")))
+                .andExpect(status().isConflict());
         mockMvc.perform(delete("/api/v5/users/admin").with(httpBasic("admin", "asterism")))
                 .andExpect(status().isConflict());
 

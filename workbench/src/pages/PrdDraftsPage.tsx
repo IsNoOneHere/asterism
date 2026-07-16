@@ -3,7 +3,7 @@ import { Clock3, FileText, UserRound } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, PrdSession } from '../api/client';
-import { formatDateTime, StatusBadge } from '../components/Display';
+import { ErrorState, formatDateTime, StatusBadge } from '../components/Display';
 import { Pagination, usePagination } from '../components/Pagination';
 import { isResumablePrd } from '../prd';
 import { useCurrentSystem } from '../SystemContext';
@@ -36,8 +36,9 @@ export function PrdDraftsPage() {
       </div>
       <div className="draft-list" aria-label="需求草稿列表">
         {pagination.pageItems.map((session) => <PrdRow key={session.prdId} session={session} />)}
-        {history.isError && <div className="draft-list-empty">需求草稿加载失败。</div>}
-        {!history.isError && values.length === 0 && <div className="draft-list-empty">{scope === 'pending' ? '暂无待完善草稿。' : '暂无需求记录。'}</div>}
+        {history.isLoading && <div className="draft-list-empty" role="status">需求草稿加载中…</div>}
+        {history.isError && <ErrorState title="需求草稿加载失败" error={history.error} onRetry={() => history.refetch()} />}
+        {history.isSuccess && values.length === 0 && <div className="draft-list-empty">{scope === 'pending' ? '暂无待完善草稿。' : '暂无需求记录。'}</div>}
         <Pagination total={values.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
       </div>
     </div>
