@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LifecycleStatus(StrEnum):
@@ -19,7 +19,35 @@ class LifecycleStatus(StrEnum):
     rejected = "rejected"
 
 
+class ModelProfileSnapshot(BaseModel):
+    id: str
+    name: str = ""
+    provider: str = "anthropic"
+    base_url: str = ""
+    model: str = ""
+    supports_vision: bool = False
+
+
+class AgentSnapshot(BaseModel):
+    name: str
+    kind: str
+    engine: str = ""
+    model_profile_ref: str = ""
+    path_scope: list[str] = Field(default_factory=list)
+    prompt: str = ""
+    max_turns: int | None = None
+    timeout_seconds: int | None = None
+
+
+class AgentConfigSnapshot(BaseModel):
+    model_profiles: list[ModelProfileSnapshot] = Field(default_factory=list)
+    agents: list[AgentSnapshot] = Field(default_factory=list)
+
+
 class CaseInput(BaseModel):
+    # 旧 history 的散字段保留在 model_extra，仅用于无快照 replay。
+    model_config = ConfigDict(extra="allow")
+
     case_id: str
     work_item_id: str
     prd_id: str
@@ -29,9 +57,7 @@ class CaseInput(BaseModel):
     allowed_paths: list[str] = Field(default_factory=list)
     forbidden_paths: list[str] = Field(default_factory=list)
     test_commands: list[str] = Field(default_factory=list)
-    execution_provider: str = ""
-    claude_max_turns: int | None = None
-    execution_timeout_seconds: int | None = None
+    agent_config_snapshot: AgentConfigSnapshot | None = None
 
 
 class ProjectionEvent(BaseModel):
@@ -48,6 +74,8 @@ class ProjectionEvent(BaseModel):
 
 
 class ExecutionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     case_id: str
     work_item_id: str
     system_id: str
@@ -60,8 +88,7 @@ class ExecutionRequest(BaseModel):
     allowed_paths: list[str] = Field(default_factory=list)
     forbidden_paths: list[str] = Field(default_factory=list)
     test_commands: list[str] = Field(default_factory=list)
-    execution_provider: str = ""
-    claude_max_turns: int | None = None
+    agent_config_snapshot: AgentConfigSnapshot | None = None
     file_listing: str = ""
     file_contents: dict[str, str] = Field(default_factory=dict)
     previous_attempt: "PreviousAttempt | None" = None
@@ -169,7 +196,8 @@ class PlanRequest(BaseModel):
     memories: list[dict[str, Any]] = Field(default_factory=list)
     allowed_paths: list[str] = Field(default_factory=list)
     context_manifest_id: str
-    available_agents: list[AvailableAgent] = Field(default_factory=list)
+    available_agents: list[AvailableAgent] | None = None
+    agent_config_snapshot: AgentConfigSnapshot | None = None
 
 
 class RouteIndexInput(BaseModel):

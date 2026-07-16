@@ -23,6 +23,8 @@ flowchart LR
 
 完整 Profile 只由 worker-token 保护的 internal API 返回，并且只在 activity 进程内解析。Temporal workflow/activity 入参、事件、普通日志和前端均不携带 Key。旧 routing、AgentRole 和执行策略由 Flyway 一次性迁移后删除。
 
+新 Case 启动时把不含 API Key 的完整 `agents + modelProfiles` 固定为 `agent_config_snapshot`：`engine/maxTurns/timeoutSeconds/pathScope/prompt` 以及模型参数均以启动时快照为准，在途工作项不受后续配置修改影响。Activity 每次执行仍按快照中的 `modelProfileRef` 通过 internal API 实时读取 Key，因此换 Key 立即生效；无快照的旧 workflow 继续走原参数回放路径。
+
 ## 执行内核
 
 | Engine | 模型协议 | 行为 |

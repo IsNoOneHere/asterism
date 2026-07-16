@@ -272,6 +272,39 @@ def test_execute_resolves_selected_profile_reference_without_receiving_key():
     assert llm.configs[0].api_key == "internal-key"
 
 
+def test_execute_uses_snapshot_model_with_live_rotated_key():
+    llm = FakeLlmClient([
+        "diff --git a/README.md b/README.md\n",
+        "diff --git a/README.md b/README.md\n",
+    ])
+    key = "key-v1"
+
+    def fetch(system_id, agent, profile_id):
+        return ModelConfig(managed=True, model="changed-after-start", api_key=key)
+
+    client = TestClient(create_app(llm, model_config_fetcher=fetch))
+    request = {
+        "case_id": "case", "work_item_id": "wi", "system_id": "sys", "repo_path": "/tmp/repo",
+        "goal": "g", "plan": {"steps": ["s"]}, "role_id": "frontend",
+        "model_profile_id": "mp-fixed",
+        "agent_config_snapshot": {
+            "model_profiles": [{"id": "mp-fixed", "model": "snapshot-model"}],
+            "agents": [{
+                "name": "frontend", "kind": "custom", "engine": "http",
+                "model_profile_ref": "mp-fixed",
+            }],
+        },
+    }
+
+    assert client.post("/execute", json=request).status_code == 200
+    key = "key-v2"
+    assert client.post("/execute", json=request).status_code == 200
+
+    assert [config.model for config in llm.configs] == ["snapshot-model", "snapshot-model"]
+    assert [config.api_key for config in llm.configs] == ["key-v1", "key-v2"]
+    assert "api_key" not in json.dumps(request)
+
+
 def test_plan_prompt_contains_only_available_agent_metadata():
     llm = FakeLlmClient(['{"steps":["s"],"target_files":[],"test_plan":[],"risks":[],"assignments":[]}'])
     client = TestClient(create_app(llm))

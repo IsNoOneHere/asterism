@@ -325,6 +325,35 @@ def test_workflow_handoff_non_conflicting_diff_reaches_release(tmp_path):
     assert all("api_key" not in str(request).lower() for request in requests)
 
 
+def test_snapshot_unknown_assignment_blocks_with_unknown_role():
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], assignments=[{"role": "missing-agent"}], agent_config_snapshot=_agent_snapshot()))
+
+    blocked = next(event for event in events if event["eventType"] == "WorkerBlocked")
+    assert result == "cancelled"
+    assert blocked["payload"]["reason"] == "unknown_role"
+    assert blocked["payload"]["detail"] == "missing-agent"
+
+
+def test_snapshot_replaces_legacy_execution_fields_in_activity_request():
+    requests: list[dict] = []
+    asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], assignments=[{"role": "frontend"}], observed_requests=requests,
+       agent_config_snapshot=_agent_snapshot()))
+
+    assert "agent_config_snapshot" in requests[0]
+    assert "execution_provider" not in requests[0]
+    assert "claude_max_turns" not in requests[0]
+    assert "execution_timeout_seconds" not in requests[0]
+    assert "api_key" not in str(requests[0]).lower()
+
+
 async def _run_workflow(
     signals: list[tuple[str, str]],
     planner_failure: bool = False,
@@ -337,6 +366,7 @@ async def _run_workflow(
     observed_requests: list[dict] | None = None,
     repo_path: str = "/tmp/repo",
     verify_combined_diff: bool = False,
+    agent_config_snapshot: dict | None = None,
 ) -> tuple[list[dict], str]:
     events: list[dict] = []
     execution_requests: list[dict] = []
@@ -482,7 +512,7 @@ async def _run_workflow(
         ):
             handle = await env.client.start_workflow(
                 AsterismCaseWorkflow.run,
-                _case_input(test_commands, repo_path),
+                _case_input(test_commands, repo_path, agent_config_snapshot),
                 id=f"case-{uuid4()}",
                 task_queue=TASK_QUEUE,
             )
@@ -492,8 +522,9 @@ async def _run_workflow(
     return events, result
 
 
-def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/repo") -> CaseInput:
-    return CaseInput(
+def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/repo",
+                agent_config_snapshot: dict | None = None) -> CaseInput:
+    payload = dict(
         case_id="case-1",
         work_item_id="wi-1",
         prd_id="prd-1",
@@ -508,7 +539,28 @@ def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/r
         allowed_paths=["src"],
         forbidden_paths=["secrets"],
         test_commands=["pytest"] if test_commands is None else test_commands,
-        execution_provider="claude_sdk",
-        claude_max_turns=25,
-        execution_timeout_seconds=900,
     )
+    if agent_config_snapshot is None:
+        payload.update(execution_provider="claude_sdk", claude_max_turns=25, execution_timeout_seconds=900)
+    else:
+        payload["agent_config_snapshot"] = agent_config_snapshot
+    return CaseInput.model_validate(payload)
+
+
+def _agent_snapshot() -> dict:
+    return {
+        "model_profiles": [
+            {"id": "mp-front", "model": "front-model"},
+            {"id": "mp-back", "model": "back-model"},
+        ],
+        "agents": [
+            {"name": "product", "kind": "builtin"},
+            {"name": "planner", "kind": "builtin"},
+            {"name": "developer", "kind": "builtin", "engine": "claude_sdk",
+             "model_profile_ref": "mp-front", "max_turns": 25, "timeout_seconds": 900},
+            {"name": "frontend", "kind": "custom", "engine": "claude_sdk",
+             "model_profile_ref": "mp-front", "path_scope": ["web"], "timeout_seconds": 900},
+            {"name": "backend", "kind": "custom", "engine": "deepagents",
+             "model_profile_ref": "mp-back", "path_scope": ["api"], "timeout_seconds": 900},
+        ],
+    }

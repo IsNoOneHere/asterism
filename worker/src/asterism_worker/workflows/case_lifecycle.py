@@ -120,16 +120,20 @@ class AsterismCaseWorkflow:
                 start_to_close_timeout=timedelta(seconds=20),
                 retry_policy=RetryPolicy(maximum_attempts=1),
             )
+            plan_request = {
+                "system_id": case_input.system_id,
+                "prd": case_input.prd.model_dump(),
+                "repo_summary": repo_summary,
+                "memories": snapshot.approved_memories,
+                "allowed_paths": case_input.allowed_paths,
+                "context_manifest_id": snapshot.manifest_id,
+            }
+            if case_input.agent_config_snapshot is not None:
+                plan_request["agent_config_snapshot"] = case_input.agent_config_snapshot.model_dump()
+                plan_request["available_agents"] = self._available_agents()
             plan_payload = await workflow.execute_activity(
                 "plan_execution",
-                {
-                    "system_id": case_input.system_id,
-                    "prd": case_input.prd.model_dump(),
-                    "repo_summary": repo_summary,
-                    "memories": snapshot.approved_memories,
-                    "allowed_paths": case_input.allowed_paths,
-                    "context_manifest_id": snapshot.manifest_id,
-                },
+                plan_request,
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=RetryPolicy(maximum_attempts=1),
             )
@@ -152,6 +156,10 @@ class AsterismCaseWorkflow:
             "plan": plan.model_dump(),
             "contextManifestId": snapshot.manifest_id,
         })
+        unknown_role = self._unknown_role(plan)
+        if unknown_role:
+            await self._block_worker(signal_id, "unknown_role", RuntimeError(unknown_role))
+            return
         result = await self._run_execution_plan(signal_id, plan, snapshot)
         if result is None:
             return
@@ -177,7 +185,7 @@ class AsterismCaseWorkflow:
                     "run_execution",
                     self._execution_request(plan, snapshot, assignment, index, "\n".join(handoff)),
                     # role 内部 timeout 在 activity 解析，外层留足最大执行窗口。
-                    start_to_close_timeout=timedelta(seconds=self._case_input().execution_timeout_seconds or 3600),
+                    start_to_close_timeout=timedelta(seconds=self._execution_timeout(assignment)),
                     heartbeat_timeout=timedelta(minutes=2),
                     retry_policy=RetryPolicy(maximum_attempts=2),
                 )
@@ -222,7 +230,7 @@ class AsterismCaseWorkflow:
     def _execution_request(self, plan: ExecutionPlan, snapshot: ContextSnapshot,
                            assignment: AgentAssignment, index: int, handoff_summary: str) -> dict:
         case_input = self._case_input()
-        return {
+        request = {
             "case_id": case_input.case_id,
             "work_item_id": case_input.work_item_id,
             "system_id": case_input.system_id,
@@ -235,14 +243,45 @@ class AsterismCaseWorkflow:
             "allowed_paths": case_input.allowed_paths,
             "forbidden_paths": case_input.forbidden_paths,
             "test_commands": case_input.test_commands,
-            "execution_provider": case_input.execution_provider,
-            "claude_max_turns": case_input.claude_max_turns,
             "role_id": assignment.role,
             "role_scope": assignment.scope_paths,
             "handoff_summary": handoff_summary,
             "assignment_index": index,
             "step_refs": assignment.step_refs,
         }
+        if case_input.agent_config_snapshot is not None:
+            request["agent_config_snapshot"] = case_input.agent_config_snapshot.model_dump()
+        else:
+            # 无快照只可能来自旧 history，保持原 activity 入参以继续 replay。
+            legacy = case_input.model_extra or {}
+            request["execution_provider"] = legacy.get("execution_provider", "")
+            request["claude_max_turns"] = legacy.get("claude_max_turns")
+        return request
+
+    def _available_agents(self) -> list[dict]:
+        snapshot = self._case_input().agent_config_snapshot
+        if snapshot is None:
+            return []
+        return [
+            {"name": agent.name, "engine": agent.engine, "path_scope": agent.path_scope}
+            for agent in snapshot.agents if agent.kind == "custom"
+        ]
+
+    def _unknown_role(self, plan: ExecutionPlan) -> str:
+        snapshot = self._case_input().agent_config_snapshot
+        if snapshot is None:
+            return ""
+        names = {agent.name for agent in snapshot.agents}
+        selected = [assignment.role for assignment in plan.assignments] or ["developer"]
+        return next((name for name in selected if name not in names), "")
+
+    def _execution_timeout(self, assignment: AgentAssignment) -> int:
+        case_input = self._case_input()
+        if case_input.agent_config_snapshot is not None:
+            name = assignment.role or "developer"
+            agent = next((item for item in case_input.agent_config_snapshot.agents if item.name == name), None)
+            return agent.timeout_seconds if agent and agent.timeout_seconds else 3600
+        return int((case_input.model_extra or {}).get("execution_timeout_seconds") or 3600)
 
     async def _apply_patch(self, signal_id: str) -> None:
         case_input = self._case_input()

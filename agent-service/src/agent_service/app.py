@@ -25,12 +25,16 @@ def create_app(
     @app.post("/plan")
     def plan(request: PlanRequest) -> ExecutionPlan:
         prompt = plan_prompt(request)
-        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "planner")
+        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "planner",
+                                            snapshot=request.agent_config_snapshot)
         return _strict_json(llm, prompt, model_config, ExecutionPlan, "planner did not return valid ExecutionPlan JSON")
 
     @app.post("/execute")
     def execute(request: ExecutionRequest) -> ExecutionResult:
-        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "developer", request.model_profile_id)
+        model_config = resolve_model_config(
+            settings, fetch_model_config, request.system_id, request.role_id or "developer",
+            request.model_profile_id, request.agent_config_snapshot,
+        )
         diff_patch = llm.complete(execute_prompt(request), model_config)
         if "diff --git" not in diff_patch:
             raise HTTPException(status_code=422, detail="execution did not return a unified git diff")
@@ -123,7 +127,29 @@ def control_plane_model_config(settings: AgentSettings) -> Callable[[str, str, s
 
 
 def resolve_model_config(settings: AgentSettings, fetch_model_config: Callable[..., ModelConfig],
-                         system_id: str, agent: str, profile_id: str = "") -> ModelConfig:
+                         system_id: str, agent: str, profile_id: str = "",
+                         snapshot=None) -> ModelConfig:
+    if snapshot is not None:
+        selected_agent = next((item for item in snapshot.agents if item.name == agent), None)
+        selected_id = profile_id or (selected_agent.model_profile_ref if selected_agent else "")
+        if not selected_id:
+            return default_model_config(settings)
+        profile = next((item for item in snapshot.model_profiles if item.id == selected_id), None)
+        if profile is None:
+            return ModelConfig()
+        live = fetch_model_config(system_id, agent, selected_id)
+        # 模型参数来自 Case 快照，只有 Key 每次调用时实时读取。
+        return ModelConfig(
+            managed=True,
+            configured=bool(profile.model and live.api_key),
+            model_id=profile.id,
+            name=profile.name,
+            provider=profile.provider,
+            model=profile.model,
+            base_url=profile.base_url,
+            api_key=live.api_key,
+            supports_vision=profile.supports_vision,
+        )
     resolved = fetch_model_config(system_id, agent, profile_id)
     return merge_model_config(default_model_config(settings), resolved)
 

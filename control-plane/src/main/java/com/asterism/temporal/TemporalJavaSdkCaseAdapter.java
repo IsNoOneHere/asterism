@@ -90,9 +90,7 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
                 list(command.allowedPaths()),
                 list(command.forbiddenPaths()),
                 list(command.testCommands()),
-                text(command.executionProvider()),
-                command.claudeMaxTurns(),
-                command.executionTimeoutSeconds(),
+                command.agentConfigSnapshot(),
                 new PrdPayloadDto(
                         text(prd.title()),
                         text(prd.goal()),
@@ -121,9 +119,7 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
             List<String> allowedPaths,
             List<String> forbiddenPaths,
             List<String> testCommands,
-            String executionProvider,
-            Integer claudeMaxTurns,
-            Integer executionTimeoutSeconds,
+            AgentConfigSnapshot agentConfigSnapshot,
             PrdPayloadDto prd) {
     }
 

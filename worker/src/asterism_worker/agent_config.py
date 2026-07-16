@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from asterism_worker.config.settings import Settings
+from asterism_worker.contracts import AgentConfigSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +48,7 @@ async def resolve_agent_config(
     settings: Settings,
     system_id: str,
     role_id: str = "",
+    snapshot: AgentConfigSnapshot | None = None,
     legacy_engine: str = "",
     legacy_max_turns: int | None = None,
     legacy_timeout_seconds: int | None = None,
@@ -58,20 +60,43 @@ async def resolve_agent_config(
     if client is None:
         async with httpx.AsyncClient(timeout=5) as owned:
             return await resolve_agent_config(
-                settings, system_id, role_id, legacy_engine, legacy_max_turns,
+                settings, system_id, role_id, snapshot, legacy_engine, legacy_max_turns,
                 legacy_timeout_seconds, callbacks, owned,
             )
-    data: dict[str, Any] = {}
-    try:
-        response = await client.get(
-            settings.control_plane_url.rstrip("/") + f"/api/v5/internal/systems/{system_id}/model-config",
-            headers={"Authorization": f"Bearer {settings.worker_callback_token}"},
+    if snapshot is not None:
+        selected_agent = role_id or "developer"
+        agent = next((item for item in snapshot.agents if item.name == selected_agent), None)
+        if agent is None:
+            raise RuntimeError(f"Agent 不存在: {selected_agent}")
+        raw_profile = next((item for item in snapshot.model_profiles
+                            if item.id == agent.model_profile_ref), None)
+        if agent.model_profile_ref and raw_profile is None:
+            raise RuntimeError(f"模型 Profile 不存在: {agent.model_profile_ref}")
+        live = await _fetch_model_config(settings, system_id, client, agent.model_profile_ref) \
+            if agent.model_profile_ref else {}
+        profile = ModelProfile(
+            id=raw_profile.id,
+            provider=raw_profile.provider,
+            model=raw_profile.model,
+            base_url=raw_profile.base_url,
+            api_key=str(live.get("api_key", "")),
+            source="system",
+        ) if raw_profile else environment_model_profile(settings)
+        return ResolvedAgentConfig(
+            engine=_engine(settings, agent.engine or settings.default_engine,
+                           agent.max_turns, agent.timeout_seconds),
+            model_profile=profile,
+            constraints=AgentConstraints(
+                role_id=agent.name,
+                role_name=agent.name,
+                path_scope=tuple(agent.path_scope),
+                prompt=agent.prompt,
+            ),
+            artifacts_root=settings.artifacts_root,
+            callbacks=callbacks or {},
         )
-        if response.status_code != 404:
-            response.raise_for_status()
-            data = response.json()
-    except httpx.HTTPError:
-        data = {}
+
+    data = await _fetch_model_config(settings, system_id, client)
 
     agents = [item for item in data.get("agents", []) if isinstance(item, dict)]
     selected_agent = role_id or "developer"
@@ -105,6 +130,23 @@ async def resolve_agent_config(
             artifacts_root=settings.artifacts_root,
             callbacks=callbacks or {},
         )
+
+
+async def _fetch_model_config(settings: Settings, system_id: str, client: httpx.AsyncClient,
+                              profile_id: str = "") -> dict[str, Any]:
+    try:
+        response = await client.get(
+            settings.control_plane_url.rstrip("/") + f"/api/v5/internal/systems/{system_id}/model-config",
+            headers={"Authorization": f"Bearer {settings.worker_callback_token}"},
+            params={"profile_id": profile_id} if profile_id else None,
+        )
+        if response.status_code == 404:
+            return {}
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError:
+        return {}
+
 
 async def available_agent_metadata(settings: Settings, system_id: str, client: httpx.AsyncClient | None = None) -> list[dict[str, Any]]:
     """Planner 只看到自定义 Agent 元数据，Profile 和密钥在这里丢弃。"""

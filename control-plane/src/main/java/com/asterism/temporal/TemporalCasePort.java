@@ -19,10 +19,19 @@ public interface TemporalCasePort {
             List<String> allowedPaths,
             List<String> forbiddenPaths,
             List<String> testCommands,
-            String executionProvider,
-            Integer claudeMaxTurns,
-            Integer executionTimeoutSeconds,
+            AgentConfigSnapshot agentConfigSnapshot,
             PrdPayload prd) {
+    }
+
+    record AgentConfigSnapshot(List<ModelProfileSnapshot> modelProfiles, List<AgentSnapshot> agents) {
+    }
+
+    record ModelProfileSnapshot(String id, String name, String provider, String baseUrl, String model,
+                                boolean supportsVision) {
+    }
+
+    record AgentSnapshot(String name, String kind, String engine, String modelProfileRef, List<String> pathScope,
+                         String prompt, Integer maxTurns, Integer timeoutSeconds) {
     }
 
     record PrdPayload(String title, String goal, List<String> acceptanceCriteria, Map<String, Object> draftJson) {

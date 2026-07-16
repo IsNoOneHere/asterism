@@ -4,6 +4,7 @@ import json
 import httpx
 from asterism_worker.agent_config import available_agent_metadata, resolve_agent_config
 from asterism_worker.config.settings import Settings
+from asterism_worker.contracts import AgentConfigSnapshot
 
 
 def client_for(data: dict) -> httpx.AsyncClient:
@@ -82,3 +83,41 @@ def test_planner_only_sees_custom_agents():
             return await available_agent_metadata(Settings(), "sys", client)
 
     assert asyncio.run(resolve()) == [{"name": "frontend", "engine": "deepagents", "path_scope": ["web"]}]
+
+
+def test_snapshot_freezes_agent_and_model_but_reads_rotated_key_live():
+    snapshot = AgentConfigSnapshot.model_validate({
+        "model_profiles": [{
+            "id": "mp-fixed", "name": "固定模型", "provider": "anthropic",
+            "model": "snapshot-model", "base_url": "https://snapshot.invalid",
+        }],
+        "agents": [{
+            "name": "frontend", "kind": "custom", "engine": "claude_sdk",
+            "model_profile_ref": "mp-fixed", "path_scope": ["web"],
+            "max_turns": 8, "timeout_seconds": 300,
+        }],
+    })
+    live_key = "key-v1"
+    requested_profiles: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_profiles.append(request.url.params.get("profile_id", ""))
+        return httpx.Response(200, json={
+            "api_key": live_key,
+            "model": "changed-after-start",
+            "agents": [{"name": "frontend", "engine": "deepagents", "max_turns": 99}],
+        })
+
+    async def resolve_twice():
+        nonlocal live_key
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            first = await resolve_agent_config(Settings(), "sys", "frontend", snapshot=snapshot, client=client)
+            live_key = "key-v2"
+            second = await resolve_agent_config(Settings(), "sys", "frontend", snapshot=snapshot, client=client)
+        return first, second
+
+    first, second = asyncio.run(resolve_twice())
+    assert requested_profiles == ["mp-fixed", "mp-fixed"]
+    assert (first.engine.name, first.engine.max_turns, first.engine.timeout_seconds) == ("claude_sdk", 8, 300)
+    assert first.model_profile.model == second.model_profile.model == "snapshot-model"
+    assert (first.model_profile.api_key, second.model_profile.api_key) == ("key-v1", "key-v2")

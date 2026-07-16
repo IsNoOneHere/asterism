@@ -22,6 +22,31 @@ class AvailableAgent(BaseModel):
     path_scope: list[str] = Field(default_factory=list)
 
 
+class ModelProfileSnapshot(BaseModel):
+    id: str
+    name: str = ""
+    provider: str = "openai-compat"
+    base_url: str = ""
+    model: str = ""
+    supports_vision: bool = False
+
+
+class AgentSnapshot(BaseModel):
+    name: str
+    kind: str
+    engine: str = ""
+    model_profile_ref: str = ""
+    path_scope: list[str] = Field(default_factory=list)
+    prompt: str = ""
+    max_turns: int | None = None
+    timeout_seconds: int | None = None
+
+
+class AgentConfigSnapshot(BaseModel):
+    model_profiles: list[ModelProfileSnapshot] = Field(default_factory=list)
+    agents: list[AgentSnapshot] = Field(default_factory=list)
+
+
 class ExecutionPlan(BaseModel):
     steps: list[str] = Field(default_factory=list)
     target_files: list[str] = Field(default_factory=list)
@@ -38,6 +63,7 @@ class PlanRequest(BaseModel):
     allowed_paths: list[str] = Field(default_factory=list)
     context_manifest_id: str
     available_agents: list[AvailableAgent] = Field(default_factory=list)
+    agent_config_snapshot: AgentConfigSnapshot | None = None
 
 
 class ExecutionRequest(BaseModel):
@@ -64,6 +90,7 @@ class ExecutionRequest(BaseModel):
     handoff_summary: str = ""
     assignment_index: int = 0
     step_refs: list[str] = Field(default_factory=list)
+    agent_config_snapshot: AgentConfigSnapshot | None = None
 
 
 class ExecutionResult(BaseModel):

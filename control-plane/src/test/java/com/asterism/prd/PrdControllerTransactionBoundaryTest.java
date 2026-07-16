@@ -7,6 +7,7 @@ import com.asterism.knowledge.KnowledgeMatchService;
 import com.asterism.memory.MemoryItemRepository;
 import com.asterism.system.SystemProfile;
 import com.asterism.system.SystemProfileRepository;
+import com.asterism.system.AgentConfigurationService;
 import com.asterism.system.ExecutionReadinessService;
 import com.asterism.temporal.TemporalCasePort;
 import com.asterism.vision.ImageAnalysisService;
@@ -115,7 +116,7 @@ class PrdControllerTransactionBoundaryTest {
     }
 
     @Test
-    void confirmPassesSystemProfileToTemporalCaseInput() {
+    void confirmPassesSystemProfileAndAgentSnapshotToTemporalCaseInput() {
         var order = new ArrayList<String>();
         var holder = new AtomicTemporalCommand();
         var controller = controller(order, null, holder);
@@ -126,9 +127,17 @@ class PrdControllerTransactionBoundaryTest {
         assertThat(holder.command.allowedPaths()).containsExactly("src", "README.md");
         assertThat(holder.command.forbiddenPaths()).containsExactly("secrets");
         assertThat(holder.command.testCommands()).containsExactly("mvn test");
-        assertThat(holder.command.executionProvider()).isEqualTo("claude_sdk");
-        assertThat(holder.command.claudeMaxTurns()).isEqualTo(40);
-        assertThat(holder.command.executionTimeoutSeconds()).isEqualTo(900);
+        assertThat(holder.command.agentConfigSnapshot().agents()).singleElement().satisfies(agent -> {
+            assertThat(agent.name()).isEqualTo("developer");
+            assertThat(agent.engine()).isEqualTo("claude_sdk");
+            assertThat(agent.maxTurns()).isEqualTo(40);
+            assertThat(agent.timeoutSeconds()).isEqualTo(900);
+        });
+        assertThat(holder.command.agentConfigSnapshot().modelProfiles()).singleElement().satisfies(profile -> {
+            assertThat(profile.id()).isEqualTo("mp-1");
+            assertThat(profile.model()).isEqualTo("claude-sonnet");
+        });
+        assertThat(holder.command.agentConfigSnapshot().toString()).doesNotContain("never-in-snapshot");
         assertThat(holder.command.prd().title()).isEqualTo("登录页错误提示");
         assertThat(holder.command.prd().goal()).isEqualTo("把登录页加错误提示");
         assertThat(holder.command.prd().acceptanceCriteria()).containsExactly("错误密码时显示提示");
@@ -203,6 +212,7 @@ class PrdControllerTransactionBoundaryTest {
         var temporal = mock(TemporalCasePort.class);
         var access = mock(SystemAccessService.class);
         var systems = mock(SystemProfileRepository.class);
+        var configurations = mock(AgentConfigurationService.class);
         var aggregate = mock(JdbcAggregateTemplate.class);
         var workItemIds = mock(WorkItemIdGenerator.class);
         var readiness = mock(ExecutionReadinessService.class);
@@ -211,6 +221,12 @@ class PrdControllerTransactionBoundaryTest {
         when(workItemIds.nextId()).thenReturn("WI202607114827");
         when(sessions.findById("prd-1")).thenReturn(Optional.of(session(visibleStatus)), Optional.of(session(lockedStatus)));
         when(systems.findById("sys-1")).thenReturn(Optional.of(system()));
+        when(configurations.internal("sys-1")).thenReturn(new AgentConfigurationService.InternalAgentConfiguration(
+                List.of(new AgentConfigurationService.ModelProfile(
+                        "mp-1", "Claude", "anthropic", "https://example.invalid", "never-in-snapshot",
+                        "claude-sonnet", false)),
+                List.of(new AgentConfigurationService.Agent(
+                        "developer", "builtin", "claude_sdk", "mp-1", List.of("src"), "", 40, 900))));
         when(aggregate.update(any(PrdSession.class))).thenAnswer(call -> {
             var session = (PrdSession) call.getArgument(0);
             order.add("save:" + session.status());
@@ -242,7 +258,7 @@ class PrdControllerTransactionBoundaryTest {
         };
         var objectMapper = new ObjectMapper();
         var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
-                new PrdDraftCodec(objectMapper), tx, access, systems, aggregate, workItemIds, readiness);
+                new PrdDraftCodec(objectMapper), tx, access, systems, configurations, aggregate, workItemIds, readiness);
         return new PrdController(mock(PrdConversationService.class), confirmations);
     }
 
