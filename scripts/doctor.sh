@@ -66,6 +66,29 @@ else
 fi
 checking "worker 容器"
 runtime_running worker && ok "worker 容器运行中" || fail "worker 未运行"
+checking "worker Git"
+runtime_exec worker git --version >/dev/null 2>&1 && ok "worker Git 可用" || fail "worker 未安装 Git"
+checking "GitLab A→B 网络"
+GITLAB_BASE_URL="$(runtime_exec control-plane /bin/sh -c 'printf "%s" "${ASTERISM_GITLAB_BASE_URL:-}"' 2>/dev/null || true)"
+if [ -z "$GITLAB_BASE_URL" ]; then
+  GITLAB_BASE_URL="$(runtime_exec postgres psql -U "${V5_DB_USER:-asterism}" -d asterism -tAc \
+    "select gitlab_base_url from control_plane_v5.system_git_configs where release_mode='gitlab' and gitlab_base_url<>'' limit 1" 2>/dev/null || true)"
+fi
+if [ -z "$GITLAB_BASE_URL" ]; then
+  ok "GitLab 未配置，local 模式跳过 A→B 检查"
+elif runtime_exec worker python -c '
+import sys, urllib.error, urllib.request
+try:
+    urllib.request.urlopen(sys.argv[1].rstrip("/") + "/api/v4/version", timeout=8).close()
+except urllib.error.HTTPError as error:
+    raise SystemExit(0 if error.code < 500 else 1)
+except Exception:
+    raise SystemExit(1)
+' "$GITLAB_BASE_URL"; then
+  ok "worker 可访问 GitLab API（仅需 A→B）"
+else
+  fail "worker 无法访问 GitLab API: $GITLAB_BASE_URL"
+fi
 checking "worker poller"
 if runtime_exec temporal temporal task-queue describe \
   --address "$TEMPORAL_ADDRESS" \

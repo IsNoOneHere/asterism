@@ -63,6 +63,8 @@ services:
       V5_IMAGE_ANALYSIS_URL: http://agent-service:8090/analyze-image
       V5_ATTACHMENT_ROOT: /app/runtime/attachments
       V5_PROFILE: prod
+      ASTERISM_GITLAB_BASE_URL: ${ASTERISM_GITLAB_BASE_URL:-}
+      ASTERISM_GITLAB_TOKEN: ${ASTERISM_GITLAB_TOKEN:-}
     depends_on:
       - postgres
       - temporal
@@ -104,6 +106,7 @@ services:
       V5_AGENT_SERVICE_URL: http://agent-service:8090
       V5_RELEASE_PUSH: ${V5_RELEASE_PUSH:-false}
       V5_WORKSPACE_ROOT: /tmp/asterism-workspaces
+      V5_PUBLIC_URL: ${V5_PUBLIC_URL:-http://127.0.0.1:8080}
       # Claude SDK 与 HTTP provider 共用同一出站代理设置。
       HTTP_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
       HTTPS_PROXY: ${V5_OUTBOUND_PROXY_URL:-}

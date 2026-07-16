@@ -17,7 +17,7 @@ NPM ?= npm
 V5_CONTAINER_RUNTIME ?= docker
 MAVEN_TEST_FLAGS ?= -Dapi.version=1.44 -Dv5.test.db.url=jdbc:postgresql://localhost:55432/asterism?stringtype=unspecified\&currentSchema=control_plane_v5,public -Dv5.test.db.user=asterism -Dv5.test.db.password=asterism
 
-.PHONY: dev prod-up prod-reset doctor smoke-real test test-java test-python test-web test-agent-service gen-client
+.PHONY: dev prod-up prod-reset doctor smoke-real smoke-gitlab test test-java test-python test-web test-agent-service gen-client
 
 dev:
 	docker compose up -d
@@ -37,6 +37,9 @@ doctor:
 
 smoke-real:
 	V5_CONTAINER_RUNTIME="$(V5_CONTAINER_RUNTIME)" sh ./scripts/smoke-real.sh
+
+smoke-gitlab:
+	V5_CONTAINER_RUNTIME="$(V5_CONTAINER_RUNTIME)" sh ./scripts/smoke-gitlab.sh
 
 test: test-java test-python test-web
 

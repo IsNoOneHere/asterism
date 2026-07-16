@@ -17,6 +17,7 @@ make doctor
 ```bash
 make doctor
 make smoke-real
+make smoke-gitlab
 CONFIRM=yes make prod-reset
 make test-python
 make test-web
@@ -26,7 +27,18 @@ make test-web
 
 ## Release 语义
 
-Release 只创建并提交 `wi/<workItemId>` 分支。PR、合并、CI/CD 和部署由仓库维护者决定。
+`local` 模式保持原行为，只在本地仓库创建并提交 `wi/<workItemId>` 分支。`gitlab` 模式会为每个仓库推送同名分支并创建或复用 MR，全部 MR 合并后工作项才完成。合并后的 CI/CD、部署和服务重启始终由 GitLab Runner 负责，不属于 Asterism。
+
+## GitLab 集成部署
+
+1. 在 GitLab B 创建专用的 Project/Group Access Token，限定到业务项目或组，角色至少为 Developer。单 token 同时执行 clone、push 和 MR REST API 时使用 `api` scope；不要把 token 写进仓库 URL。
+2. 在服务器 A 设置 `ASTERISM_GITLAB_BASE_URL`、`ASTERISM_GITLAB_TOKEN` 和用户可访问的 `V5_PUBLIC_URL`，然后重建 control-plane 与 worker。也可在系统“Git 与发布”配置中覆盖连接，读取接口只返回 `tokenSet`。
+3. 系统配置选择 `releaseMode=gitlab`，逐仓填写 GitLab project、默认分支、路径门禁和测试命令。`validationMode=auto` 在 push 前运行测试，`skip` 把测试留给 MR CI 与人工。
+4. 运行 `make doctor`：它会确认 worker 镜像含 Git，并从 worker 容器检查 GitLab API 的 A→B 可达性；系统 readiness 继续核验 token 与每个 project。
+
+合并状态由服务器 A 上的 Temporal workflow 每 60 秒轮询 GitLab B。网络只需允许 `A → B`，不要求 `B → A`，不配置 webhook。部分仓已合并时继续等待；全部合并后完成；MR 未合并而关闭时转为阻塞。若 A 使用出站代理，把 GitLab B 的主机或 IP 加入 `V5_NO_PROXY`。
+
+`make smoke-gitlab` 需要真实 GitLab、模型和管理员环境变量；缺失时会明确输出 `SKIP`。它会创建临时 GitLab 项目并跑到 MR 合并，再等待 Temporal 轮询把工作项推进为 completed。默认保留临时项目；只有在已确认允许删除时才设置 `V5_SMOKE_GITLAB_CLEANUP=yes`。
 
 ## 故障表
 
@@ -37,6 +49,7 @@ Release 只创建并提交 `wi/<workItemId>` 分支。PR、合并、CI/CD 和部
 | control-plane | `/healthz`、worker token、数据库连接 |
 | agent-service | `/healthz`、系统 Profile 或 `V5_AGENT_*` 旧配置回落 |
 | worker | task queue、repo 挂载、role Profile 完整性 |
+| GitLab A→B | worker 容器出站路由、`V5_NO_PROXY`、GitLab 地址和防火墙 |
 
 macOS Apple Container 可设置 `V5_CONTAINER_RUNTIME=apple`，再运行同一组 Make 目标。出站代理使用 `.env.example` 中的显式变量，示例不包含真实 IP 或内网端点。
 
