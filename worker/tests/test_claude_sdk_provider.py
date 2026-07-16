@@ -8,7 +8,7 @@ from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUse
 
 from asterism_worker.agent_config import EngineConfig, ModelProfile
 from asterism_worker.activities.execution import apply_patch_to_repo
-from asterism_worker.contracts import ExecutionPlan, ExecutionRequest
+from asterism_worker.contracts import ExecutionPlan, ExecutionRequest, HandoffContext
 from asterism_worker.providers.claude_sdk import CLAUDE_DISALLOWED_TOOLS, CLAUDE_TOOLS, ClaudeSdkExecutionProvider
 
 
@@ -34,6 +34,12 @@ def execution_request(repo):
         context_manifest_id="manifest-1",
         allowed_paths=["README.md", "src"],
         forbidden_paths=["secrets"],
+        handoff=[HandoffContext(
+            role="frontend",
+            summary="前端完成",
+            diff_patch="diff --git a/web/app.ts b/web/app.ts\n",
+            interface_notes="新增登录参数。",
+        )],
     )
 
 
@@ -70,6 +76,7 @@ def test_claude_sdk_collects_diff_and_writes_transcript(tmp_path, monkeypatch):
         assert "ANTHROPIC_AUTH_TOKEN" not in options.env
         assert "ANTHROPIC_BASE_URL" not in options.env
         assert "更新 README" in prompt
+        assert '"interface_notes": "新增登录参数。"' in prompt
         assert "保留现有入口" in (repo / "CLAUDE.md").read_text()
         assert not (repo / ".claude").exists()
         (repo / "README.md").write_text("Asterism\n")

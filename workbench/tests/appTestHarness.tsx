@@ -86,6 +86,7 @@ let conversationMessages: unknown[] = [];
 let workItems: unknown[] = [];
 let agentConfiguration: any;
 let prdPostCount = 0;
+let responseOverrides: Record<string, unknown> = {};
 
 export function jsonResponse(data: unknown, ok = true, status = ok ? 200 : 401) {
   return Promise.resolve({
@@ -103,13 +104,16 @@ export function resetAppTestState() {
   workItems = [];
   agentConfiguration = {
     modelProfiles: [{ id: 'mp-1', name: 'Claude 主模型', provider: 'anthropic', model: 'claude-sonnet', baseUrl: '', apiKeySet: true }],
-    modelRouting: { defaultProfileId: 'mp-1', prdProfileId: '', planningProfileId: 'mp-1', diffProfileId: 'mp-1' },
-    agentRoles: [{ id: 'role-1', name: '前端 Agent', engine: 'claude_sdk', modelProfileRef: 'mp-1', pathScope: ['web'], prompt: '只改前端', maxTurns: 40, timeoutSeconds: 900 }],
-    defaultRoleId: 'role-1',
-    executionMode: 'single',
+    agents: [
+      { name: 'product', kind: 'builtin', engine: '', modelProfileRef: 'mp-1', pathScope: [], prompt: '' },
+      { name: 'planner', kind: 'builtin', engine: '', modelProfileRef: 'mp-1', pathScope: [], prompt: '' },
+      { name: 'developer', kind: 'builtin', engine: 'claude_sdk', modelProfileRef: 'mp-1', pathScope: [], prompt: '', maxTurns: 40, timeoutSeconds: 900 },
+      { name: 'frontend-dev', kind: 'custom', engine: 'claude_sdk', modelProfileRef: 'mp-1', pathScope: ['web'], prompt: '只改前端', maxTurns: 40, timeoutSeconds: 900 },
+    ],
     engines: ['claude_sdk', 'deepagents', 'http', 'fake'],
   };
   prdPostCount = 0;
+  responseOverrides = {};
   // 测试只关心前端请求路径，不启动真实控制面。
   vi.stubGlobal('fetch', vi.fn((path: string, init?: RequestInit) => {
     if (path.startsWith('/api/v5/work-items?')) return jsonResponse(workItems);
@@ -119,22 +123,15 @@ export function resetAppTestState() {
       agentConfiguration = { ...agentConfiguration, modelProfiles: [...agentConfiguration.modelProfiles, { ...body, id: 'mp-2', apiKeySet: Boolean(body.apiKey), apiKey: undefined }] };
       return jsonResponse(agentConfiguration);
     }
-    if (path === '/api/v5/systems/alpha-system/agent-roles' && init?.method === 'POST') {
+    if (path === '/api/v5/systems/alpha-system/agents' && init?.method === 'POST') {
       const body = JSON.parse(String(init.body));
-      agentConfiguration = { ...agentConfiguration, agentRoles: [...agentConfiguration.agentRoles, { ...body, id: 'role-2' }] };
+      agentConfiguration = { ...agentConfiguration, agents: [...agentConfiguration.agents, { ...body, kind: 'custom' }] };
       return jsonResponse(agentConfiguration);
     }
-    if (path === '/api/v5/systems/alpha-system/default-agent-role' && init?.method === 'PATCH') {
-      agentConfiguration = { ...agentConfiguration, defaultRoleId: JSON.parse(String(init.body)).roleId };
-      return jsonResponse(agentConfiguration);
-    }
-    if (path === '/api/v5/systems/alpha-system/model-routing' && init?.method === 'PATCH') {
-      agentConfiguration = { ...agentConfiguration, modelRouting: JSON.parse(String(init.body)) };
-      return jsonResponse(agentConfiguration);
-    }
-    if (path === '/api/v5/systems/alpha-system/execution-policy' && init?.method === 'PATCH') {
+    if (path.startsWith('/api/v5/systems/alpha-system/agents/') && init?.method === 'PATCH') {
       const body = JSON.parse(String(init.body));
-      agentConfiguration = { ...agentConfiguration, executionMode: body.mode, defaultRoleId: body.defaultRoleId };
+      const name = decodeURIComponent(path.split('/').pop() || '');
+      agentConfiguration = { ...agentConfiguration, agents: agentConfiguration.agents.map((item: any) => item.name === name ? { ...item, ...body, name } : item) };
       return jsonResponse(agentConfiguration);
     }
     if (path.endsWith('/readiness')) return jsonResponse({ ready: true, stages: [], issues: [], effectiveExecutionProvider: 'claude_sdk' });
@@ -212,12 +209,16 @@ export function resetAppTestState() {
     if (path === '/api/v5/conversations/conv-prd-1') {
       return jsonResponse({ messages: conversationMessages, pendingAssistant: false });
     }
-    return jsonResponse(responses[path]);
+    return jsonResponse(Object.prototype.hasOwnProperty.call(responseOverrides, path) ? responseOverrides[path] : responses[path]);
   }));
 }
 
 export function setWorkItems(value: unknown[]) {
   workItems = value;
+}
+
+export function setApiResponse(path: string, value: unknown) {
+  responseOverrides[path] = value;
 }
 
 export function renderApp(path: string) {

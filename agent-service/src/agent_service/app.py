@@ -25,20 +25,29 @@ def create_app(
     @app.post("/plan")
     def plan(request: PlanRequest) -> ExecutionPlan:
         prompt = plan_prompt(request)
-        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "planning")
+        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "planner",
+                                            snapshot=request.agent_config_snapshot)
         return _strict_json(llm, prompt, model_config, ExecutionPlan, "planner did not return valid ExecutionPlan JSON")
 
     @app.post("/execute")
     def execute(request: ExecutionRequest) -> ExecutionResult:
-        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "diff", request.model_profile_id)
-        diff_patch = llm.complete(execute_prompt(request), model_config)
-        if "diff --git" not in diff_patch:
+        model_config = resolve_model_config(
+            settings, fetch_model_config, request.system_id, request.role_id or "developer",
+            request.model_profile_id, request.agent_config_snapshot,
+        )
+        raw = llm.complete(execute_prompt(request), model_config, json_mode=True)
+        try:
+            result = ExecutionResult.model_validate(json.loads(raw))
+        except (json.JSONDecodeError, ValidationError):
+            # 兼容仍返回纯 diff 的模型，避免切换响应格式时中断执行。
+            result = ExecutionResult(diff_patch=raw)
+        if "diff --git" not in result.diff_patch:
             raise HTTPException(status_code=422, detail="execution did not return a unified git diff")
-        return ExecutionResult(summary="llm diff generated", diff_patch=diff_patch)
+        return result
 
     @app.post("/prd-draft")
     def prd_draft(request: DraftRequest) -> DraftResult:
-        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "prd")
+        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "product")
         return _strict_json(llm, prd_draft_prompt(request), model_config, DraftResult, "prd draft did not return valid DraftResult JSON")
 
     @app.post("/analyze-image")
@@ -64,15 +73,15 @@ def create_app(
 
     @app.get("/healthz")
     def healthz() -> dict:
-        config = resolve_model_config(settings, fetch_model_config, "healthz", "default")
+        config = resolve_model_config(settings, fetch_model_config, "healthz", "product")
         return {"ok": True, "model_config_available": bool(config.model and config.api_key)}
 
     @app.get("/readiness")
     def readiness(system_id: str) -> dict:
         # 仅返回配置状态，禁止把 API key 暴露给 Worker 或页面。
         stages = {
-            stage: resolve_model_config(settings, fetch_model_config, system_id, stage)
-            for stage in ("prd", "planning", "diff")
+            stage: resolve_model_config(settings, fetch_model_config, system_id, agent)
+            for stage, agent in {"prd": "product", "planning": "planner", "diff": "developer"}.items()
         }
         return {
             "ready": all(config.model and config.api_key for config in stages.values()),
@@ -104,11 +113,11 @@ def _strict_json(llm: LlmClient, prompt: str, model_config: ModelConfig, schema,
 
 
 def control_plane_model_config(settings: AgentSettings) -> Callable[[str, str, str], ModelConfig]:
-    def fetch(system_id: str, stage: str, profile_id: str = "") -> ModelConfig:
+    def fetch(system_id: str, agent: str, profile_id: str = "") -> ModelConfig:
         url = settings.control_plane_url.rstrip("/") + f"/api/v5/internal/systems/{system_id}/model-config"
         headers = {"Authorization": f"Bearer {settings.worker_callback_token}"}
         try:
-            params = {"stage": stage}
+            params = {"agent": agent}
             if profile_id:
                 params["profile_id"] = profile_id
             response = httpx.get(url, headers=headers, params=params, timeout=5)
@@ -123,12 +132,30 @@ def control_plane_model_config(settings: AgentSettings) -> Callable[[str, str, s
 
 
 def resolve_model_config(settings: AgentSettings, fetch_model_config: Callable[..., ModelConfig],
-                         system_id: str, stage: str, profile_id: str = "") -> ModelConfig:
-    # 兼容旧测试/部署注入的双参数 fetcher。
-    try:
-        resolved = fetch_model_config(system_id, stage, profile_id)
-    except TypeError:
-        resolved = fetch_model_config(system_id, stage)
+                         system_id: str, agent: str, profile_id: str = "",
+                         snapshot=None) -> ModelConfig:
+    if snapshot is not None:
+        selected_agent = next((item for item in snapshot.agents if item.name == agent), None)
+        selected_id = profile_id or (selected_agent.model_profile_ref if selected_agent else "")
+        if not selected_id:
+            return default_model_config(settings)
+        profile = next((item for item in snapshot.model_profiles if item.id == selected_id), None)
+        if profile is None:
+            return ModelConfig()
+        live = fetch_model_config(system_id, agent, selected_id)
+        # 模型参数来自 Case 快照，只有 Key 每次调用时实时读取。
+        return ModelConfig(
+            managed=True,
+            configured=bool(profile.model and live.api_key),
+            model_id=profile.id,
+            name=profile.name,
+            provider=profile.provider,
+            model=profile.model,
+            base_url=profile.base_url,
+            api_key=live.api_key,
+            supports_vision=profile.supports_vision,
+        )
+    resolved = fetch_model_config(system_id, agent, profile_id)
     return merge_model_config(default_model_config(settings), resolved)
 
 
@@ -137,8 +164,8 @@ def plan_prompt(request: PlanRequest) -> str:
     return (
         "Return strict JSON for ExecutionPlan with keys steps,target_files,test_plan,risks,assignments.\n"
         "All four values must be JSON arrays of strings: steps,target_files,test_plan,risks.\n"
-        "assignments is optional; when multiple available roles are useful, return ordered objects "
-        "{role,scope_paths,step_refs} using only listed role ids and path scopes.\n"
+        "assignments is optional; when multiple available agents are useful, return ordered objects "
+        "{role,scope_paths,step_refs} using only listed agent names and path scopes.\n"
         "target_files must be real existing paths selected from the repo summary.\n"
         f"PRD: {request.prd.model_dump_json()}\n"
         f"Confirmed target hints (疑似相关，以实际代码为准): "
@@ -146,12 +173,12 @@ def plan_prompt(request: PlanRequest) -> str:
         f"Repo summary:\n{request.repo_summary}\n"
         f"Memories: {json.dumps(request.memories, ensure_ascii=False)}\n"
         f"Allowed paths: {request.allowed_paths}\n"
-        f"Available roles (no secrets): {json.dumps([role.model_dump() for role in request.available_roles], ensure_ascii=False)}\n"
+        f"Available agents (no secrets): {json.dumps([agent.model_dump() for agent in request.available_agents], ensure_ascii=False)}\n"
     )
 
 
 def execute_prompt(request: ExecutionRequest) -> str:
-    # 只要求 unified diff；worker 仍会做 diff 门禁和真实 patch apply。
+    # worker 仍会做 diff 门禁和真实 patch apply，接口说明只用于后续 Agent 交接。
     previous = ""
     if request.previous_attempt:
         previous = (
@@ -159,8 +186,14 @@ def execute_prompt(request: ExecutionRequest) -> str:
             f"{request.previous_attempt.get('apply_error', '')}\n"
             f"Previous diff:\n{request.previous_attempt.get('diff', '')}\n"
         )
+    handoff = json.dumps([item.model_dump() for item in request.handoff], ensure_ascii=False)
+    if not request.handoff:
+        handoff = str((request.model_extra or {}).get("handoff_summary") or "none")
     return (
-        "Return only a unified git diff that contains diff --git headers.\n"
+        "Return strict JSON with keys diff_patch and interface_notes.\n"
+        "diff_patch must be a unified git diff that contains diff --git headers.\n"
+        "interface_notes must use 2-3 concise sentences to explain changed public interfaces, signatures, "
+        "or behavior that later developers need to know; use an empty string when none changed.\n"
         "Diff must be based on the provided file contents; context lines must match exactly.\n"
         f"Goal: {request.goal}\n"
         f"Acceptance criteria: {request.acceptance_criteria}\n"
@@ -172,7 +205,7 @@ def execute_prompt(request: ExecutionRequest) -> str:
         f"Role scope: {request.role_scope}\n"
         f"Role instructions: {request.role_prompt or 'none'}\n"
         f"Stage step refs: {request.step_refs or ['all']}\n"
-        f"Previous role handoff: {request.handoff_summary or 'none'}\n"
+        f"Previous role handoff: {handoff}\n"
         f"{previous}"
     )
 

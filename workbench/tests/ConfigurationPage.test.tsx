@@ -7,14 +7,13 @@ beforeEach(resetAppTestState);
 test('model and agent configuration share one page and data source', async () => {
   renderApp('/models');
 
-  expect(await screen.findByRole('heading', { name: '模型配置' })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: '模型连接' })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { name: '阶段默认模型' })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: 'Agent / 模型配置' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '模型列表' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Agent 列表' })).toBeInTheDocument();
   expect((await screen.findAllByText('Claude 主模型')).length).toBeGreaterThan(0);
   expect(screen.getByText('Key 已配置')).toBeInTheDocument();
-  expect(screen.queryByRole('heading', { name: '代码 Agent' })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Agent 配置' }));
-  expect(await screen.findByRole('heading', { name: '代码 Agent' })).toBeInTheDocument();
+  expect(screen.getByText('内置 · PRD 对话')).toBeInTheDocument();
+  expect(screen.queryByRole('radio')).not.toBeInTheDocument();
 });
 
 test('model profile edit opens a centered dialog instead of an inline form', async () => {
@@ -42,32 +41,28 @@ test('model profile can be added without ever rendering its key', async () => {
   expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/model-profiles', expect.objectContaining({ method: 'POST' }));
 });
 
-test('agent role can select deepagents profile and path scope', async () => {
+test('custom agent can select deepagents profile and path scope', async () => {
   renderApp('/agents');
-  fireEvent.click(await screen.findByRole('button', { name: 'Agent 配置' }));
-  await screen.findAllByText('前端 Agent');
-  expect(screen.getByRole('heading', { name: '代码 Agent' })).toBeInTheDocument();
-  expect(screen.getByLabelText('默认 Agent')).toHaveValue('role-1');
-  fireEvent.change(screen.getByLabelText('Agent 名称'), { target: { value: '后端 Agent' } });
+  await screen.findAllByText('frontend-dev');
+  expect(screen.getByRole('heading', { name: 'Agent 列表' })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Agent 名称'), { target: { value: 'backend-dev' } });
   fireEvent.change(screen.getByLabelText('执行内核'), { target: { value: 'deepagents' } });
   fireEvent.change(screen.getByLabelText('Model Profile'), { target: { value: 'mp-1' } });
   fireEvent.change(screen.getByLabelText(/Path Scope/), { target: { value: 'api\ndb' } });
   fireEvent.click(screen.getByRole('button', { name: '添加 Agent' }));
 
-  expect((await screen.findAllByText('后端 Agent')).length).toBeGreaterThan(0);
-  const call = vi.mocked(fetch).mock.calls.find(([path]) => path === '/api/v5/systems/alpha-system/agent-roles');
+  expect((await screen.findAllByText('backend-dev')).length).toBeGreaterThan(0);
+  const call = vi.mocked(fetch).mock.calls.find(([path]) => path === '/api/v5/systems/alpha-system/agents');
   expect(JSON.parse(String(call?.[1]?.body)).pathScope).toEqual(['api', 'db']);
 });
 
-test('agent execution policy switches between single and planner selection', async () => {
+test('builtin product only edits its profile and cannot be deleted', async () => {
   renderApp('/agents');
-  fireEvent.click(await screen.findByRole('button', { name: 'Agent 配置' }));
-  await screen.findAllByText('前端 Agent');
-
-  fireEvent.click(screen.getByRole('radio', { name: /Planner 选择/ }));
-
-  await waitFor(() => expect(fetch).toHaveBeenCalledWith(
-    '/api/v5/systems/alpha-system/execution-policy',
-    expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ mode: 'planner_select', defaultRoleId: 'role-1' }) }),
-  ));
+  await screen.findAllByText('product');
+  expect(screen.queryByRole('button', { name: '删除 product' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '编辑 product' }));
+  expect(screen.getByRole('heading', { name: '编辑 product' })).toBeInTheDocument();
+  expect(screen.queryByLabelText('执行内核')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '保存 Agent' }));
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/agents/product', expect.objectContaining({ method: 'PATCH' })));
 });

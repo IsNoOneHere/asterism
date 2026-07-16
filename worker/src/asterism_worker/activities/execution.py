@@ -17,7 +17,7 @@ from asterism_worker.activities.execution_support import (
     validate_patch_paths,
     validate_plan_targets,
 )
-from asterism_worker.agent_config import available_role_metadata, resolve_agent_config
+from asterism_worker.agent_config import available_agent_metadata, resolve_agent_config
 from asterism_worker.config.settings import load_settings
 from asterism_worker.contracts import ExecutionRequest, PatchApplyRequest, PatchApplyResult, PlanRequest, PreviousAttempt
 from asterism_worker.providers.factory import build_execution_provider, build_planner_provider
@@ -31,6 +31,7 @@ async def run_execution(request: dict) -> dict:
 
     settings = load_settings()
     parsed = ExecutionRequest.model_validate(request)
+    legacy = parsed.model_extra or {}
     workspace = prepare_workspace(parsed.repo_path, settings.workspace_root)
     try:
         validate_plan_targets(str(workspace), parsed.plan.target_files)
@@ -46,8 +47,10 @@ async def run_execution(request: dict) -> dict:
             settings,
             parsed.system_id,
             role_id=parsed.role_id,
-            legacy_engine=parsed.execution_provider,
-            legacy_max_turns=parsed.claude_max_turns,
+            snapshot=parsed.agent_config_snapshot,
+            legacy_engine=str(legacy.get("execution_provider", "")),
+            legacy_max_turns=legacy.get("claude_max_turns"),
+            legacy_timeout_seconds=legacy.get("execution_timeout_seconds"),
             callbacks={"event": heartbeat_provider_event},
         )
         provider = build_execution_provider(resolved)
@@ -110,18 +113,27 @@ async def plan_execution(request: dict) -> dict:
     settings = load_settings()
     parsed = PlanRequest.model_validate(request)
     provider = build_planner_provider(settings)
-    roles = await available_role_metadata(settings, parsed.system_id)
-    parsed = parsed.model_copy(update={"available_roles": roles})
+    snapshot_mode = parsed.agent_config_snapshot is not None or parsed.available_agents is not None
+    if parsed.agent_config_snapshot is not None:
+        agents = [
+            {"name": agent.name, "engine": agent.engine, "path_scope": agent.path_scope}
+            for agent in parsed.agent_config_snapshot.agents if agent.kind == "custom"
+        ]
+    elif parsed.available_agents is not None:
+        agents = [agent.model_dump() for agent in parsed.available_agents]
+    else:
+        agents = await available_agent_metadata(settings, parsed.system_id)
+    parsed = parsed.model_copy(update={"available_agents": agents})
     log.info("执行 planner", extra={"provider": settings.planner_provider, "manifest_id": parsed.context_manifest_id})
     plan = await provider.plan(parsed)
     # 无可选角色时清空模型自带的分配；有角色时只接受系统已发布的引用。
-    if not roles:
+    if not agents:
         plan = plan.model_copy(update={"assignments": []})
-    else:
-        role_ids = {role["id"] for role in roles}
-        unknown_role = next((item.role for item in plan.assignments if item.role not in role_ids), "")
+    elif not snapshot_mode:
+        agent_names = {agent["name"] for agent in agents}
+        unknown_role = next((item.role for item in plan.assignments if item.role not in agent_names), "")
         if unknown_role:
-            raise RuntimeError(f"Planner 返回了不可用的 Agent role: {unknown_role}")
+            raise RuntimeError(f"Planner 返回了不可用的 Agent: {unknown_role}")
     return plan.model_dump()
 
 

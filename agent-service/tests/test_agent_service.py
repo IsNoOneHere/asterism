@@ -112,7 +112,31 @@ def test_execute_returns_git_diff():
 
     assert response.status_code == 200
     assert response.json()["diff_patch"] == diff
-    assert llm.json_modes == [False]
+    assert llm.json_modes == [True]
+
+
+def test_execute_returns_interface_notes_and_receives_structured_handoff():
+    diff = "diff --git a/api/app.py b/api/app.py\n"
+    llm = FakeLlmClient([json.dumps({
+        "diff_patch": diff,
+        "interface_notes": "新增 POST /api/orders。请求参数保持兼容。",
+    }, ensure_ascii=False)])
+    client = TestClient(create_app(llm))
+
+    response = client.post("/execute", json={
+        "case_id": "case-1", "work_item_id": "wi-1", "system_id": "sys-1", "repo_path": "/tmp/repo",
+        "goal": "g", "plan": {"steps": ["改后端"]}, "role_id": "backend",
+        "handoff": [{
+            "role": "frontend", "summary": "前端完成",
+            "diff_patch": "diff --git a/web/app.ts b/web/app.ts\n",
+            "interface_notes": "前端开始调用 POST /api/orders。",
+        }],
+    })
+
+    assert response.status_code == 200
+    assert response.json()["interface_notes"] == "新增 POST /api/orders。请求参数保持兼容。"
+    assert "前端开始调用 POST /api/orders" in llm.prompts[0]
+    assert "2-3 concise sentences" in llm.prompts[0]
 
 
 def test_execute_prompt_includes_file_contents_and_previous_attempt():
@@ -145,7 +169,7 @@ def test_system_model_config_overrides_global_defaults(caplog):
     client = TestClient(create_app(
         llm,
         AgentSettings(api_key="default-key", model="default-model", base_url="https://default.local"),
-        model_config_fetcher=lambda system_id, stage: ModelConfig(
+        model_config_fetcher=lambda system_id, agent, profile_id="": ModelConfig(
             managed=True,
             provider="openai",
             model="system-model",
@@ -174,7 +198,7 @@ def test_missing_system_model_config_falls_back_to_global_defaults():
     client = TestClient(create_app(
         llm,
         AgentSettings(api_key="default-key", model="default-model", base_url="https://default.local"),
-        model_config_fetcher=lambda system_id, stage: ModelConfig(),
+        model_config_fetcher=lambda system_id, agent, profile_id="": ModelConfig(),
     ))
 
     response = client.post("/execute", json={
@@ -257,8 +281,8 @@ def test_execute_resolves_selected_profile_reference_without_receiving_key():
     seen = []
     llm = FakeLlmClient(["diff --git a/README.md b/README.md\n"])
 
-    def fetch(system_id, stage, profile_id):
-        seen.append((system_id, stage, profile_id))
+    def fetch(system_id, agent, profile_id):
+        seen.append((system_id, agent, profile_id))
         return ModelConfig(managed=True, configured=True, model_id=profile_id, model="role-model", api_key="internal-key")
 
     client = TestClient(create_app(llm, model_config_fetcher=fetch))
@@ -268,16 +292,49 @@ def test_execute_resolves_selected_profile_reference_without_receiving_key():
     })
 
     assert response.status_code == 200
-    assert seen == [("sys", "diff", "mp-role")]
+    assert seen == [("sys", "developer", "mp-role")]
     assert llm.configs[0].api_key == "internal-key"
 
 
-def test_plan_prompt_contains_only_available_role_metadata():
+def test_execute_uses_snapshot_model_with_live_rotated_key():
+    llm = FakeLlmClient([
+        "diff --git a/README.md b/README.md\n",
+        "diff --git a/README.md b/README.md\n",
+    ])
+    key = "key-v1"
+
+    def fetch(system_id, agent, profile_id):
+        return ModelConfig(managed=True, model="changed-after-start", api_key=key)
+
+    client = TestClient(create_app(llm, model_config_fetcher=fetch))
+    request = {
+        "case_id": "case", "work_item_id": "wi", "system_id": "sys", "repo_path": "/tmp/repo",
+        "goal": "g", "plan": {"steps": ["s"]}, "role_id": "frontend",
+        "model_profile_id": "mp-fixed",
+        "agent_config_snapshot": {
+            "model_profiles": [{"id": "mp-fixed", "model": "snapshot-model"}],
+            "agents": [{
+                "name": "frontend", "kind": "custom", "engine": "http",
+                "model_profile_ref": "mp-fixed",
+            }],
+        },
+    }
+
+    assert client.post("/execute", json=request).status_code == 200
+    key = "key-v2"
+    assert client.post("/execute", json=request).status_code == 200
+
+    assert [config.model for config in llm.configs] == ["snapshot-model", "snapshot-model"]
+    assert [config.api_key for config in llm.configs] == ["key-v1", "key-v2"]
+    assert "api_key" not in json.dumps(request)
+
+
+def test_plan_prompt_contains_only_available_agent_metadata():
     llm = FakeLlmClient(['{"steps":["s"],"target_files":[],"test_plan":[],"risks":[],"assignments":[]}'])
     client = TestClient(create_app(llm))
     response = client.post("/plan", json={
         "system_id": "sys", "prd": {"goal": "g"}, "context_manifest_id": "m",
-        "available_roles": [{"id": "frontend", "name": "前端", "engine": "claude_sdk", "path_scope": ["web"]}],
+        "available_agents": [{"name": "frontend", "engine": "claude_sdk", "path_scope": ["web"]}],
     })
 
     assert response.status_code == 200
@@ -290,7 +347,7 @@ def test_readiness_returns_model_state_without_api_key():
     client = TestClient(create_app(
         FakeLlmClient([]),
         AgentSettings(),
-        model_config_fetcher=lambda system_id, stage: ModelConfig(managed=True, model="model-1", api_key="secret-key"),
+        model_config_fetcher=lambda system_id, agent, profile_id="": ModelConfig(managed=True, model="model-1", api_key="secret-key"),
     ))
 
     response = client.get("/readiness", params={"system_id": "sys-1"})
@@ -304,9 +361,9 @@ def test_readiness_returns_model_state_without_api_key():
 def test_each_endpoint_uses_its_stage_model():
     stages = []
 
-    def fetch(system_id, stage):
-        stages.append(stage)
-        return ModelConfig(managed=True, model=f"{stage}-model", api_key=f"{stage}-key")
+    def fetch(system_id, agent, profile_id=""):
+        stages.append(agent)
+        return ModelConfig(managed=True, model=f"{agent}-model", api_key=f"{agent}-key")
 
     llm = FakeLlmClient([
         '{"title":"t","draft":{"goal":"g"},"missing_fields":[],"assistant_message":"ok"}',
@@ -324,8 +381,8 @@ def test_each_endpoint_uses_its_stage_model():
         "goal":"g", "plan":{}
     }).status_code == 200
 
-    assert stages == ["prd", "planning", "diff"]
-    assert [config.model for config in llm.configs] == ["prd-model", "planning-model", "diff-model"]
+    assert stages == ["product", "planner", "developer"]
+    assert [config.model for config in llm.configs] == ["product-model", "planner-model", "developer-model"]
 
 
 def test_analyze_image_returns_observation_without_guessing_code():
@@ -338,7 +395,7 @@ def test_analyze_image_returns_observation_without_guessing_code():
     }, ensure_ascii=False)])
     client = TestClient(create_app(
         llm,
-        model_config_fetcher=lambda system_id, stage: ModelConfig(
+        model_config_fetcher=lambda system_id, agent, profile_id="": ModelConfig(
             managed=True, model="vision-model", api_key="secret", supports_vision=True,
         ),
     ))
@@ -356,7 +413,7 @@ def test_analyze_image_requires_vision_profile():
     llm = FakeLlmClient([])
     client = TestClient(create_app(
         llm,
-        model_config_fetcher=lambda system_id, stage: ModelConfig(
+        model_config_fetcher=lambda system_id, agent, profile_id="": ModelConfig(
             managed=True, model="text-model", api_key="secret", supports_vision=False,
         ),
     ))

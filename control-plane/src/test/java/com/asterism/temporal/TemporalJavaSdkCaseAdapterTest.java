@@ -35,9 +35,11 @@ class TemporalJavaSdkCaseAdapterTest {
                 List.of("src"),
                 List.of("secrets"),
                 List.of("pytest"),
-                "claude_sdk",
-                40,
-                900,
+                new TemporalCasePort.AgentConfigSnapshot(
+                        List.of(new TemporalCasePort.ModelProfileSnapshot(
+                                "mp-1", "Claude", "anthropic", "https://example.invalid", "claude", false)),
+                        List.of(new TemporalCasePort.AgentSnapshot(
+                                "developer", "builtin", "claude_sdk", "mp-1", List.of("src"), "", 40, 900))),
                 new TemporalCasePort.PrdPayload(null, null, null, null))))
                 .doesNotThrowAnyException();
 
@@ -52,8 +54,13 @@ class TemporalJavaSdkCaseAdapterTest {
         assertThat(prd.get("goal")).isEqualTo("");
         assertThat(prd.get("acceptance_criteria")).isEqualTo(List.of());
         assertThat(prd.get("draft_json")).isEqualTo(Map.of());
-        assertThat(payload.get("execution_provider")).isEqualTo("claude_sdk");
-        assertThat(payload.get("claude_max_turns")).isEqualTo(40);
-        assertThat(payload.get("execution_timeout_seconds")).isEqualTo(900);
+        assertThat(payload).doesNotContainKeys("execution_provider", "claude_max_turns", "execution_timeout_seconds");
+        @SuppressWarnings("unchecked")
+        var snapshot = (Map<String, Object>) payload.get("agent_config_snapshot");
+        assertThat(snapshot.toString()).doesNotContainIgnoringCase("apiKey");
+        @SuppressWarnings("unchecked")
+        var agents = (List<Map<String, Object>>) snapshot.get("agents");
+        assertThat(agents.getFirst()).containsEntry("model_profile_ref", "mp-1")
+                .containsEntry("timeout_seconds", 900);
     }
 }

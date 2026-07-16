@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PrdSpec(BaseModel):
@@ -16,11 +16,35 @@ class AgentAssignment(BaseModel):
     step_refs: list[str] = Field(default_factory=list)
 
 
-class AvailableRole(BaseModel):
-    id: str
-    name: str = ""
+class AvailableAgent(BaseModel):
+    name: str
     engine: str
     path_scope: list[str] = Field(default_factory=list)
+
+
+class ModelProfileSnapshot(BaseModel):
+    id: str
+    name: str = ""
+    provider: str = "openai-compat"
+    base_url: str = ""
+    model: str = ""
+    supports_vision: bool = False
+
+
+class AgentSnapshot(BaseModel):
+    name: str
+    kind: str
+    engine: str = ""
+    model_profile_ref: str = ""
+    path_scope: list[str] = Field(default_factory=list)
+    prompt: str = ""
+    max_turns: int | None = None
+    timeout_seconds: int | None = None
+
+
+class AgentConfigSnapshot(BaseModel):
+    model_profiles: list[ModelProfileSnapshot] = Field(default_factory=list)
+    agents: list[AgentSnapshot] = Field(default_factory=list)
 
 
 class ExecutionPlan(BaseModel):
@@ -38,10 +62,20 @@ class PlanRequest(BaseModel):
     memories: list[dict[str, Any]] = Field(default_factory=list)
     allowed_paths: list[str] = Field(default_factory=list)
     context_manifest_id: str
-    available_roles: list[AvailableRole] = Field(default_factory=list)
+    available_agents: list[AvailableAgent] = Field(default_factory=list)
+    agent_config_snapshot: AgentConfigSnapshot | None = None
+
+
+class HandoffContext(BaseModel):
+    role: str
+    summary: str
+    diff_patch: str
+    interface_notes: str = ""
 
 
 class ExecutionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     case_id: str
     work_item_id: str
     system_id: str
@@ -62,14 +96,16 @@ class ExecutionRequest(BaseModel):
     model_profile_id: str = ""
     role_scope: list[str] = Field(default_factory=list)
     role_prompt: str = ""
-    handoff_summary: str = ""
+    handoff: list[HandoffContext] = Field(default_factory=list)
     assignment_index: int = 0
     step_refs: list[str] = Field(default_factory=list)
+    agent_config_snapshot: AgentConfigSnapshot | None = None
 
 
 class ExecutionResult(BaseModel):
-    summary: str
+    summary: str = "llm diff generated"
     diff_patch: str
+    interface_notes: str | None = None
 
 
 class DraftRequest(BaseModel):

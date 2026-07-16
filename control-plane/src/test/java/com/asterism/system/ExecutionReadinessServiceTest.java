@@ -76,6 +76,7 @@ class ExecutionReadinessServiceTest {
     private SystemProfile profile(String provider) {
         var now = Instant.now();
         return new SystemProfile("sys-1", "系统", "", "/repo", "owner", "[]", "[]", "[\"mvn test\"]",
-                "{\"executionProvider\":\"" + provider + "\"}", "{}", "admin", now, now);
+                "{}", "{\"agents\":[{\"name\":\"developer\",\"kind\":\"builtin\",\"engine\":\""
+                + provider + "\",\"modelProfileRef\":\"\"}]}", "admin", now, now);
     }
 }

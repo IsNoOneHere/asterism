@@ -7,6 +7,7 @@ import com.asterism.identity.SystemAccessService;
 import com.asterism.knowledge.KnowledgeMatchService;
 import com.asterism.memory.MemoryItemRepository;
 import com.asterism.system.ExecutionReadinessService;
+import com.asterism.system.AgentConfigurationService;
 import com.asterism.system.SystemProfile;
 import com.asterism.system.SystemProfileRepository;
 import com.asterism.temporal.TemporalCasePort;
@@ -83,6 +84,10 @@ class PrdScreenshotFlowTest {
         var ids = mock(WorkItemIdGenerator.class);
         when(ids.nextId()).thenReturn("WI202607141234");
         var temporal = mock(TemporalCasePort.class);
+        var configurations = mock(AgentConfigurationService.class);
+        when(configurations.internal("sys-1")).thenReturn(new AgentConfigurationService.InternalAgentConfiguration(
+                List.of(), List.of(new AgentConfigurationService.Agent(
+                        "developer", "builtin", "http", "", List.of(), "", 50, 600))));
         var transactions = new TransactionOperations() {
             @Override
             public <T> T execute(TransactionCallback<T> action) {
@@ -95,7 +100,7 @@ class PrdScreenshotFlowTest {
                 objectMapper, new PrdDraftCodec(objectMapper), transactions, access, memories, aggregate, attachments, imageAnalysis, knowledge,
                 Runnable::run);
         var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
-                new PrdDraftCodec(objectMapper), transactions, access, systems, aggregate, ids, readiness);
+                new PrdDraftCodec(objectMapper), transactions, access, systems, configurations, aggregate, ids, readiness);
         var controller = new PrdController(conversations, confirmations);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
 

@@ -178,16 +178,9 @@ export type ModelProfile = {
   supportsVision: boolean;
 };
 
-export type ModelRouting = {
-  defaultProfileId: string;
-  prdProfileId: string;
-  planningProfileId: string;
-  diffProfileId: string;
-};
-
-export type AgentRole = {
-  id: string;
+export type Agent = {
   name: string;
+  kind: 'builtin' | 'custom';
   engine: 'claude_sdk' | 'deepagents' | 'http' | 'fake' | string;
   modelProfileRef: string;
   pathScope: string[];
@@ -198,10 +191,7 @@ export type AgentRole = {
 
 export type AgentConfiguration = {
   modelProfiles: ModelProfile[];
-  modelRouting: ModelRouting;
-  agentRoles: AgentRole[];
-  defaultRoleId: string;
-  executionMode: 'single' | 'planner_select';
+  agents: Agent[];
   engines: string[];
 };
 
@@ -259,8 +249,6 @@ export const api = {
     request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId), { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body) }),
   updateSystemProfile: (systemId: string, body: unknown) =>
     request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId) + '/profile', { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body) }),
-  updateExecutionConfig: (systemId: string, body: unknown) =>
-    request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId) + '/execution-config', { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body) }),
   agentConfiguration: (systemId: string) =>
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agent-config'),
   createModelProfile: (systemId: string, body: unknown) =>
@@ -273,28 +261,16 @@ export const api = {
     }),
   deleteModelProfile: (systemId: string, profileId: string) =>
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-profiles/' + encodeURIComponent(profileId), { method: 'DELETE' }),
-  createAgentRole: (systemId: string, body: unknown) =>
-    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agent-roles', {
+  createAgent: (systemId: string, body: unknown) =>
+    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agents', {
       method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),
     }),
-  updateAgentRole: (systemId: string, roleId: string, body: unknown) =>
-    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agent-roles/' + encodeURIComponent(roleId), {
+  updateAgent: (systemId: string, agentName: string, body: unknown) =>
+    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agents/' + encodeURIComponent(agentName), {
       method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
     }),
-  deleteAgentRole: (systemId: string, roleId: string) =>
-    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agent-roles/' + encodeURIComponent(roleId), { method: 'DELETE' }),
-  updateDefaultAgentRole: (systemId: string, roleId: string) =>
-    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/default-agent-role', {
-      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify({ roleId }),
-    }),
-  updateModelRouting: (systemId: string, body: ModelRouting) =>
-    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-routing', {
-      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
-    }),
-  updateExecutionPolicy: (systemId: string, mode: 'single' | 'planner_select', defaultRoleId: string) =>
-    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/execution-policy', {
-      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify({ mode, defaultRoleId }),
-    }),
+  deleteAgent: (systemId: string, agentName: string) =>
+    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agents/' + encodeURIComponent(agentName), { method: 'DELETE' }),
   systemReadiness: (systemId: string) => request<SystemReadiness>('/api/v5/systems/' + encodeURIComponent(systemId) + '/readiness'),
   uploadAttachment: (systemId: string, file: File) => {
     const body = new FormData();

@@ -4,6 +4,7 @@ import com.asterism.common.ApiException;
 import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventType;
 import com.asterism.identity.SystemAccessService;
+import com.asterism.system.AgentConfigurationService;
 import com.asterism.system.ExecutionReadinessService;
 import com.asterism.system.SystemProfileRepository;
 import com.asterism.temporal.TemporalCasePort;
@@ -31,6 +32,7 @@ public class PrdConfirmationService {
     private final TransactionOperations transactions;
     private final SystemAccessService access;
     private final SystemProfileRepository systems;
+    private final AgentConfigurationService configurations;
     private final JdbcAggregateTemplate aggregate;
     private final WorkItemIdGenerator workItemIds;
     private final ExecutionReadinessService readiness;
@@ -44,6 +46,7 @@ public class PrdConfirmationService {
             TransactionOperations transactions,
             SystemAccessService access,
             SystemProfileRepository systems,
+            AgentConfigurationService configurations,
             JdbcAggregateTemplate aggregate,
             WorkItemIdGenerator workItemIds,
             ExecutionReadinessService readiness) {
@@ -55,6 +58,7 @@ public class PrdConfirmationService {
         this.transactions = transactions;
         this.access = access;
         this.systems = systems;
+        this.configurations = configurations;
         this.aggregate = aggregate;
         this.workItemIds = workItemIds;
         this.readiness = readiness;
@@ -74,7 +78,6 @@ public class PrdConfirmationService {
         try {
             // Temporal 是外部系统，必须在数据库事务提交后调用。
             var profile = systems.findById(current.systemId()).orElseThrow(() -> new IllegalArgumentException("系统不存在"));
-            var agentConfig = readMap(profile.agentConfig());
             try {
                 temporal.startCase(new TemporalCasePort.StartCaseCommand(
                         caseId,
@@ -85,9 +88,7 @@ public class PrdConfirmationService {
                         readList(profile.allowedPaths()),
                         readList(profile.forbiddenPaths()),
                         readList(profile.testCommands()),
-                        configText(agentConfig, "executionProvider", "execution_provider"),
-                        configInteger(agentConfig, "claudeMaxTurns", "claude_max_turns"),
-                        configInteger(agentConfig, "executionTimeoutSeconds", "execution_timeout_seconds"),
+                        agentConfigSnapshot(current.systemId()),
                         prdPayload(current)));
             } catch (WorkflowExecutionAlreadyStarted error) {
                 // confirm 幂等：Temporal workflow 已存在说明上一轮启动实际成功，按成功路径收敛。
@@ -146,29 +147,22 @@ public class PrdConfirmationService {
                 draftCodec.toMap(draft));
     }
 
-    private String configText(Map<String, Object> config, String camelName, String snakeName) {
-        var value = config.containsKey(camelName) ? config.get(camelName) : config.get(snakeName);
-        return value == null ? "" : String.valueOf(value);
-    }
-
-    private Integer configInteger(Map<String, Object> config, String camelName, String snakeName) {
-        var value = config.containsKey(camelName) ? config.get(camelName) : config.get(snakeName);
-        if (value == null || String.valueOf(value).isBlank()) return null;
-        return value instanceof Number number ? number.intValue() : Integer.valueOf(String.valueOf(value));
+    private TemporalCasePort.AgentConfigSnapshot agentConfigSnapshot(String systemId) {
+        var config = configurations.internal(systemId);
+        // Case 只冻结非密钥配置，API Key 仍由 activity 按 Profile 引用实时读取。
+        return new TemporalCasePort.AgentConfigSnapshot(
+                config.modelProfiles().stream().map(profile -> new TemporalCasePort.ModelProfileSnapshot(
+                        profile.id(), profile.name(), profile.provider(), profile.baseUrl(), profile.model(),
+                        profile.supportsVision())).toList(),
+                config.agents().stream().map(agent -> new TemporalCasePort.AgentSnapshot(
+                        agent.name(), agent.kind(), agent.engine(), agent.modelProfileRef(), agent.pathScope(),
+                        agent.prompt(), agent.maxTurns(), agent.timeoutSeconds())).toList());
     }
 
     private void append(DomainEventType type, String systemId, String caseId, String prdId, String workItemId,
                         String actorId, String idempotencyKey, Map<String, Object> payload) {
         events.append(new DomainEventService.AppendEvent(type, systemId, caseId, prdId, workItemId, actorId,
                 "control-plane", payload, prdId, null, idempotencyKey));
-    }
-
-    private Map<String, Object> readMap(String json) {
-        try {
-            return objectMapper.readValue(json, new TypeReference<>() {});
-        } catch (JsonProcessingException error) {
-            throw new IllegalArgumentException("配置不是合法 JSON", error);
-        }
     }
 
     private List<String> readList(String json) {

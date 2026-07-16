@@ -16,7 +16,9 @@ type PlanView = {
   targetFiles: string[];
   testPlan: string[];
   risks: string[];
+  assignments: { role: string }[];
 };
+type StageProgressItem = { role: string; status: 'pending' | 'running' | 'completed' | 'failed' };
 
 export function WorkItemDetailPage() {
   const { workItemId = '' } = useParams();
@@ -108,6 +110,7 @@ export function WorkItemDetailPage() {
           </div>
           <div className="panel">
             <h2>事件时间线</h2>
+            <StageProgress stages={buildStageProgress(events.data ?? [], workItem.lifecycleStatus)} />
             {events.data?.map((event) => (
               <TimelineEvent key={event.eventId || event.sequence} event={event} />
             ))}
@@ -139,6 +142,21 @@ export function WorkItemDetailPage() {
         onConfirm={() => runAction.reset()}
       />
     </section>
+  );
+}
+
+function StageProgress({ stages }: { stages: StageProgressItem[] }) {
+  if (stages.length === 0) return null;
+  const labels = { pending: '待执行', running: '执行中', completed: '完成', failed: '失败' };
+  return (
+    <ol className="stage-progress" aria-label="Agent Stage 进度">
+      {stages.map((stage, index) => (
+        <li className={`stage-progress-item ${stage.status}`} key={`${index}-${stage.role}`}>
+          <strong>{stage.role}</strong>
+          <span>{labels[stage.status]}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -288,6 +306,11 @@ function parsePlanPayload(payload?: string): PlanView | null {
       targetFiles: stringList(plan.target_files ?? plan.targetFiles),
       testPlan: stringList(plan.test_plan ?? plan.testPlan),
       risks: stringList(plan.risks),
+      assignments: Array.isArray(plan.assignments)
+        ? plan.assignments.flatMap((item) => item && typeof item === 'object' && typeof (item as Record<string, unknown>).role === 'string'
+          ? [{ role: String((item as Record<string, unknown>).role) }]
+          : [])
+        : [],
     };
   } catch {
     return null;
@@ -334,7 +357,9 @@ function parseAgentStagePayload(payload?: string) {
   try {
     const parsed = JSON.parse(payload) as Record<string, unknown>;
     const usage = parsed.tokenUsage ?? parsed.token_usage;
+    const stageIndex = parsed.stageIndex ?? parsed.stage_index;
     return {
+      stageIndex: typeof stageIndex === 'number' && Number.isInteger(stageIndex) ? stageIndex : null,
       role: String(parsed.role ?? ''),
       engine: String(parsed.engine ?? ''),
       summary: String(parsed.summary ?? ''),
@@ -344,6 +369,48 @@ function parseAgentStagePayload(payload?: string) {
   } catch {
     return null;
   }
+}
+
+function buildStageProgress(events: WorkItemEvent[], lifecycleStatus: string): StageProgressItem[] {
+  let planIndex = -1;
+  let assignments: { role: string }[] = [];
+  events.forEach((event, index) => {
+    if (event.eventType === 'ExecutionPlanDrafted') {
+      planIndex = index;
+      assignments = parsePlanPayload(event.payloadJson)?.assignments ?? [];
+    }
+  });
+  if (assignments.length === 0) return [];
+
+  const stages: StageProgressItem[] = assignments.map(({ role }) => ({ role, status: 'pending' }));
+  let failedIndex: number | null = null;
+  events.slice(planIndex + 1).forEach((event) => {
+    if (event.eventType === 'AgentStageCompleted') {
+      const completed = parseAgentStagePayload(event.payloadJson);
+      const index = completed?.stageIndex ?? stages.findIndex((stage) => stage.role === completed?.role && stage.status === 'pending');
+      if (index >= 0 && index < stages.length) stages[index].status = 'completed';
+    }
+    if (event.eventType === 'WorkerBlocked' && lifecycleStatus === 'worker_blocked') {
+      failedIndex = null;
+      try {
+        const payload = JSON.parse(event.payloadJson || '{}') as Record<string, unknown>;
+        const failed = payload.failed_stage ?? payload.failedStage;
+        if (failed && typeof failed === 'object') {
+          const index = (failed as Record<string, unknown>).index;
+          failedIndex = typeof index === 'number' && Number.isInteger(index) ? index : null;
+        }
+      } catch {
+        failedIndex = null;
+      }
+    }
+  });
+  if (failedIndex !== null && failedIndex >= 0 && failedIndex < stages.length) {
+    stages[failedIndex].status = 'failed';
+  } else if (lifecycleStatus === 'activated') {
+    const running = stages.find((stage) => stage.status === 'pending');
+    if (running) running.status = 'running';
+  }
+  return stages;
 }
 
 function formatTokenUsage(usage: Record<string, unknown>) {

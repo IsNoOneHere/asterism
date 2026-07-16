@@ -4,15 +4,26 @@
 
 Java 包、Python 模块、CLI 和容器均使用 Asterism 命名。PostgreSQL schema `control_plane_v5` 为避免迁移生产数据继续保留；Temporal workflow type `AgentTeamV5CaseWorkflow` 为兼容已有 history 继续保留，代码类名已改为 `AsterismCaseWorkflow`。
 
-## 三层配置模型
+## 两层配置模型
 
-- **Model Profile**：`id/provider/baseUrl/apiKey/model`，只描述如何访问模型，不知道调用者。公开 API 删除 `apiKey` 字段，只返回 `apiKeySet`。
-- **Engine**：`claude_sdk/deepagents/http/fake`，只描述执行框架，不持有 Key。
-- **Agent Role**：绑定 Engine 与 Model Profile，并配置 `pathScope/prompt/maxTurns/timeoutSeconds`。
+```mermaid
+flowchart LR
+    P["ModelProfile\nprovider/baseUrl/apiKey/model"] --> U["product\nPRD 对话"]
+    P --> L["planner\n执行规划"]
+    P --> D["developer\n默认执行"]
+    P --> C["custom Agent\nplanner assignments"]
+    D --> E["Engine\nclaude_sdk/deepagents/http/fake"]
+    C --> E
+```
 
-完整 Profile 只由 worker-token 保护的 internal API 返回，并且只在 activity 进程内解析。Temporal workflow/activity 入参、事件、普通日志和前端均不携带 Key。
+- **ModelProfile**：模型接入点，只描述 `name/provider/baseUrl/apiKey/model`；公开 API 只返回 `apiKeySet`。
+- **Agent**：唯一的“谁使用哪个模型”入口。内置 `product/planner/developer` 不可删除；自定义 Agent 供 Planner 按名称引用。
 
-`ModelProfile + modelRouting + AgentRole` 是唯一运行时结构。旧 `businessModels`、单模型字段和独立 Claude 字段由 Flyway 一次性迁移后删除；部署环境的 `V5_MODEL_*` 仅保留给没有系统角色的旧 workflow history 回放。
+`product` 和 `planner` 只配置 `modelProfileRef`；`developer` 与自定义 Agent 另有 `engine/maxTurns/timeoutSeconds/pathScope/prompt`。Profile 引用为空时回落部署默认模型。`planner_select` 是固定行为，不再存在 ModelRouting、默认 Role 或 ExecutionPolicy。
+
+完整 Profile 只由 worker-token 保护的 internal API 返回，并且只在 activity 进程内解析。Temporal workflow/activity 入参、事件、普通日志和前端均不携带 Key。旧 routing、AgentRole 和执行策略由 Flyway 一次性迁移后删除。
+
+新 Case 启动时把不含 API Key 的完整 `agents + modelProfiles` 固定为 `agent_config_snapshot`：`engine/maxTurns/timeoutSeconds/pathScope/prompt` 以及模型参数均以启动时快照为准，在途工作项不受后续配置修改影响。Activity 每次执行仍按快照中的 `modelProfileRef` 通过 internal API 实时读取 Key，因此换 Key 立即生效；无快照的旧 workflow 继续走原参数回放路径。
 
 ## 执行内核
 

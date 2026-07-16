@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { Bot, BrainCircuit, ClipboardList, Layers3, Map, Settings2, Users } from 'lucide-react';
 import { api, CurrentUser } from './api/client';
-import { ConfigurationPage } from './pages/ConfigurationPage';
+import { AgentConfigPage } from './pages/AgentConfigPage';
 import { LoginPage } from './pages/LoginPage';
 import { NewPrdPage } from './pages/NewPrdPage';
 import { PrdDraftsPage } from './pages/PrdDraftsPage';
@@ -107,7 +107,7 @@ function AuthenticatedShell({ user, visibleLinks, onLogout }: { user: CurrentUse
           <Route path="/new" element={<Navigate to="/work-items/new" replace />} />
           <Route path="/systems" element={<SystemsPage />} />
           <Route path="/models" element={<Navigate to="/agents" replace />} />
-          <Route path="/agents" element={<ConfigurationPage />} />
+          <Route path="/agents" element={<AgentConfigPage />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/users" element={isAdmin(user) ? <UsersPage /> : <Navigate to="/work-items" replace />} />

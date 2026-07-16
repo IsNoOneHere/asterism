@@ -33,9 +33,7 @@ public class ExecutionReadinessService {
         var live = workers.values().stream()
                 .filter(report -> report.receivedAt() != null && Duration.between(report.receivedAt(), now).compareTo(HEARTBEAT_TTL) <= 0)
                 .toList();
-        var config = readMap(profile.agentConfig());
-        var executionProvider = defaultRoleEngine(readMap(profile.modelProviderConfig()),
-                text(config, "executionProvider", "execution_provider"));
+        var executionProvider = developerEngine(readMap(profile.modelProviderConfig()));
         var targetReports = live.stream()
                 .flatMap(worker -> worker.targets().stream().map(target -> new WorkerTarget(worker, target)))
                 .filter(item -> profile.systemId().equals(item.target().systemId()))
@@ -115,8 +113,8 @@ public class ExecutionReadinessService {
                 .orElse("Claude Agent SDK，模型配置不可用");
     }
 
-    private String value(String value) {
-        return value == null ? "" : value;
+    private String value(Object value) {
+        return value == null ? "" : String.valueOf(value);
     }
 
     private String modelDetail(List<WorkerTarget> targets, String stage, boolean ready) {
@@ -144,21 +142,15 @@ public class ExecutionReadinessService {
         }
     }
 
-    private String text(Map<String, Object> config, String camel, String snake) {
-        var value = config.containsKey(camel) ? config.get(camel) : config.get(snake);
-        return value == null ? "" : String.valueOf(value);
-    }
-
-    private String defaultRoleEngine(Map<String, Object> config, String fallback) {
-        var defaultRoleId = String.valueOf(config.getOrDefault("defaultAgentRoleId", ""));
-        if (config.get("agentRoles") instanceof List<?> roles) {
-            for (var item : roles) {
-                if (item instanceof Map<?, ?> role && defaultRoleId.equals(String.valueOf(role.get("id")))) {
-                    return String.valueOf(role.get("engine"));
+    private String developerEngine(Map<String, Object> config) {
+        if (config.get("agents") instanceof List<?> agents) {
+            for (var item : agents) {
+                if (item instanceof Map<?, ?> agent && "developer".equals(String.valueOf(agent.get("name")))) {
+                    return value(agent.get("engine"));
                 }
             }
         }
-        return fallback;
+        return "http";
     }
 
     private record WorkerTarget(WorkerReadinessReport worker, TargetReadiness target) {

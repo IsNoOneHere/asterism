@@ -33,9 +33,9 @@ make doctor
 ## 配置模型
 
 1. 在“系统配置”创建系统并设置仓库、允许路径和测试命令。
-2. 在“Agent / 模型配置”的模型 Tab 创建 Model Profile；API Key 只写入，页面只显示 `apiKeySet`。
-3. 在同一页面的 Agent Tab 创建 Agent Role，选择 `claude_sdk`、`deepagents`、`http` 或 `fake`，绑定 Profile 和 path scope。
-4. 设置默认角色。Planner 可生成有序 assignments，多角色阶段以 `AgentStageCompleted` 展示。
+2. 在“Agent / 模型配置”的模型列表创建 Model Profile；API Key 只写入，页面只显示 `apiKeySet`。
+3. 为内置 `product/planner/developer` 选择 Profile，并按需创建自定义 Agent。
+4. 自定义 Agent 可选择 `claude_sdk`、`deepagents`、`http` 或 `fake`，Planner 按名称生成有序 assignments。
 
 旧 `businessModels` 和单模型 JSON 由 Flyway 一次性迁入 Model Profile，运行期不再维护第二套模型池。
 
@@ -57,7 +57,7 @@ make doctor
 
 ## 文档
 
-- [架构与三层配置](docs/architecture.md)
+- [架构与两层配置](docs/architecture.md)
 - [事件契约](docs/event-contract.md)
 - [部署与故障处理](docs/operations.md)
 - [路线图](docs/roadmap.md)

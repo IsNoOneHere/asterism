@@ -65,10 +65,13 @@ class DeepAgentsExecutionProvider(ExecutionProvider):
                 f"角色约束: {request.role_prompt or '无'}"
             ),
         )
+        handoff = json.dumps([item.model_dump() for item in request.handoff], ensure_ascii=False)
+        if not request.handoff:
+            handoff = str((request.model_extra or {}).get("handoff_summary") or "无")
         prompt = (
             f"目标: {request.goal}\n验收标准: {request.acceptance_criteria}\n"
             f"计划: {request.plan.steps}\n本阶段步骤引用: {request.step_refs or ['全部']}\n"
-            f"前序交接: {request.handoff_summary or '无'}"
+            f"前序结构化交接: {handoff}"
         )
         return await agent.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]},

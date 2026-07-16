@@ -233,6 +233,9 @@ class ClaudeSdkExecutionProvider(ExecutionProvider):
     def _prompt(self, request: ExecutionRequest) -> str:
         criteria = "\n".join(f"- {item}" for item in request.acceptance_criteria) or "- 无"
         steps = "\n".join(f"- {item}" for item in request.plan.steps) or "- 无"
+        handoff = json.dumps([item.model_dump() for item in request.handoff], ensure_ascii=False)
+        if not request.handoff:
+            handoff = str((request.model_extra or {}).get("handoff_summary") or "无")
         return (
             "请在当前隔离工作区自主读取并编辑文件，完成目标。不要提交 git commit；完成后给出简短摘要。\n\n"
             f"目标:\n{request.goal}\n\n"
@@ -242,7 +245,7 @@ class ClaudeSdkExecutionProvider(ExecutionProvider):
             f"允许路径: {self._paths(request.allowed_paths)}\n"
             f"禁止路径: {self._paths(request.forbidden_paths)}\n"
             f"角色补充约束: {request.role_prompt or '无'}\n"
-            f"前序交接摘要: {request.handoff_summary or '无'}\n"
+            f"前序结构化交接: {handoff}\n"
         )
 
     def _paths(self, paths: list[str]) -> str:

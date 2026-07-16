@@ -86,7 +86,7 @@ class CaseState:
         return "ValidationFailed"
 
     def rework(self) -> str | None:
-        # 重做回到 activated，让下一次 start_modification 重新执行。
+        # 统一先回到 activated；workflow 可直接续跑失败 stage，其它错误等待下一次 start_modification。
         if not self._move(LifecycleStatus.activated):
             return None
         self.execution_allowed = True
