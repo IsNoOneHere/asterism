@@ -4,8 +4,10 @@ from temporalio.common import RetryPolicy
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, ApplicationError
 
-from asterism_worker.contracts import AgentAssignment, CaseInput, ContextSnapshot, ExecutionPlan, ExecutionResult, PatchApplyResult, ProjectionEvent, ValidationResult
+from asterism_worker.contracts import AgentAssignment, CaseInput, ContextSnapshot, ExecutionPlan, ExecutionResult, HandoffContext, PatchApplyResult, ProjectionEvent, ValidationResult
 from asterism_worker.workflows.state_machine import CaseState, TERMINAL_STATUSES
+
+HANDOFF_DIFF_LIMIT_BYTES = 32 * 1024
 
 
 @workflow.defn(name="AgentTeamV5CaseWorkflow")
@@ -14,10 +16,17 @@ class AsterismCaseWorkflow:
         self.state = CaseState()
         self.case_input: CaseInput | None = None
         self.pending_actions: list[tuple[str, str]] = []
+        self.execution_plan: ExecutionPlan | None = None
+        self.context_snapshot: ContextSnapshot | None = None
+        self.completed_stage_results: list[ExecutionResult] = []
+        self.failed_stage_index: int | None = None
+        self.stage_resume_enabled = False
 
     @workflow.run
     async def run(self, case_input: CaseInput) -> str:
         self.case_input = case_input
+        # Patch marker 让部署前已启动的 history 保持原 rework 行为。
+        self.stage_resume_enabled = workflow.patched("multi-agent-stage-resume-v1")
         while self.state.status not in TERMINAL_STATUSES:
             await workflow.wait_condition(lambda: bool(self.pending_actions) or self.state.status in TERMINAL_STATUSES)
             while self.pending_actions:
@@ -82,13 +91,15 @@ class AsterismCaseWorkflow:
         if action == "release_approved":
             await self._release(signal_id)
             return
+        if action == "rework":
+            await self._rework(signal_id)
+            return
         if action in {"patch_apply_rejected", "cancel_case", "owner_rejected"}:
             await self._revert_if_needed(signal_id)
         events = {
             "patch_apply_rejected": self.state.patch_apply_rejected,
             "validation_passed": self.state.validation_passed,
             "validation_rejected": self.state.validation_rejected,
-            "rework": self.state.rework,
             "cancel_case": self.state.cancel_case,
             "owner_rejected": self.state.owner_rejected,
         }
@@ -160,9 +171,19 @@ class AsterismCaseWorkflow:
         if unknown_role:
             await self._block_worker(signal_id, "unknown_role", RuntimeError(unknown_role))
             return
+        self.execution_plan = plan
+        self.context_snapshot = snapshot
+        self.completed_stage_results = []
+        self.failed_stage_index = None
         result = await self._run_execution_plan(signal_id, plan, snapshot)
         if result is None:
             return
+        await self._finish_modification(signal_id, result, snapshot)
+
+    async def _finish_modification(self, signal_id: str, result: ExecutionResult,
+                                   snapshot: ContextSnapshot) -> None:
+        self.failed_stage_index = None
+        case_input = self._case_input()
         await self._emit(self.state.modification_finished(result), signal_id, {
             "summary": result.summary,
             "diffPatch": result.diff_patch,
@@ -174,42 +195,57 @@ class AsterismCaseWorkflow:
         })
 
     async def _run_execution_plan(self, signal_id: str, plan: ExecutionPlan,
-                                  snapshot: ContextSnapshot) -> ExecutionResult | None:
+                                  snapshot: ContextSnapshot, start_index: int = 0) -> ExecutionResult | None:
         assignments = plan.assignments or [AgentAssignment(role="")]
-        results: list[ExecutionResult] = []
+        results = list(self.completed_stage_results) if start_index else []
         used_paths: set[str] = set()
-        handoff: list[str] = []
-        for index, assignment in enumerate(assignments):
+        handoff: list[HandoffContext] = []
+        for index, result in enumerate(results):
+            paths = set(result.changed_paths or self._diff_paths(result.diff_patch))
+            used_paths.update(paths)
+            handoff.append(self._handoff_context(assignments[index], result, paths))
+        for index in range(start_index, len(assignments)):
+            assignment = assignments[index]
             try:
                 payload = await workflow.execute_activity(
                     "run_execution",
-                    self._execution_request(plan, snapshot, assignment, index, "\n".join(handoff)),
+                    self._execution_request(plan, snapshot, assignment, index, handoff),
                     # role 内部 timeout 在 activity 解析，外层留足最大执行窗口。
                     start_to_close_timeout=timedelta(seconds=self._execution_timeout(assignment)),
                     heartbeat_timeout=timedelta(minutes=2),
                     retry_policy=RetryPolicy(maximum_attempts=2),
                 )
             except (ActivityError, ApplicationError) as error:
-                await self._block_worker(signal_id, "execution_failed", error)
+                await self._block_execution_stage(signal_id, "execution_failed", error, index, assignments, results)
                 return None
             result = ExecutionResult.model_validate(payload)
             if result.blocked_reason:
-                await self._block_worker(signal_id, result.blocked_reason,
-                                         RuntimeError(result.blocked_detail or result.blocked_reason))
+                await self._block_execution_stage(
+                    signal_id, result.blocked_reason,
+                    RuntimeError(result.blocked_detail or result.blocked_reason), index, assignments, results,
+                )
                 return None
             if not result.passes_diff_gate:
-                await self._block_worker(signal_id, "execution_failed", RuntimeError("Agent stage did not return valid diff"))
+                await self._block_execution_stage(
+                    signal_id, "execution_failed", RuntimeError("Agent stage did not return valid diff"),
+                    index, assignments, results,
+                )
                 return None
             paths = set(result.changed_paths or self._diff_paths(result.diff_patch))
             conflict = sorted(used_paths & paths)
             if conflict:
-                await self._block_worker(signal_id, "handoff_conflict", RuntimeError(", ".join(conflict)))
+                await self._block_execution_stage(
+                    signal_id, "handoff_conflict", RuntimeError(", ".join(conflict)), index, assignments, results,
+                )
                 return None
             used_paths.update(paths)
             results.append(result)
-            handoff.append(f"{assignment.role or 'default'}: {result.summary}; files={','.join(sorted(paths))}")
+            handoff.append(self._handoff_context(assignment, result, paths))
+            if self._resumable(plan):
+                self.completed_stage_results = list(results)
             if plan.assignments:
                 await self._emit("AgentStageCompleted", signal_id, {
+                    "stageIndex": index,
                     "role": assignment.role,
                     "engine": result.engine or result.execution_provider,
                     "summary": result.summary,
@@ -228,7 +264,7 @@ class AsterismCaseWorkflow:
         )
 
     def _execution_request(self, plan: ExecutionPlan, snapshot: ContextSnapshot,
-                           assignment: AgentAssignment, index: int, handoff_summary: str) -> dict:
+                           assignment: AgentAssignment, index: int, handoff: list[HandoffContext]) -> dict:
         case_input = self._case_input()
         request = {
             "case_id": case_input.case_id,
@@ -245,7 +281,7 @@ class AsterismCaseWorkflow:
             "test_commands": case_input.test_commands,
             "role_id": assignment.role,
             "role_scope": assignment.scope_paths,
-            "handoff_summary": handoff_summary,
+            "handoff": [item.model_dump() for item in handoff],
             "assignment_index": index,
             "step_refs": assignment.step_refs,
         }
@@ -257,6 +293,64 @@ class AsterismCaseWorkflow:
             request["execution_provider"] = legacy.get("execution_provider", "")
             request["claude_max_turns"] = legacy.get("claude_max_turns")
         return request
+
+    async def _rework(self, signal_id: str) -> None:
+        event = self.state.rework()
+        await self._emit(event, signal_id, {})
+        if event is None or not self._can_resume():
+            return
+        workflow.logger.info("从失败 Agent stage 续跑", extra={"stage_index": self.failed_stage_index})
+        result = await self._run_execution_plan(
+            signal_id, self.execution_plan, self.context_snapshot, self.failed_stage_index,
+        )
+        if result is not None:
+            await self._finish_modification(signal_id, result, self.context_snapshot)
+
+    async def _block_execution_stage(self, signal_id: str, reason: str, error: BaseException,
+                                     index: int, assignments: list[AgentAssignment],
+                                     results: list[ExecutionResult]) -> None:
+        if not self._resumable(self.execution_plan):
+            await self._block_worker(signal_id, reason, error)
+            return
+        self.completed_stage_results = list(results)
+        self.failed_stage_index = index
+        completed = [
+            {
+                "role": assignments[stage_index].role,
+                "summary": result.summary,
+                "changed_paths": sorted(result.changed_paths or self._diff_paths(result.diff_patch)),
+            }
+            for stage_index, result in enumerate(results)
+        ]
+        await self._block_worker(signal_id, reason, error, {
+            "completed_stages": completed,
+            "failed_stage": {"index": index, "role": assignments[index].role},
+        })
+
+    def _can_resume(self) -> bool:
+        return (
+            self.failed_stage_index is not None
+            and self.execution_plan is not None
+            and self.context_snapshot is not None
+            and self._resumable(self.execution_plan)
+        )
+
+    def _resumable(self, plan: ExecutionPlan | None) -> bool:
+        return bool(
+            self.stage_resume_enabled
+            and self._case_input().agent_config_snapshot is not None
+            and plan is not None
+            and len(plan.assignments) > 1
+        )
+
+    def _handoff_context(self, assignment: AgentAssignment, result: ExecutionResult,
+                         paths: set[str]) -> HandoffContext:
+        return HandoffContext(
+            role=assignment.role or "developer",
+            summary=result.summary,
+            diff_patch=_handoff_diff(result.diff_patch, sorted(paths)),
+            interface_notes=result.interface_notes or "",
+        )
 
     def _available_agents(self) -> list[dict]:
         snapshot = self._case_input().agent_config_snapshot
@@ -404,8 +498,13 @@ class AsterismCaseWorkflow:
             ),
         )
 
-    async def _block_worker(self, signal_id: str, reason: str, error: BaseException) -> None:
-        await self._emit(self.state.worker_blocked_on(reason), signal_id, {"reason": reason, "detail": self._error_detail(error)})
+    async def _block_worker(self, signal_id: str, reason: str, error: BaseException,
+                            extra: dict | None = None) -> None:
+        await self._emit(self.state.worker_blocked_on(reason), signal_id, {
+            "reason": reason,
+            "detail": self._error_detail(error),
+            **(extra or {}),
+        })
 
     def _error_detail(self, error: BaseException) -> str:
         messages: list[str] = []
@@ -439,3 +538,13 @@ class AsterismCaseWorkflow:
                 if isinstance(value, (int, float)):
                     merged[key] = merged.get(key, 0) + value
         return merged
+
+
+def _handoff_diff(diff_patch: str, changed_paths: list[str]) -> str:
+    if len(diff_patch.encode("utf-8")) <= HANDOFF_DIFF_LIMIT_BYTES:
+        return diff_patch
+    # 大 diff 只保留文件和 hunk 定位，防止 Temporal payload 无界增长。
+    lines = [f"changed_paths: {', '.join(changed_paths)}"]
+    lines.extend(line for line in diff_patch.splitlines()
+                 if line.startswith("diff --git ") or line.startswith("@@ "))
+    return ("\n".join(lines) + "\n").encode("utf-8")[:HANDOFF_DIFF_LIMIT_BYTES].decode("utf-8", errors="ignore")

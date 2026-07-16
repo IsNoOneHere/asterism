@@ -112,7 +112,31 @@ def test_execute_returns_git_diff():
 
     assert response.status_code == 200
     assert response.json()["diff_patch"] == diff
-    assert llm.json_modes == [False]
+    assert llm.json_modes == [True]
+
+
+def test_execute_returns_interface_notes_and_receives_structured_handoff():
+    diff = "diff --git a/api/app.py b/api/app.py\n"
+    llm = FakeLlmClient([json.dumps({
+        "diff_patch": diff,
+        "interface_notes": "新增 POST /api/orders。请求参数保持兼容。",
+    }, ensure_ascii=False)])
+    client = TestClient(create_app(llm))
+
+    response = client.post("/execute", json={
+        "case_id": "case-1", "work_item_id": "wi-1", "system_id": "sys-1", "repo_path": "/tmp/repo",
+        "goal": "g", "plan": {"steps": ["改后端"]}, "role_id": "backend",
+        "handoff": [{
+            "role": "frontend", "summary": "前端完成",
+            "diff_patch": "diff --git a/web/app.ts b/web/app.ts\n",
+            "interface_notes": "前端开始调用 POST /api/orders。",
+        }],
+    })
+
+    assert response.status_code == 200
+    assert response.json()["interface_notes"] == "新增 POST /api/orders。请求参数保持兼容。"
+    assert "前端开始调用 POST /api/orders" in llm.prompts[0]
+    assert "2-3 concise sentences" in llm.prompts[0]
 
 
 def test_execute_prompt_includes_file_contents_and_previous_attempt():

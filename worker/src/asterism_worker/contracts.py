@@ -73,6 +73,13 @@ class ProjectionEvent(BaseModel):
     idempotencyKey: str
 
 
+class HandoffContext(BaseModel):
+    role: str
+    summary: str
+    diff_patch: str
+    interface_notes: str = ""
+
+
 class ExecutionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -97,7 +104,7 @@ class ExecutionRequest(BaseModel):
     model_profile_id: str = ""
     role_scope: list[str] = Field(default_factory=list)
     role_prompt: str = ""
-    handoff_summary: str = ""
+    handoff: list[HandoffContext] = Field(default_factory=list)
     assignment_index: int = 0
     step_refs: list[str] = Field(default_factory=list)
 
@@ -136,6 +143,7 @@ class ValidationResult(BaseModel):
 class ExecutionResult(BaseModel):
     summary: str
     diff_patch: str
+    interface_notes: str | None = None
     execution_provider: str = ""
     turns: int | None = None
     token_usage: dict[str, Any] = Field(default_factory=dict)

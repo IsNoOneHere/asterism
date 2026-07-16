@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PrdSpec(BaseModel):
@@ -66,7 +66,16 @@ class PlanRequest(BaseModel):
     agent_config_snapshot: AgentConfigSnapshot | None = None
 
 
+class HandoffContext(BaseModel):
+    role: str
+    summary: str
+    diff_patch: str
+    interface_notes: str = ""
+
+
 class ExecutionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     case_id: str
     work_item_id: str
     system_id: str
@@ -87,15 +96,16 @@ class ExecutionRequest(BaseModel):
     model_profile_id: str = ""
     role_scope: list[str] = Field(default_factory=list)
     role_prompt: str = ""
-    handoff_summary: str = ""
+    handoff: list[HandoffContext] = Field(default_factory=list)
     assignment_index: int = 0
     step_refs: list[str] = Field(default_factory=list)
     agent_config_snapshot: AgentConfigSnapshot | None = None
 
 
 class ExecutionResult(BaseModel):
-    summary: str
+    summary: str = "llm diff generated"
     diff_patch: str
+    interface_notes: str | None = None
 
 
 class DraftRequest(BaseModel):

@@ -35,10 +35,15 @@ def create_app(
             settings, fetch_model_config, request.system_id, request.role_id or "developer",
             request.model_profile_id, request.agent_config_snapshot,
         )
-        diff_patch = llm.complete(execute_prompt(request), model_config)
-        if "diff --git" not in diff_patch:
+        raw = llm.complete(execute_prompt(request), model_config, json_mode=True)
+        try:
+            result = ExecutionResult.model_validate(json.loads(raw))
+        except (json.JSONDecodeError, ValidationError):
+            # 兼容仍返回纯 diff 的模型，避免切换响应格式时中断执行。
+            result = ExecutionResult(diff_patch=raw)
+        if "diff --git" not in result.diff_patch:
             raise HTTPException(status_code=422, detail="execution did not return a unified git diff")
-        return ExecutionResult(summary="llm diff generated", diff_patch=diff_patch)
+        return result
 
     @app.post("/prd-draft")
     def prd_draft(request: DraftRequest) -> DraftResult:
@@ -173,7 +178,7 @@ def plan_prompt(request: PlanRequest) -> str:
 
 
 def execute_prompt(request: ExecutionRequest) -> str:
-    # 只要求 unified diff；worker 仍会做 diff 门禁和真实 patch apply。
+    # worker 仍会做 diff 门禁和真实 patch apply，接口说明只用于后续 Agent 交接。
     previous = ""
     if request.previous_attempt:
         previous = (
@@ -181,8 +186,14 @@ def execute_prompt(request: ExecutionRequest) -> str:
             f"{request.previous_attempt.get('apply_error', '')}\n"
             f"Previous diff:\n{request.previous_attempt.get('diff', '')}\n"
         )
+    handoff = json.dumps([item.model_dump() for item in request.handoff], ensure_ascii=False)
+    if not request.handoff:
+        handoff = str((request.model_extra or {}).get("handoff_summary") or "none")
     return (
-        "Return only a unified git diff that contains diff --git headers.\n"
+        "Return strict JSON with keys diff_patch and interface_notes.\n"
+        "diff_patch must be a unified git diff that contains diff --git headers.\n"
+        "interface_notes must use 2-3 concise sentences to explain changed public interfaces, signatures, "
+        "or behavior that later developers need to know; use an empty string when none changed.\n"
         "Diff must be based on the provided file contents; context lines must match exactly.\n"
         f"Goal: {request.goal}\n"
         f"Acceptance criteria: {request.acceptance_criteria}\n"
@@ -194,7 +205,7 @@ def execute_prompt(request: ExecutionRequest) -> str:
         f"Role scope: {request.role_scope}\n"
         f"Role instructions: {request.role_prompt or 'none'}\n"
         f"Stage step refs: {request.step_refs or ['all']}\n"
-        f"Previous role handoff: {request.handoff_summary or 'none'}\n"
+        f"Previous role handoff: {handoff}\n"
         f"{previous}"
     )
 

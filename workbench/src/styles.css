@@ -1245,6 +1245,28 @@ label {
   color: #627386;
 }
 
+.stage-progress {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.stage-progress-item {
+  background: #f4f6f8;
+  border-top: 4px solid #9aa7b4;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+}
+
+.stage-progress-item.completed { border-color: #26856e; }
+.stage-progress-item.running { border-color: #3975b7; }
+.stage-progress-item.failed { border-color: #b84b3f; }
+.stage-progress-item span { color: #627386; }
+
 .plan-view {
   display: grid;
   gap: 10px;

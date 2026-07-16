@@ -83,6 +83,7 @@ let conversationMessages: unknown[] = [];
 let workItems: unknown[] = [];
 let agentConfiguration: any;
 let prdPostCount = 0;
+let responseOverrides: Record<string, unknown> = {};
 
 export function jsonResponse(data: unknown, ok = true) {
   return Promise.resolve({
@@ -109,6 +110,7 @@ export function resetAppTestState() {
     engines: ['claude_sdk', 'deepagents', 'http', 'fake'],
   };
   prdPostCount = 0;
+  responseOverrides = {};
   // 测试只关心前端请求路径，不启动真实控制面。
   vi.stubGlobal('fetch', vi.fn((path: string, init?: RequestInit) => {
     if (path.startsWith('/api/v5/work-items?')) return jsonResponse(workItems);
@@ -189,12 +191,16 @@ export function resetAppTestState() {
     if (path === '/api/v5/conversations/conv-prd-1') {
       return jsonResponse({ messages: conversationMessages, pendingAssistant: false });
     }
-    return jsonResponse(responses[path]);
+    return jsonResponse(Object.prototype.hasOwnProperty.call(responseOverrides, path) ? responseOverrides[path] : responses[path]);
   }));
 }
 
 export function setWorkItems(value: unknown[]) {
   workItems = value;
+}
+
+export function setApiResponse(path: string, value: unknown) {
+  responseOverrides[path] = value;
 }
 
 export function renderApp(path: string) {

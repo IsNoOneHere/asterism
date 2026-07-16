@@ -8,7 +8,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from asterism_worker.contracts import CaseInput, ExecutionPlan, ExecutionResult, PatchApplyResult, PrdSpec
-from asterism_worker.workflows.case_lifecycle import AsterismCaseWorkflow
+from asterism_worker.workflows.case_lifecycle import HANDOFF_DIFF_LIMIT_BYTES, AsterismCaseWorkflow, _handoff_diff
 from asterism_worker.activities.execution import validate_patch_paths
 
 
@@ -256,11 +256,58 @@ def test_workflow_handoff_uses_role_step_refs_and_unique_stage_keys():
     stages = [event for event in events if event["eventType"] == "AgentStageCompleted"]
     assert result == "cancelled"
     assert [request["step_refs"] for request in requests] == [["step-web"], ["step-api"]]
-    assert requests[1]["handoff_summary"].startswith("frontend:")
+    assert requests[1]["handoff"] == [{
+        "role": "frontend",
+        "summary": "frontend 完成",
+        "diff_patch": "diff --git a/web/app.ts b/web/app.ts\n--- a/web/app.ts\n+++ b/web/app.ts\n"
+                      "@@ -1 +1 @@\n-old-web\n+new-web\n",
+        "interface_notes": "frontend 对外行为已更新",
+    }]
     assert [event["payload"]["engine"] for event in stages] == ["claude_sdk", "deepagents"]
+    assert [event["payload"]["stageIndex"] for event in stages] == [0, 1]
     assert len({event["idempotencyKey"] for event in stages}) == 2
     assert stages[0]["causationId"].endswith(":stage:0:frontend")
     assert stages[1]["causationId"].endswith(":stage:1:backend")
+
+
+def test_handoff_diff_keeps_32kb_and_condenses_one_byte_over_limit():
+    header = "diff --git a/src/app.py b/src/app.py\n@@ -1 +1 @@\n"
+    exact = header + "x" * (HANDOFF_DIFF_LIMIT_BYTES - len(header.encode()))
+
+    assert _handoff_diff(exact, ["src/app.py"]) == exact
+    condensed = _handoff_diff(exact + "x", ["src/app.py"])
+    assert condensed == "changed_paths: src/app.py\ndiff --git a/src/app.py b/src/app.py\n@@ -1 +1 @@\n"
+    assert len(condensed.encode()) <= HANDOFF_DIFF_LIMIT_BYTES
+
+
+def test_stage_failure_rework_resumes_failed_stage_without_replanning():
+    requests: list[dict] = []
+    counts: dict[str, int] = {}
+    assignments = [
+        {"role": "frontend", "scope_paths": ["web"], "step_refs": ["step-web"]},
+        {"role": "backend", "scope_paths": ["api"], "step_refs": ["step-api"]},
+    ]
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("rework", "rework-wi-1"),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], assignments=assignments, observed_requests=requests, agent_config_snapshot=_agent_snapshot(),
+       fail_role="backend", fail_role_attempts=2, activity_counts=counts))
+
+    blocked = next(event for event in events if event["eventType"] == "WorkerBlocked")
+    assert result == "cancelled"
+    assert blocked["payload"]["completed_stages"] == [{
+        "role": "frontend", "summary": "frontend 完成", "changed_paths": ["web/app.ts"],
+    }]
+    assert blocked["payload"]["failed_stage"] == {"index": 1, "role": "backend"}
+    assert [request["role_id"] for request in requests].count("frontend") == 1
+    assert [request["role_id"] for request in requests].count("backend") == 3
+    assert counts["fetch_context"] == 1
+    assert counts["plan_execution"] == 1
+    assert [event["eventType"] for event in events].count("ExecutionPlanDrafted") == 1
+    assert "ReworkStarted" in [event["eventType"] for event in events]
+    assert "ModificationCompleted" in [event["eventType"] for event in events]
 
 
 def test_workflow_handoff_blocks_same_file_conflict():
@@ -367,14 +414,20 @@ async def _run_workflow(
     repo_path: str = "/tmp/repo",
     verify_combined_diff: bool = False,
     agent_config_snapshot: dict | None = None,
+    fail_role: str = "",
+    fail_role_attempts: int = 0,
+    activity_counts: dict[str, int] | None = None,
 ) -> tuple[list[dict], str]:
     events: list[dict] = []
     execution_requests: list[dict] = []
     fetch_attempts = 0
+    remaining_role_failures = fail_role_attempts
 
     @activity.defn(name="fetch_context")
     async def fake_fetch_context(request: dict) -> dict:
         nonlocal fetch_attempts
+        if activity_counts is not None:
+            activity_counts["fetch_context"] = activity_counts.get("fetch_context", 0) + 1
         assert request["work_item_id"] == "wi-1"
         fetch_attempts += 1
         if failure_mode == "fetch_context" or fetch_attempts <= fetch_failures:
@@ -387,6 +440,8 @@ async def _run_workflow(
 
     @activity.defn(name="plan_execution")
     async def fake_plan_execution(request: dict) -> dict:
+        if activity_counts is not None:
+            activity_counts["plan_execution"] = activity_counts.get("plan_execution", 0) + 1
         assert request["system_id"] == "system-1"
         assert request["prd"]["goal"] == "把登录页加错误提示"
         assert request["context_manifest_id"] == "manifest-1"
@@ -403,6 +458,7 @@ async def _run_workflow(
 
     @activity.defn(name="run_execution")
     async def fake_run_execution(request: dict) -> dict:
+        nonlocal remaining_role_failures
         # 测试只关心 workflow 编排，执行结果用稳定 diff 固定。
         if failure_mode == "run_execution":
             raise RuntimeError("executor down")
@@ -413,6 +469,9 @@ async def _run_workflow(
         execution_requests.append(request)
         if observed_requests is not None:
             observed_requests.append(request)
+        if request["role_id"] == fail_role and remaining_role_failures > 0:
+            remaining_role_failures -= 1
+            raise RuntimeError(f"{fail_role} executor down")
         if handoff_mode == "scope":
             return ExecutionResult(summary="越界", diff_patch="diff --git a/api/app.py b/api/app.py\n",
                                    execution_provider="claude_sdk", engine="claude_sdk",
@@ -431,6 +490,7 @@ async def _run_workflow(
                 engine=engine,
                 role_id=request["role_id"],
                 changed_paths=[path],
+                interface_notes=f"{request['role_id']} 对外行为已更新",
                 token_usage={"input_tokens": 10},
             ).model_dump()
         return ExecutionResult(

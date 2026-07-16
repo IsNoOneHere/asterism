@@ -1,6 +1,6 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { jsonResponse, renderApp, renderAppWithRouter, resetAppTestState, setWorkItems } from './appTestHarness';
+import { jsonResponse, renderApp, renderAppWithRouter, resetAppTestState, setApiResponse, setWorkItems } from './appTestHarness';
 
 beforeEach(resetAppTestState);
 
@@ -145,6 +145,37 @@ test('work item detail shows agent stage handoff metadata', async () => {
   expect(await screen.findByText('frontend')).toBeInTheDocument();
   expect(await screen.findByText('前端修改完成')).toBeInTheDocument();
   expect((await screen.findAllByText('src/login.tsx')).length).toBeGreaterThan(0);
+});
+
+test('work item detail shows completed and failed agent stages', async () => {
+  setApiResponse('/api/v5/work-items/wi-1', {
+    workItemId: 'wi-1', systemId: 'alpha-system', title: '跨端修改', lifecycleStatus: 'worker_blocked',
+    currentStage: '执行被阻塞', canControl: true, availableActions: ['rework'],
+  });
+  setApiResponse('/api/v5/work-items/wi-1/events', [
+    {
+      sequence: 1, eventType: 'ExecutionPlanDrafted', payloadJson: JSON.stringify({
+        plan: { steps: ['前端', '后端'], assignments: [{ role: 'frontend' }, { role: 'backend' }] },
+      }),
+    },
+    {
+      sequence: 2, eventType: 'AgentStageCompleted',
+      payloadJson: JSON.stringify({ stageIndex: 0, role: 'frontend', summary: '前端完成' }),
+    },
+    {
+      sequence: 3, eventType: 'WorkerBlocked',
+      payloadJson: JSON.stringify({ reason: 'execution_failed', failed_stage: { index: 1, role: 'backend' } }),
+    },
+  ]);
+
+  renderApp('/work-items/wi-1');
+
+  const progress = await screen.findByRole('list', { name: 'Agent Stage 进度' });
+  const stages = within(progress).getAllByRole('listitem');
+  expect(stages[0]).toHaveTextContent('frontend');
+  expect(stages[0]).toHaveTextContent('完成');
+  expect(stages[1]).toHaveTextContent('backend');
+  expect(stages[1]).toHaveTextContent('失败');
 });
 
 test('memory approve moves candidate out of pending tab', async () => {
