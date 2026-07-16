@@ -1,7 +1,8 @@
 FROM node:20-alpine AS build
 WORKDIR /src
 COPY package*.json ./
-RUN npm ci
+# 构建阶段必须安装 TypeScript/Vite 等开发依赖，避免宿主 npm 配置污染镜像。
+RUN npm ci --include=dev
 COPY . .
 RUN npm run build
 

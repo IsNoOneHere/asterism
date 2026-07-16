@@ -24,7 +24,7 @@ dev:
 
 prod-up:
 	case "$(V5_CONTAINER_RUNTIME)" in \
-	  apple) sh ./scripts/apple-container.sh build && sh ./scripts/apple-container.sh up ;; \
+	  apple) sh ./scripts/apple-container.sh build && sh ./scripts/apple-container.sh replace-apps ;; \
 	  docker) docker compose --profile prod up -d --build ;; \
 	  *) echo "不支持的 V5_CONTAINER_RUNTIME=$(V5_CONTAINER_RUNTIME)" >&2; exit 2 ;; \
 	esac

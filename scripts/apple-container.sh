@@ -311,6 +311,17 @@ down_services() {
   "$CONTAINER_BIN" network inspect "$NETWORK" >/dev/null 2>&1 && "$CONTAINER_BIN" network delete "$NETWORK" || true
 }
 
+replace_app_services() {
+  # 保留 PostgreSQL volume 与 Temporal history，只替换无状态应用容器。
+  for name in control-plane-compat workbench worker control-plane agent-service; do
+    if exists "$name"; then
+      running "$name" && "$CONTAINER_BIN" stop "$name"
+      "$CONTAINER_BIN" delete "$name"
+    fi
+  done
+  up_services
+}
+
 status_services() {
   for name in $SERVICES; do
     if running "$name"; then
@@ -347,7 +358,7 @@ logs_services() {
 }
 
 usage() {
-  echo "用法: $0 {build|up|down|restart|status|logs [service] [--follow]|doctor}"
+  echo "用法: $0 {build|up|replace-apps|down|restart|status|logs [service] [--follow]|doctor}"
 }
 
 require_cli
@@ -355,6 +366,7 @@ command="${1:-}"
 case "$command" in
   build) build_images ;;
   up) up_services ;;
+  replace-apps) replace_app_services ;;
   down) down_services ;;
   restart) down_services; up_services ;;
   status) status_services ;;

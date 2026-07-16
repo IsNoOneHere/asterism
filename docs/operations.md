@@ -11,6 +11,7 @@ make doctor
 `.env` 至少设置随机 `V5_WORKER_CALLBACK_TOKEN` 和 `V5_DB_PASSWORD`。可设置 `V5_ADMIN_INITIAL_PASSWORD`；留空时 control-plane 只在首次创建 admin 时打印随机密码。生产不创建演示用户、演示系统或固定默认密码。
 
 入口：Workbench `http://127.0.0.1:8080`，control-plane `:8085`，agent-service `:8090`，Temporal UI `:8233`。
+Docker Compose 的生产 profile 仅将 Workbench 绑定到所有网卡；数据库、Temporal、control-plane 与 agent-service 只绑定 `127.0.0.1`。Temporal 使用固定镜像摘要和独立 volume 保存 history，服务统一设置为 `restart: unless-stopped`。
 
 ## 常用命令
 
@@ -52,6 +53,7 @@ make test-web
 | GitLab A→B | worker 容器出站路由、`V5_NO_PROXY`、GitLab 地址和防火墙 |
 
 macOS Apple Container 可设置 `V5_CONTAINER_RUNTIME=apple`，再运行同一组 Make 目标。出站代理使用 `.env.example` 中的显式变量，示例不包含真实 IP 或内网端点。
+Apple Container 的 `make prod-up` 只替换四个无状态应用容器，保留 PostgreSQL volume 与 Temporal 容器/history；固定服务名在替换前先删除旧实例，因此同一服务不会并存多份。
 
 ## DeepSeek 与 Claude SDK
 

@@ -2,33 +2,48 @@ services:
   postgres:
     profiles: ["docker-db", "prod"]
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: asterism
       POSTGRES_USER: asterism
       POSTGRES_PASSWORD: ${V5_DB_PASSWORD:?必须设置 V5_DB_PASSWORD}
     ports:
-      - "55432:5432"
+      - "127.0.0.1:55432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   temporal:
     profiles: ["prod"]
-    image: temporalio/temporal:latest
+    image: temporalio/temporal@sha256:906f9765cde508333ef191aab908bc724657b5f736cb5ead13921d9a45b33622
+    restart: unless-stopped
     command:
       - server
       - start-dev
       - --ip
       - 0.0.0.0
       - --db-filename
-      - /tmp/temporal.db
+      - /home/temporal/temporal.db
     ports:
-      - "7233:7233"
-      - "8233:8233"
+      - "127.0.0.1:7233:7233"
+      - "127.0.0.1:8233:8233"
+    volumes:
+      - temporal-data:/home/temporal
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   agent-service:
     profiles: ["llm", "prod"]
     build:
       context: ./agent-service
+    restart: unless-stopped
     environment:
       V5_AGENT_MODEL: ${V5_AGENT_MODEL:-gpt-4.1-mini}
       V5_AGENT_BASE_URL: ${V5_AGENT_BASE_URL:-}
@@ -43,12 +58,13 @@ services:
       NO_PROXY: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,postgres,temporal,agent-service,control-plane}
       no_proxy: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,postgres,temporal,agent-service,control-plane}
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
 
   control-plane:
     profiles: ["prod"]
     build:
       context: ./control-plane
+    restart: unless-stopped
     environment:
       SPRING_PROFILES_ACTIVE: temporal,llm
       V5_DB_URL: jdbc:postgresql://postgres:5432/asterism?stringtype=unspecified&currentSchema=control_plane_v5,public
@@ -66,11 +82,14 @@ services:
       ASTERISM_GITLAB_BASE_URL: ${ASTERISM_GITLAB_BASE_URL:-}
       ASTERISM_GITLAB_TOKEN: ${ASTERISM_GITLAB_TOKEN:-}
     depends_on:
-      - postgres
-      - temporal
-      - agent-service
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+      agent-service:
+        condition: service_started
     ports:
-      - "8085:8085"
+      - "127.0.0.1:8085:8085"
     volumes:
       - control-plane-attachments:/app/runtime/attachments
 
@@ -78,6 +97,7 @@ services:
     profiles: ["prod"]
     build:
       context: ./worker
+    restart: unless-stopped
     environment:
       V5_PROFILE: prod
       V5_TEMPORAL_TARGET: temporal:7233
@@ -127,6 +147,7 @@ services:
     profiles: ["prod"]
     build:
       context: ./workbench
+    restart: unless-stopped
     environment:
       V5_CONTROL_PLANE_HOST: control-plane
     depends_on:
@@ -136,5 +157,6 @@ services:
 
 volumes:
   postgres-data:
+  temporal-data:
   control-plane-attachments:
   worker-artifacts:
