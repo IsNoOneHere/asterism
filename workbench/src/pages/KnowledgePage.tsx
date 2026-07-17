@@ -109,7 +109,7 @@ export function KnowledgePage() {
       <ErrorState title="知识条目加载失败" error={entries.error} onRetry={() => entries.refetch()} /> : <>
       <div className="table-frame"><table className="data-table management-table knowledge-table"><thead><tr><th>知识条目</th><th>类型</th><th>路由 / 接口</th><th>来源</th><th>操作</th></tr></thead><tbody>
         {values.map((entry) => <tr key={entry.entryId}>
-          <td><div className="table-title"><strong>{entry.title}</strong><span>仓库：{entry.repo || 'main'} · {entry.anchorTexts.join('、') || '未设置可见文字锚点'}</span></div></td>
+          <td><div className="table-title"><strong>{entry.title}</strong><span>仓库：{entry.repo || 'main'} · {entry.anchorTexts.length ? `${entry.anchorTexts.length} 个文字锚点` : '未设置文字锚点'}</span></div></td>
           <td><span className="status-badge info">{kindName(entry.kind)}</span></td>
           <td><div className="table-title"><strong>{entry.routePath || '未设置路由'}</strong><span>{entry.apiEndpoints.join('、') || '未设置接口'}</span></div></td>
           <td>{entry.source || '手工录入'}</td>

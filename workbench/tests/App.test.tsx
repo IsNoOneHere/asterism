@@ -156,16 +156,18 @@ test.each([
 test('knowledge list requests one server page instead of the full dataset', async () => {
   const firstPage = '/api/v5/systems/alpha-system/knowledge/page?status=candidate&page=1&pageSize=10&query=';
   const secondPage = '/api/v5/systems/alpha-system/knowledge/page?status=candidate&page=2&pageSize=10&query=';
-  const entry = (entryId: string, title: string) => ({
+  const entry = (entryId: string, title: string, anchorTexts: string[] = []) => ({
     entryId, systemId: 'alpha-system', repo: 'main', kind: 'page', title,
-    anchorTexts: [], routePath: '/login', apiEndpoints: [], codeRefs: [],
+    anchorTexts, routePath: '/login', apiEndpoints: [], codeRefs: [],
     status: 'candidate', source: 'code_index', sourceRef: '',
   });
-  setApiResponse(firstPage, { items: [entry('knowledge-1', '第一页知识')], total: 21, page: 1, pageSize: 10, totalPages: 3 });
+  setApiResponse(firstPage, { items: [entry('knowledge-1', '第一页知识', ['规则设置', '原始文件名'])], total: 21, page: 1, pageSize: 10, totalPages: 3 });
   setApiResponse(secondPage, { items: [entry('knowledge-11', '第二页知识')], total: 21, page: 2, pageSize: 10, totalPages: 3 });
   renderApp('/knowledge');
 
   expect(await screen.findByText('第一页知识')).toBeInTheDocument();
+  expect(screen.getByText('仓库：main · 2 个文字锚点')).toBeInTheDocument();
+  expect(screen.queryByText('规则设置')).not.toBeInTheDocument();
   expect(fetch).toHaveBeenCalledWith(firstPage, expect.anything());
   fireEvent.click(screen.getByRole('button', { name: '下一页' }));
 
