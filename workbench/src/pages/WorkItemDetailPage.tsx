@@ -1,35 +1,52 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import {
+  Ban, Bot, CheckCircle2, Circle, Clock3, Code2, GitMerge, History, MinusCircle, UserRound, Workflow, XCircle,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { api, MemoryDraft, WorkItemEvent } from '../api/client';
+import { api, MemoryDraft, WorkItem, WorkItemEvent } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
-import { errorMessage, ErrorState, StatusBadge } from '../components/Display';
+import { errorMessage, ErrorState, formatDateTime, StatusBadge } from '../components/Display';
 import { MemoryEditorDialog } from '../components/MemoryEditorDialog';
+import {
+  AgentStageView, buildWorkItemFlow, eventName, eventPayload, failureReason, FlowAttempt, FlowStage, FlowStageId,
+  FlowStageStatus, PlanView, RepositoryFlowView, ValidationCheckView, WorkItemFlow,
+} from '../workItemFlow';
 import { WorkItemNavigationState } from '../workItemListState';
 
+type DetailTab = 'flow' | 'code' | 'audit';
 type StageAction = {
+  code: string;
   label: string;
+  stageId: FlowStageId;
   signalName?: string;
   ownerApproval?: boolean;
   mergeCheck?: boolean;
+  danger?: boolean;
+  requestId?: string;
+  expectedStatus?: string;
+  expectedProjectionSequence?: number;
 };
-type MergeRequestView = { repo: string; iid: number; url: string; status: string };
-type PlanView = {
-  steps: string[];
-  targetFiles: string[];
-  testPlan: string[];
-  risks: string[];
-  assignments: { role: string }[];
-};
-type StageProgressItem = { role: string; status: 'pending' | 'running' | 'completed' | 'failed' };
+
+const TAB_LABELS: Record<DetailTab, string> = { flow: '流程', code: '代码变更', audit: '事件审计' };
 
 export function WorkItemDetailPage() {
   const { workItemId = '' } = useParams();
   const location = useLocation();
   const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState<DetailTab>('flow');
+  const [selectedStageId, setSelectedStageId] = useState<FlowStageId | null>(null);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [memoryMessage, setMemoryMessage] = useState('');
   const [confirmAction, setConfirmAction] = useState<StageAction | null>(null);
+  const [actionNote, setActionNote] = useState('');
+  const [actionEvidence, setActionEvidence] = useState('');
+
+  useEffect(() => {
+    setActiveTab('flow');
+    setSelectedStageId(null);
+  }, [workItemId]);
+
   const item = useQuery({
     queryKey: ['work-item', workItemId],
     queryFn: () => api.workItem(workItemId),
@@ -44,10 +61,24 @@ export function WorkItemDetailPage() {
     refetchInterval: () => isTerminal(item.data?.lifecycleStatus) ? false : 3000,
     retry: false,
   });
+  useEffect(() => {
+    // 终态首次出现后再补拉一次事件，避免状态投影先返回而漏掉最后的发布事件。
+    if (isTerminal(item.data?.lifecycleStatus) && events.isFetched) {
+      void queryClient.refetchQueries({ queryKey: ['work-item-events', workItemId], exact: true });
+    }
+  }, [events.isFetched, item.data?.lifecycleStatus, queryClient, workItemId]);
   const runAction = useMutation({
-    mutationFn: (action: StageAction) => (action.ownerApproval
-      ? api.approveOwner(workItemId)
-      : action.mergeCheck ? api.checkMergeStatus(workItemId) : api.submitSignal(workItemId, action.signalName!)),
+    mutationFn: (action: StageAction) => {
+      const body = {
+        requestId: action.requestId!, expectedStatus: action.expectedStatus!,
+        expectedProjectionSequence: action.expectedProjectionSequence!,
+        ...(actionNote.trim() ? { note: actionNote.trim() } : {}),
+        ...(actionEvidence.trim() ? { evidence: actionEvidence.trim() } : {}),
+      };
+      return action.ownerApproval
+        ? api.approveOwner(workItemId, body)
+        : action.mergeCheck ? api.checkMergeStatus(workItemId, body) : api.submitSignal(workItemId, action.signalName!, body);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['work-item', workItemId] });
       queryClient.invalidateQueries({ queryKey: ['work-item-events', workItemId] });
@@ -64,65 +95,94 @@ export function WorkItemDetailPage() {
   });
 
   const workItem = item.data;
-  const actions = workItem ? (workItem.availableActions ?? []).map(stageAction).filter((action): action is StageAction => Boolean(action)) : [];
-  const canAct = workItem?.canControl ?? false;
-  const mergeRequests = buildMergeRequests(events.data ?? []);
+  const flow = workItem ? buildWorkItemFlow(workItem, events.data ?? []) : null;
+  // null 表示自动跟随当前阶段；用户选择历史节点后，轮询只更新数据而不抢回选择。
+  const selectedStage = flow?.stages.find((stage) => stage.id === (selectedStageId ?? flow.currentStageId));
+  const actions = workItem && flow
+    ? (workItem.availableActions ?? []).map((code) => stageAction(code, flow.currentStageId, workItem)).filter((action): action is StageAction => Boolean(action))
+    : [];
 
   return (
-    <section>
-      <header className="page-head">
+    <section className="work-item-detail">
+      <header className="page-head work-item-detail-head">
         <div>
           <Link className="secondary-action-link" state={location.state as WorkItemNavigationState | null} to="/work-items">← 返回工作项中心</Link>
-          <h1>{workItem?.title || workItemId}</h1>
-          <p>{workItem?.currentStage || '加载中'}</p>
+          <div className="work-item-heading">
+            <h1>{workItem?.title || workItemId}</h1>
+            <span>{workItem?.workItemId || workItemId}</span>
+          </div>
         </div>
+        {workItem && <button type="button" className="secondary" onClick={() => { createMemory.reset(); setMemoryOpen(true); }}>沉淀为记忆</button>}
       </header>
-      {workItem && (
-        <div className="split">
-          <div className="panel">
-            <h2>当前状态与操作</h2>
+
+      {workItem && flow && (
+        <>
+          <WorkItemOverview workItem={workItem} flow={flow} />
+          <details className="work-item-basic panel">
+            <summary>基本信息</summary>
             <dl className="summary-list">
-              <dt>所属系统</dt>
-              <dd>{workItem.systemId}</dd>
-              <dt>生命周期</dt>
-              <dd><StatusBadge value={workItem.lifecycleStatus} /></dd>
-              <dt>等待角色</dt>
-              <dd>{waitingRoleName(workItem.waitingFor)}</dd>
-              <dt>执行权限</dt>
-              <dd>{workItem.executionAllowed ? '允许' : '关闭'}</dd>
+              <dt>所属系统</dt><dd>{workItem.systemId}</dd>
+              <dt>执行权限</dt><dd>{workItem.executionAllowed ? '允许' : '关闭'}</dd>
+              <dt>发布 / 验证</dt><dd>{workItem.releaseMode || '-'} / {workItem.validationMode || '-'}</dd>
+              <dt>创建人</dt><dd>{workItem.createdBy || '-'}</dd>
               <dt>确认目标</dt>
               <dd>{workItem.targets?.map((target) => `${target.title}${target.apiEndpoints?.length ? `（${target.apiEndpoints.join('、')}）` : ''}`).join('；') || '-'}</dd>
             </dl>
-            {mergeRequests.length > 0 && <div className="merge-request-list"><h3>GitLab 合并请求</h3><ul>{mergeRequests.map((mr) => <li key={`${mr.repo}-${mr.iid}`}><a href={mr.url} target="_blank" rel="noreferrer">{mr.repo} !{mr.iid}</a><span className={`status-badge ${mr.status === 'merged' ? 'success' : mr.status === 'closed' ? 'danger' : 'info'}`}>{mergeRequestStatusName(mr.status)}</span></li>)}</ul></div>}
-            {canAct && actions.length > 0 ? (
-              <div className="button-row wrap">
-                {actions.map((action) => (
-                  <button key={action.label} type="button" disabled={runAction.isPending} onClick={() => {
-                    runAction.reset();
-                    setConfirmAction(action);
-                  }}>
-                    {action.label}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="empty">当前用户仅可查看，或该阶段无需人工动作。</div>
-            )}
-            <div className="button-row memory-work-item-action"><button type="button" className="secondary" onClick={() => { createMemory.reset(); setMemoryOpen(true); }}>沉淀为记忆</button></div>
-            {memoryMessage && <div className="success-text">{memoryMessage}</div>}
-          </div>
-          <div className="panel">
-            <h2>事件时间线</h2>
-            <StageProgress stages={buildStageProgress(events.data ?? [], workItem.lifecycleStatus)} />
-            {events.data?.map((event) => (
-              <TimelineEvent key={event.eventId || event.sequence} event={event} />
-            ))}
-            {events.isLoading && <div className="empty" role="status">事件加载中…</div>}
-            {events.isError && <ErrorState title="事件加载失败" error={events.error} onRetry={() => events.refetch()} />}
-            {events.isSuccess && (events.data ?? []).length === 0 && <div className="empty">暂无事件。</div>}
-          </div>
-        </div>
+          </details>
+          {memoryMessage && <div className="success-text">{memoryMessage}</div>}
+
+          <nav className="page-tabs work-item-tabs" aria-label="工作项详情">
+            {(Object.keys(TAB_LABELS) as DetailTab[]).map((tab) => {
+              const Icon = tab === 'flow' ? Workflow : tab === 'code' ? Code2 : History;
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  className={activeTab === tab ? 'active' : ''}
+                  aria-pressed={activeTab === tab}
+                  onClick={() => setActiveTab(tab)}
+                >
+                  <Icon size={16} aria-hidden="true" />{TAB_LABELS[tab]}
+                </button>
+              );
+            })}
+          </nav>
+
+          {events.isLoading && <div className="panel empty" role="status">事件加载中…</div>}
+          {events.isError && <ErrorState title="事件加载失败" error={events.error} onRetry={() => events.refetch()} />}
+          {!events.isLoading && !events.isError && activeTab === 'flow' && selectedStage && (
+            <div>
+              <FlowGraph flow={flow} selectedStageId={selectedStage.id} onSelect={(stageId) => setSelectedStageId(stageId === flow.currentStageId ? null : stageId)} />
+              <StageDetail
+                stage={selectedStage}
+                flow={flow}
+                workItem={workItem}
+                actions={selectedStage.id === flow.currentStageId ? actions.filter((action) => action.stageId === selectedStage.id) : []}
+                pending={runAction.isPending || Boolean(workItem.pendingAction)}
+                pendingAction={workItem.pendingAction?.action}
+                onAction={(action) => {
+                  runAction.reset();
+                  setActionNote('');
+                  setActionEvidence('');
+                  setConfirmAction({ ...action, requestId: crypto.randomUUID(), expectedStatus: workItem.lifecycleStatus,
+                    expectedProjectionSequence: workItem.lastAppliedSequence });
+                }}
+              />
+            </div>
+          )}
+          {!events.isLoading && !events.isError && activeTab === 'code' && (
+            <div>
+              <CodeChanges flow={flow} />
+            </div>
+          )}
+          {!events.isLoading && !events.isError && activeTab === 'audit' && (
+            <div>
+              <EventAudit events={flow.events} />
+            </div>
+          )}
+        </>
       )}
+
       {item.isLoading && <div className="panel empty" role="status">工作项加载中…</div>}
       {item.isError && <ErrorState title="工作项加载失败" error={item.error} onRetry={() => item.refetch()} />}
       <MemoryEditorDialog open={memoryOpen} title="从工作项沉淀记忆" submitLabel="加入待审批" workItemId={workItemId} pending={createMemory.isPending} error={createMemory.error} onClose={() => { setMemoryOpen(false); createMemory.reset(); }} onSubmit={(draft) => createMemory.mutate(draft)} />
@@ -132,7 +192,11 @@ export function WorkItemDetailPage() {
         description={confirmAction ? confirmText(confirmAction).replace('，是否继续？', '。') : ''}
         confirmLabel={confirmAction?.label}
         pending={runAction.isPending}
-        tone={confirmAction && ['拒绝', '取消'].includes(confirmAction.label) ? 'danger' : 'primary'}
+        tone={confirmAction?.danger ? 'danger' : 'primary'}
+        fields={confirmAction && actionContextKind(confirmAction.code) !== 'none' ? <div className="action-context-fields">
+          {actionContextKind(confirmAction.code) !== 'evidence' && <label>处理说明（可选）<textarea rows={3} maxLength={2000} value={actionNote} onChange={(event) => setActionNote(event.target.value)} /></label>}
+          {actionContextKind(confirmAction.code) === 'evidence' && <label>验证证据（建议填写）<textarea rows={3} maxLength={4000} value={actionEvidence} onChange={(event) => setActionEvidence(event.target.value)} placeholder="测试环境、结果、截图或记录链接" /></label>}
+        </div> : undefined}
         onClose={() => setConfirmAction(null)}
         onConfirm={() => confirmAction && runAction.mutate(confirmAction)}
       />
@@ -150,127 +214,281 @@ export function WorkItemDetailPage() {
   );
 }
 
-function StageProgress({ stages }: { stages: StageProgressItem[] }) {
-  if (stages.length === 0) return null;
-  const labels = { pending: '待执行', running: '执行中', completed: '完成', failed: '失败' };
+function WorkItemOverview({ workItem, flow }: { workItem: WorkItem; flow: WorkItemFlow }) {
+  const current = flow.stages.find((stage) => stage.id === flow.currentStageId)!;
   return (
-    <ol className="stage-progress" aria-label="Agent Stage 进度">
-      {stages.map((stage, index) => (
-        <li className={`stage-progress-item ${stage.status}`} key={`${index}-${stage.role}`}>
-          <strong>{stage.role}</strong>
-          <span>{labels[stage.status]}</span>
+    <div className="work-item-overview panel" aria-label="工作项摘要">
+      <div><span>当前状态</span><StatusBadge value={workItem.lifecycleStatus} /></div>
+      <div><span>当前阶段</span><strong>{current.label}</strong></div>
+      <div><span>等待角色</span><strong>{current.waitingFor || waitingRoleName(workItem.waitingFor)}</strong></div>
+      <div><span>创建时间</span><strong>{formatDateTime(workItem.createdAt)}</strong></div>
+      <div><span>已用时</span><strong>{elapsedTime(workItem.createdAt, isTerminal(workItem.lifecycleStatus) ? workItem.updatedAt : undefined)}</strong></div>
+    </div>
+  );
+}
+
+function FlowGraph({ flow, selectedStageId, onSelect }: { flow: WorkItemFlow; selectedStageId: FlowStageId; onSelect: (id: FlowStageId) => void }) {
+  return (
+    <ol className="work-item-flow" aria-label="工作项流程">
+      {flow.stages.map((stage) => (
+        <li key={stage.id} className={`${stage.status}${selectedStageId === stage.id ? ' selected' : ''}`}>
+          <button
+            type="button"
+            aria-current={stage.id === flow.currentStageId ? 'step' : undefined}
+            aria-pressed={selectedStageId === stage.id}
+            onClick={() => onSelect(stage.id)}
+          >
+            <StageStatusIcon status={stage.status} />
+            <strong>{stage.label}</strong>
+            <span>{stageStatusName(stage)}</span>
+            {stage.completedAt && <small>{formatDateTime(stage.completedAt)}</small>}
+          </button>
         </li>
       ))}
     </ol>
   );
 }
 
-function TimelineEvent({ event }: { event: WorkItemEvent }) {
-  const plan = event.eventType === 'ExecutionPlanDrafted' ? parsePlanPayload(event.payloadJson) : null;
-  const modification = event.eventType === 'ModificationCompleted' ? parseModificationPayload(event.payloadJson) : null;
-  const release = event.eventType === 'ReleaseCompleted' ? parseReleasePayload(event.payloadJson) : null;
-  const agentStage = event.eventType === 'AgentStageCompleted' ? parseAgentStagePayload(event.payloadJson) : null;
-  return (
-    <div className="timeline-item">
-      <div>
-        <strong>{eventName(event.eventType)}</strong>
-        <span>{formatTime(event.createdAt)} · {event.actorId || event.source || '系统'}</span>
-      </div>
-      {plan ? <ExecutionPlanView plan={plan} /> : agentStage ? <AgentStageView stage={agentStage} /> : modification ? <ModificationView modification={modification} /> : release ? <ReleaseView release={release} /> : event.payloadJson && (
-        <details>
-          <summary>原始数据</summary>
-          <pre>{formatPayload(event.payloadJson)}</pre>
-        </details>
-      )}
-    </div>
-  );
+function StageStatusIcon({ status }: { status: FlowStageStatus }) {
+  if (status === 'completed') return <CheckCircle2 aria-hidden="true" />;
+  if (status === 'failed') return <XCircle aria-hidden="true" />;
+  if (status === 'cancelled') return <Ban aria-hidden="true" />;
+  if (status === 'skipped') return <MinusCircle aria-hidden="true" />;
+  if (status === 'running' || status === 'waiting') return <Clock3 aria-hidden="true" />;
+  return <Circle aria-hidden="true" />;
 }
 
-function AgentStageView({ stage }: { stage: { role: string; engine: string; summary: string; changedPaths: string[]; tokenUsage: Record<string, unknown> } }) {
-  return <dl className="summary-list compact">
-    <dt>Agent 角色</dt><dd>{stage.role || '-'}</dd>
-    <dt>执行内核</dt><dd>{stage.engine || '-'}</dd>
-    <dt>摘要</dt><dd>{stage.summary || '-'}</dd>
-    <dt>修改文件</dt><dd>{stage.changedPaths.join(', ') || '-'}</dd>
-    <dt>Token</dt><dd>{formatTokenUsage(stage.tokenUsage)}</dd>
-  </dl>;
-}
-
-function ModificationView({ modification }: { modification: { provider: string; turns: number | null; tokenUsage: Record<string, unknown>; diffPatch: string } }) {
+function StageDetail({ stage, flow, workItem, actions, pending, pendingAction, onAction }: {
+  stage: FlowStage;
+  flow: WorkItemFlow;
+  workItem: WorkItem;
+  actions: StageAction[];
+  pending: boolean;
+  pendingAction?: string;
+  onAction: (action: StageAction) => void;
+}) {
+  const stageAttempts = flow.attempts.filter((attempt) => attempt.stageIds.includes(stage.id));
+  const primaryAction = actions.find((action) => !action.danger)?.code;
   return (
-    <>
-      <dl className="summary-list compact">
-        <dt>执行内核</dt>
-        <dd>{modification.provider || '-'}</dd>
-        <dt>轮次</dt>
-        <dd>{modification.turns ?? '-'}</dd>
-        <dt>Token</dt>
-        <dd>{formatTokenUsage(modification.tokenUsage)}</dd>
+    <section className="stage-detail panel" aria-labelledby="selected-stage-title">
+      <header className="stage-detail-head">
+        <div>
+          <span className={`flow-status-label ${stage.status}`}>{stageStatusName(stage)}</span>
+          <h2 id="selected-stage-title">{stage.label}</h2>
+          <p>{stageSummary(stage, workItem, flow)}</p>
+        </div>
+        {stage.failureReason && <div className="stage-failure"><XCircle size={18} aria-hidden="true" /><span>{stage.failureReason}</span></div>}
+      </header>
+
+      <dl className="stage-metadata">
+        <div><dt>开始</dt><dd>{formatDateTime(stage.startedAt)}</dd></div>
+        <div><dt>结束</dt><dd>{formatDateTime(stage.completedAt)}</dd></div>
+        <div><dt>耗时</dt><dd>{formatDuration(stage.durationMs)}</dd></div>
+        <div><dt>参与角色</dt><dd>{stageParticipants(stage, workItem)}</dd></div>
       </dl>
-      {modification.diffPatch && (
-        <details open>
-          <summary>代码 diff</summary>
-          <pre>{modification.diffPatch}</pre>
-        </details>
+
+      {stage.id === 'execution' && <ExecutionDetail plan={flow.plan} agents={stage.agents ?? []} />}
+      {stage.id === 'patch' && <PatchDetail flow={flow} />}
+      {stage.id === 'validation' && <ValidationChecks checks={stage.checks ?? []} status={stage.status} />}
+      {stage.id === 'release' && <RepositoryLanes repositories={stage.repositories ?? []} />}
+
+      {stage.events.length > 0 && (
+        <div className="stage-events">
+          <h3>关键事件</h3>
+          <ol className="flow-event-list">
+            {stage.events.map((event) => (
+              <li key={event.eventId || event.sequence}>
+                <span className="event-dot" aria-hidden="true" />
+                <div><strong>{eventName(event.eventType)}</strong><p>{eventSummary(event)}</p></div>
+                <time>{formatDateTime(event.createdAt)}</time>
+              </li>
+            ))}
+          </ol>
+        </div>
       )}
-    </>
+
+      {(stageAttempts.length > 1 || stageAttempts.some((attempt) => attempt.status === 'failed')) && <AttemptHistory attempts={stageAttempts} />}
+
+      {pendingAction && <div className="notice action-pending" role="status">“{actionLabel(pendingAction)}”已提交，等待 Worker 完成；期间不能提交其它阶段操作。</div>}
+
+      {workItem.canControl && actions.length > 0 && (
+        <div className="stage-actions" aria-label="当前阶段操作">
+          {actions.map((action) => (
+            <button
+              key={action.code}
+              type="button"
+              className={action.danger ? 'danger-action' : action.code === primaryAction ? undefined : 'secondary'}
+              disabled={pending}
+              onClick={() => onAction(action)}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
-function ReleaseView({ release }: { release: { branch: string; commitHash: string; pushFailed: string } }) {
+function ExecutionDetail({ plan, agents }: { plan: PlanView | null; agents: AgentStageView[] }) {
+  if (!plan && agents.length === 0) return <div className="empty stage-empty">等待生成执行计划。</div>;
   return (
-    <dl className="summary-list compact">
-      <dt>分支</dt>
-      <dd>{release.branch || '-'}</dd>
-      <dt>提交</dt>
-      <dd>{release.commitHash || '-'}</dd>
-      {release.pushFailed && (
-        <>
-          <dt>推送</dt>
-          <dd>{release.pushFailed}</dd>
-        </>
-      )}
-    </dl>
-  );
-}
-
-function ExecutionPlanView({ plan }: { plan: PlanView }) {
-  return (
-    <div className="plan-view">
-      <PlanList title="执行步骤" items={plan.steps} />
-      <PlanList title="目标文件" items={plan.targetFiles} />
-      <PlanList title="测试计划" items={plan.testPlan} />
-      <PlanList title="风险" items={plan.risks} />
+    <div className="execution-detail">
+      {plan && <div className="plan-view">
+        <PlanList title="执行步骤" items={plan.steps} />
+        <PlanList title="目标文件" items={plan.targetFiles} />
+        <PlanList title="测试计划" items={plan.testPlan} />
+        <PlanList title="风险" items={plan.risks} />
+      </div>}
+      <ol className="agent-lane" aria-label="Agent 执行进度">
+        {plan && <li className="completed"><span className="agent-icon"><Workflow size={17} /></span><div><strong>Planner</strong><p>执行计划已生成</p></div><em>已完成</em></li>}
+        {agents.map((agent) => (
+          <li key={`${agent.index}-${agent.role}`} className={agent.status}>
+            <span className="agent-icon"><Bot size={17} /></span>
+            <div><strong>{agent.role || 'Developer Agent'}{agent.repo && <small> · {agent.repo}</small>}</strong><p>{agent.summary || agent.engine || '等待执行'}</p></div>
+            <em>{agentStatusName(agent.status)}{agent.changedPaths.length ? ` · ${agent.changedPaths.length} 个文件` : ''}</em>
+          </li>
+        ))}
+      </ol>
     </div>
+  );
+}
+
+function PatchDetail({ flow }: { flow: WorkItemFlow }) {
+  if (!flow.modification) return null;
+  const changed = flow.repositories.reduce((total, repo) => total + repo.changedPaths.length, 0);
+  return (
+    <div className="change-summary">
+      <strong>{flow.modification.summary || 'Agent 修改已生成'}</strong>
+      <span>{flow.modification.provider || '-'} · {changed} 个文件 · {formatTokenUsage(flow.modification.tokenUsage)}</span>
+      <p>完整文件列表和 diff 已移至“代码变更”Tab。</p>
+    </div>
+  );
+}
+
+function ValidationChecks({ checks, status }: { checks: ValidationCheckView[]; status: FlowStageStatus }) {
+  if (status === 'skipped') return <div className="notice">未配置测试命令，本次自动检查已跳过。</div>;
+  if (checks.length === 0) return <div className="empty stage-empty">暂无自动检查结果，等待当前验证动作。</div>;
+  return (
+    <ul className="validation-checks">
+      {checks.map((check, index) => <li key={`${check.repo}-${check.command}-${index}`} className={check.passed ? 'passed' : 'failed'}>
+        {check.passed ? <CheckCircle2 size={17} aria-hidden="true" /> : <XCircle size={17} aria-hidden="true" />}
+        <div><code>{check.command}</code>{check.repo && <span>{check.repo}</span>}{check.stderr && <p>{check.stderr}</p>}</div>
+      </li>)}
+    </ul>
+  );
+}
+
+function RepositoryLanes({ repositories }: { repositories: RepositoryFlowView[] }) {
+  if (repositories.length === 0) return <div className="empty stage-empty">尚未生成提交或合并请求。</div>;
+  return (
+    <div className="repository-lanes" aria-label="仓库发布进度">
+      {repositories.map((repo) => (
+        <div className={`repository-lane ${repo.status}`} key={repo.repo}>
+          <strong>{repo.repo}</strong>
+          <span>{repo.branch || '等待分支'}</span>
+          <span>{repo.commitHash ? shortHash(repo.commitHash) : '等待 commit'}</span>
+          <span>{repo.mrIid ? repo.mrUrl ? <a aria-label={`${repo.repo} !${repo.mrIid}`} href={repo.mrUrl} target="_blank" rel="noreferrer">MR !{repo.mrIid}</a> : `MR !${repo.mrIid}` : '等待 MR'}</span>
+          <em>{repositoryStatusName(repo.status)}</em>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AttemptHistory({ attempts }: { attempts: FlowAttempt[] }) {
+  return (
+    <details className="attempt-history">
+      <summary>尝试历史（{attempts.length} 次）</summary>
+      <ol>{attempts.map((attempt) => <li key={attempt.number} className={attempt.status}>
+        <div><strong>第 {attempt.number} 次</strong><span>{attemptStatusName(attempt.status)}</span></div>
+        <p>{attempt.failureReason || `${attempt.events.length} 个关键事件`}</p>
+        <time>{formatDateTime(attempt.startedAt)}{attempt.completedAt ? ` – ${formatDateTime(attempt.completedAt)}` : ''}</time>
+      </li>)}</ol>
+    </details>
+  );
+}
+
+function CodeChanges({ flow }: { flow: WorkItemFlow }) {
+  if (!flow.modification && flow.repositories.length === 0) return <div className="panel empty">当前还没有代码变更。</div>;
+  const agents = flow.stages.find((stage) => stage.id === 'execution')?.agents ?? [];
+  return (
+    <div className="code-change-list">
+      {flow.modification && <div className="panel code-change-summary">
+        <div><span>执行摘要</span><strong>{flow.modification.summary || '修改已完成'}</strong></div>
+        <div><span>执行内核</span><strong>{flow.modification.provider || '-'}</strong></div>
+        <div><span>轮次</span><strong>{flow.modification.turns ?? '-'}</strong></div>
+        <div><span>Token</span><strong>{formatTokenUsage(flow.modification.tokenUsage)}</strong></div>
+      </div>}
+      {flow.repositories.map((repo) => {
+        const repoAgents = agents.filter((agent) => !agent.repo || agent.repo === repo.repo);
+        const repoChecks = repo.checks.length ? repo.checks : flow.checks.filter((check) => check.repo === repo.repo);
+        return <article className="panel repository-change" key={repo.repo}>
+          <header><div><GitMerge size={18} aria-hidden="true" /><h2>{repo.repo}</h2></div><span className={`flow-status-label ${repo.status === 'closed' ? 'failed' : repo.status === 'merged' || repo.status === 'released' ? 'completed' : 'waiting'}`}>{repositoryStatusName(repo.status)}</span></header>
+          {repoAgents.length > 0 && <section><h3>Agent 摘要</h3><ul>{repoAgents.map((agent) => <li key={`${agent.index}-${agent.role}`}><strong>{agent.role}</strong><span>{agent.summary || agent.engine || '-'}</span></li>)}</ul></section>}
+          <section><h3>修改文件</h3>{repo.changedPaths.length ? <ul className="changed-files">{repo.changedPaths.map((path) => <li key={path}><code>{path}</code></li>)}</ul> : <p className="empty-inline">未返回文件列表</p>}</section>
+          {repo.diffPatch && <details className="code-diff" open><summary>完整 diff</summary><pre>{repo.diffPatch}</pre></details>}
+          {repoChecks.length > 0 && <section><h3>自动检查</h3><ValidationChecks checks={repoChecks} status="completed" /></section>}
+          {(repo.branch || repo.commitHash || repo.mrIid) && <dl className="repo-release-meta">
+            <div><dt>分支</dt><dd>{repo.branch || '-'}</dd></div>
+            <div><dt>Commit</dt><dd>{repo.commitHash || '-'}</dd></div>
+            <div><dt>MR</dt><dd>{repo.mrIid ? repo.mrUrl ? <a href={repo.mrUrl} target="_blank" rel="noreferrer">!{repo.mrIid}</a> : `!${repo.mrIid}` : '-'}</dd></div>
+          </dl>}
+        </article>;
+      })}
+    </div>
+  );
+}
+
+function EventAudit({ events }: { events: WorkItemEvent[] }) {
+  if (events.length === 0) return <div className="panel empty">暂无事件。</div>;
+  return (
+    <ol className="event-audit-list">
+      {events.map((event) => <li className="panel" key={event.eventId || event.sequence}>
+        <header><span>#{event.sequence}</span><div><strong>{eventName(event.eventType)}</strong><code>{event.eventType}</code></div><time>{formatDateTime(event.createdAt)}</time></header>
+        <dl>
+          <div><dt>Actor / Source</dt><dd>{event.actorId || '-'} / {event.source || '-'}</dd></div>
+          <div><dt>Causation ID</dt><dd>{event.causationId || '-'}</dd></div>
+        </dl>
+        <details><summary>原始 JSON</summary><pre>{formatPayload(event.payloadJson || '')}</pre></details>
+      </li>)}
+    </ol>
   );
 }
 
 function PlanList({ title, items }: { title: string; items: string[] }) {
-  if (items.length === 0) {
-    return null;
-  }
-  return (
-    <div>
-      <strong>{title}</strong>
-      <ul>
-        {items.map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
-    </div>
-  );
+  if (items.length === 0) return null;
+  return <div><strong>{title}</strong><ul>{items.map((item) => <li key={item}>{item}</li>)}</ul></div>;
 }
 
-function stageAction(code: string): StageAction | null {
-  const labels: Record<string, string> = {
-    owner_approved: '批准执行', owner_rejected: '拒绝', cancel_case: '取消', start_modification: '开始修改',
-    rework: '重新执行', patch_apply_approved: '应用 Patch', patch_apply_rejected: '重做',
-    validation_passed: '测试通过', validation_rejected: '重做', release_approved: '创建发布提交',
-    check_merge_status: '标记已合并',
+function stageAction(code: string, currentStageId: FlowStageId, workItem: WorkItem): StageAction | null {
+  const values: Record<string, Omit<StageAction, 'code'>> = {
+    owner_approved: { label: '批准执行', stageId: 'approval', ownerApproval: true },
+    owner_rejected: { label: '拒绝', stageId: 'approval', signalName: code, danger: true },
+    cancel_case: { label: '取消', stageId: currentStageId, signalName: code, danger: true },
+    start_modification: { label: '开始执行', stageId: 'execution', signalName: code },
+    rework: { label: '重新执行', stageId: currentStageId, signalName: code },
+    patch_apply_approved: { label: workItem.releaseMode === 'gitlab' ? (workItem.validationMode === 'manual' ? '创建候选 MR' : '发布 MR') : '应用 Patch', stageId: 'patch', signalName: code },
+    patch_apply_rejected: { label: '打回重做', stageId: 'patch', signalName: code },
+    validation_passed: { label: workItem.validationMode === 'manual' ? '人工验证通过' : '验证通过', stageId: 'validation', signalName: code },
+    validation_rejected: { label: workItem.validationMode === 'manual' ? '人工验证不通过' : '重做', stageId: 'validation', signalName: code },
+    release_approved: { label: workItem.releaseMode === 'gitlab' ? '提交 MR' : '创建发布提交', stageId: 'release', signalName: code },
+    check_merge_status: { label: '检查合并状态', stageId: 'release', mergeCheck: true },
   };
-  if (!labels[code]) return null;
-  if (code === 'owner_approved') return { label: labels[code], ownerApproval: true };
-  return code === 'check_merge_status' ? { label: labels[code], mergeCheck: true } : { label: labels[code], signalName: code };
+  return values[code] ? { code, ...values[code] } : null;
+}
+
+function actionContextKind(code: string): 'none' | 'note' | 'evidence' {
+  if (['validation_passed', 'validation_rejected'].includes(code)) return 'evidence';
+  if (['owner_rejected', 'cancel_case', 'rework', 'patch_apply_rejected'].includes(code)) return 'note';
+  return 'none';
+}
+
+function actionLabel(code: string) {
+  return ({ owner_approved: '批准执行', owner_rejected: '拒绝', cancel_case: '取消', start_modification: '开始执行',
+    rework: '重新执行', patch_apply_approved: '代码确认', patch_apply_rejected: '打回重做',
+    validation_passed: '验证通过', validation_rejected: '验证不通过', release_approved: '发布',
+    check_merge_status: '检查合并状态' } as Record<string, string>)[code] || code;
 }
 
 function confirmText(action: StageAction) {
@@ -278,192 +496,61 @@ function confirmText(action: StageAction) {
     owner_approved: '批准后工作项将进入可执行状态，是否继续？', owner_rejected: '拒绝后工作项将结束，是否继续？',
     cancel_case: '取消后工作项将结束，是否继续？', patch_apply_approved: '该操作会修改真实仓库，是否继续？',
     start_modification: '确认后 Agent 将开始修改真实仓库，是否继续？', rework: '确认后将重新执行当前工作项，是否继续？',
-    patch_apply_rejected: '确认后将退回修改阶段重新处理，是否继续？', validation_passed: '确认测试已通过并进入下一阶段，是否继续？',
-    validation_rejected: '确认后将退回修改阶段重新处理，是否继续？',
-    release_approved: '该操作会创建发布分支和提交，是否继续？',
+    patch_apply_rejected: '确认后将退回修改阶段重新处理，是否继续？', validation_passed: '确认验证已通过并进入下一阶段，是否继续？',
+    validation_rejected: '确认后将退回修改阶段重新处理，是否继续？', release_approved: '该操作会创建发布分支和提交，是否继续？',
     check_merge_status: '后端将实时核验所有 GitLab MR，只有确实合并后才会完成工作项，是否继续？',
-  } as Record<string, string>)[action.ownerApproval ? 'owner_approved' : action.mergeCheck ? 'check_merge_status' : action.signalName || ''] || '是否继续？';
+  } as Record<string, string>)[action.code] || '是否继续？';
 }
 
-function eventName(eventType: string) {
-  return ({
-    ExecutionPlanDrafted: '执行计划已生成', AgentStageCompleted: 'Agent 阶段已完成', ModificationCompleted: '修改已完成',
-    ReleaseCompleted: '发布已完成', WorkerBlocked: '执行已阻塞', MergeRequestCreated: '合并请求已创建',
-    MergeRequestMerged: '合并请求已合并', MergeRequestClosed: '合并请求已关闭',
-  } as Record<string, string>)[eventType] || eventType;
+function stageSummary(stage: FlowStage, workItem: WorkItem, flow: WorkItemFlow) {
+  if (stage.failureReason) return stage.failureReason;
+  if (stage.id === 'created') return `${workItem.createdBy || '系统'} 创建了“${workItem.title}”。`;
+  if (stage.id === 'approval') return stage.status === 'waiting' ? '等待系统负责人确认是否进入执行。' : '负责人审批结果已记录。';
+  if (stage.id === 'execution') return flow.plan ? `${flow.plan.steps.length} 个步骤，${flow.plan.assignments.length || 1} 个执行角色。` : '等待 Planner 生成执行计划。';
+  if (stage.id === 'patch') return flow.modification ? flow.modification.summary || '代码修改已生成，等待确认。' : '等待 Agent 生成代码修改。';
+  if (stage.id === 'validation') return stage.status === 'skipped' ? '本次没有自动检查命令。' : flow.checks.length ? `${flow.checks.filter((check) => check.passed).length} / ${flow.checks.length} 项自动检查通过。` : '等待自动检查或人工验证。';
+  if (stage.id === 'release') return flow.repositories.length ? `${flow.repositories.filter((repo) => ['merged', 'released'].includes(repo.status)).length} / ${flow.repositories.length} 个仓库已完成。` : '等待创建提交或合并请求。';
+  return workItem.lifecycleStatus === 'cancelled' ? '工作项已取消。' : workItem.lifecycleStatus === 'rejected' ? '工作项已拒绝。' : '工作项生命周期已结束。';
+}
+
+function stageParticipants(stage: FlowStage, workItem: WorkItem) {
+  if (stage.id === 'created') return workItem.createdBy || '系统';
+  if (stage.id === 'approval' || stage.id === 'patch') return '系统负责人';
+  if (stage.id === 'execution') return stage.agents?.map((agent) => agent.role).filter(Boolean).join('、') || 'Planner / Agent';
+  if (stage.id === 'validation') return 'Agent / 验证人员';
+  if (stage.id === 'release') return 'GitLab / 发布流程';
+  return '系统';
+}
+
+function eventSummary(event: WorkItemEvent) {
+  const payload = eventPayload(event);
+  const failed = failureReason(event);
+  if (failed) return failed;
+  if (event.eventType === 'AgentStageCompleted') return String(payload?.summary || `${payload?.role || 'Agent'} 执行完成`);
+  if (event.eventType === 'ModificationCompleted') return String(payload?.summary || '已生成代码修改');
+  if (event.eventType.startsWith('MergeRequest')) return `${payload?.repo || '仓库'}${payload?.mrIid ? ` · MR !${payload.mrIid}` : ''}`;
+  if (event.eventType.startsWith('Validation')) return Array.isArray(payload?.commands) ? `${payload.commands.length} 项自动检查` : '验证结果已记录';
+  return `${event.actorId || event.source || '系统'} · ${event.eventType}`;
+}
+
+function stageStatusName(stage: FlowStage) {
+  return ({ pending: '未开始', running: '执行中', waiting: stage.waitingFor ? `等待${stage.waitingFor}` : '等待处理', completed: '已完成', failed: '失败', skipped: '已跳过', cancelled: '已取消' } as Record<FlowStageStatus, string>)[stage.status];
+}
+
+function agentStatusName(status: AgentStageView['status']) {
+  return ({ pending: '待执行', running: '执行中', completed: '已完成', failed: '失败' } as Record<AgentStageView['status'], string>)[status];
+}
+
+function repositoryStatusName(status: RepositoryFlowView['status']) {
+  return ({ changed: '已有修改', published: '已发布', opened: '等待合并', merged: '已合并', closed: '已关闭', released: '已完成' } as Record<RepositoryFlowView['status'], string>)[status];
+}
+
+function attemptStatusName(status: FlowAttempt['status']) {
+  return ({ running: '进行中', completed: '已完成', failed: '失败', cancelled: '已取消' } as Record<FlowAttempt['status'], string>)[status];
 }
 
 function waitingRoleName(role?: string) {
   return ({ owner: '系统负责人', worker: 'Agent', gitlab: 'GitLab' } as Record<string, string>)[role || ''] || role || '-';
-}
-
-function mergeRequestStatusName(status: string) {
-  return ({ opened: '已打开', open: '已打开', merged: '已合并', closed: '已关闭' } as Record<string, string>)[status] || status;
-}
-
-function buildMergeRequests(events: WorkItemEvent[]): MergeRequestView[] {
-  const values = new Map<string, MergeRequestView>();
-  let attempt = '';
-  events.forEach((event) => {
-    if (!['MergeRequestCreated', 'MergeRequestMerged', 'MergeRequestClosed'].includes(event.eventType)) return;
-    try {
-      const payload = JSON.parse(event.payloadJson || '{}') as Record<string, unknown>;
-      const repo = String(payload.repo ?? '');
-      const iid = Number(payload.mrIid ?? payload.mr_iid);
-      if (!repo || !Number.isInteger(iid)) return;
-      if (event.eventType === 'MergeRequestCreated') {
-        const root = String(event.causationId ?? '').split(':mr:')[0];
-        if (attempt && root !== attempt) values.clear();
-        attempt = root;
-      }
-      const previous = values.get(repo);
-      values.set(repo, {
-        repo,
-        iid,
-        url: String(payload.mrUrl ?? payload.mr_url ?? previous?.url ?? ''),
-        status: event.eventType === 'MergeRequestMerged' ? 'merged'
-          : event.eventType === 'MergeRequestClosed' ? 'closed' : String(payload.state ?? 'opened'),
-      });
-    } catch {
-      // 时间线原始事件仍可查看，坏 payload 不影响其它 MR。
-    }
-  });
-  return [...values.values()];
-}
-
-function isTerminal(status?: string) {
-  return ['completed', 'cancelled', 'rejected'].includes(status || '');
-}
-
-function formatPayload(payload: string) {
-  try {
-    return JSON.stringify(JSON.parse(payload), null, 2);
-  } catch {
-    return payload;
-  }
-}
-
-function parsePlanPayload(payload?: string): PlanView | null {
-  if (!payload) {
-    return null;
-  }
-  try {
-    // ExecutionPlanDrafted 是高频审阅事件，单独展开；其它事件继续走原 JSON。
-    const parsed = JSON.parse(payload) as { plan?: Record<string, unknown> };
-    const plan = parsed.plan;
-    if (!plan) {
-      return null;
-    }
-    return {
-      steps: stringList(plan.steps),
-      targetFiles: stringList(plan.target_files ?? plan.targetFiles),
-      testPlan: stringList(plan.test_plan ?? plan.testPlan),
-      risks: stringList(plan.risks),
-      assignments: Array.isArray(plan.assignments)
-        ? plan.assignments.flatMap((item) => item && typeof item === 'object' && typeof (item as Record<string, unknown>).role === 'string'
-          ? [{ role: String((item as Record<string, unknown>).role) }]
-          : [])
-        : [],
-    };
-  } catch {
-    return null;
-  }
-}
-
-function parseReleasePayload(payload?: string) {
-  if (!payload) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
-    return {
-      branch: String(parsed.branch ?? ''),
-      commitHash: String(parsed.commitHash ?? parsed.commit_hash ?? ''),
-      pushFailed: String(parsed.pushFailed ?? parsed.push_failed ?? ''),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function parseModificationPayload(payload?: string) {
-  if (!payload) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
-    const turns = typeof parsed.turns === 'number' ? parsed.turns : null;
-    const usage = parsed.tokenUsage ?? parsed.token_usage;
-    return {
-      provider: String(parsed.executionProvider ?? parsed.execution_provider ?? ''),
-      turns: turns !== null && Number.isFinite(turns) ? turns : null,
-      tokenUsage: usage && typeof usage === 'object' ? usage as Record<string, unknown> : {},
-      diffPatch: String(parsed.diffPatch ?? parsed.diff_patch ?? ''),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function parseAgentStagePayload(payload?: string) {
-  if (!payload) return null;
-  try {
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
-    const usage = parsed.tokenUsage ?? parsed.token_usage;
-    const stageIndex = parsed.stageIndex ?? parsed.stage_index;
-    return {
-      stageIndex: typeof stageIndex === 'number' && Number.isInteger(stageIndex) ? stageIndex : null,
-      role: String(parsed.role ?? ''),
-      engine: String(parsed.engine ?? ''),
-      summary: String(parsed.summary ?? ''),
-      changedPaths: stringList(parsed.changedPaths ?? parsed.changed_paths),
-      tokenUsage: usage && typeof usage === 'object' ? usage as Record<string, unknown> : {},
-    };
-  } catch {
-    return null;
-  }
-}
-
-function buildStageProgress(events: WorkItemEvent[], lifecycleStatus: string): StageProgressItem[] {
-  let planIndex = -1;
-  let assignments: { role: string }[] = [];
-  events.forEach((event, index) => {
-    if (event.eventType === 'ExecutionPlanDrafted') {
-      planIndex = index;
-      assignments = parsePlanPayload(event.payloadJson)?.assignments ?? [];
-    }
-  });
-  if (assignments.length === 0) return [];
-
-  const stages: StageProgressItem[] = assignments.map(({ role }) => ({ role, status: 'pending' }));
-  let failedIndex: number | null = null;
-  events.slice(planIndex + 1).forEach((event) => {
-    if (event.eventType === 'AgentStageCompleted') {
-      const completed = parseAgentStagePayload(event.payloadJson);
-      const index = completed?.stageIndex ?? stages.findIndex((stage) => stage.role === completed?.role && stage.status === 'pending');
-      if (index >= 0 && index < stages.length) stages[index].status = 'completed';
-    }
-    if (event.eventType === 'WorkerBlocked' && lifecycleStatus === 'worker_blocked') {
-      failedIndex = null;
-      try {
-        const payload = JSON.parse(event.payloadJson || '{}') as Record<string, unknown>;
-        const failed = payload.failed_stage ?? payload.failedStage;
-        if (failed && typeof failed === 'object') {
-          const index = (failed as Record<string, unknown>).index;
-          failedIndex = typeof index === 'number' && Number.isInteger(index) ? index : null;
-        }
-      } catch {
-        failedIndex = null;
-      }
-    }
-  });
-  if (failedIndex !== null && failedIndex >= 0 && failedIndex < stages.length) {
-    stages[failedIndex].status = 'failed';
-  } else if (lifecycleStatus === 'activated') {
-    const running = stages.find((stage) => stage.status === 'pending');
-    if (running) running.status = 'running';
-  }
-  return stages;
 }
 
 function formatTokenUsage(usage: Record<string, unknown>) {
@@ -475,14 +562,33 @@ function formatTokenUsage(usage: Record<string, unknown>) {
   return parts.join(' / ') || '未返回';
 }
 
-function stringList(value: unknown) {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+function elapsedTime(start?: string, end?: string) {
+  if (!start) return '-';
+  return formatDuration(Math.max(0, new Date(end || Date.now()).getTime() - new Date(start).getTime()));
 }
 
-function formatTime(value?: string) {
-  if (!value) {
-    return '-';
+function formatDuration(value?: number) {
+  if (value == null || !Number.isFinite(value)) return '-';
+  const minutes = Math.floor(value / 60000);
+  if (minutes < 1) return '不到 1 分钟';
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时 ${minutes % 60} 分钟`;
+  return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
+}
+
+function shortHash(value: string) {
+  return value.length > 8 ? value.slice(0, 8) : value;
+}
+
+function formatPayload(payload: string) {
+  try {
+    return JSON.stringify(JSON.parse(payload), null, 2);
+  } catch {
+    return payload;
   }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function isTerminal(status?: string) {
+  return ['completed', 'cancelled', 'rejected'].includes(status || '');
 }

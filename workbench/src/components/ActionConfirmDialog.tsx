@@ -1,7 +1,7 @@
 import { AlertTriangle } from 'lucide-react';
-import { useEffect, useId, useRef } from 'react';
+import { ReactNode, useEffect, useId, useRef } from 'react';
 
-export function ActionConfirmDialog({ open, title, description, confirmLabel = '确认', pending = false, tone = 'danger', alert = false, showCancel = true, onClose, onConfirm }: {
+export function ActionConfirmDialog({ open, title, description, confirmLabel = '确认', pending = false, tone = 'danger', alert = false, showCancel = true, fields, onClose, onConfirm }: {
   open: boolean;
   title: string;
   description: string;
@@ -10,6 +10,7 @@ export function ActionConfirmDialog({ open, title, description, confirmLabel = '
   tone?: 'danger' | 'primary';
   alert?: boolean;
   showCancel?: boolean;
+  fields?: ReactNode;
   onClose: () => void;
   onConfirm: () => void;
 }) {
@@ -38,6 +39,7 @@ export function ActionConfirmDialog({ open, title, description, confirmLabel = '
         <p id={descriptionId}>{description}</p>
       </div>
     </div>
+    {fields}
     <div className="action-confirm-actions">
       {showCancel && <button type="button" className="secondary" disabled={pending} onClick={onClose}>取消</button>}
       <button type="button" className={tone === 'danger' ? 'danger-action' : ''} disabled={pending} onClick={onConfirm}>

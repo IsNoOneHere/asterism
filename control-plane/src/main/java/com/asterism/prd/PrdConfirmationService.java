@@ -113,7 +113,10 @@ public class PrdConfirmationService {
                     current.title(), current.goal(), current.draftJson(), current.missingFields(), "waiting_owner_approval",
                     current.createdBy(), actor.getName(), now, current.createdAt(), Instant.now()));
             append(DomainEventType.OwnerApprovalRequested, current.systemId(), caseId, prdId, workItemId, actor.getName(),
-                    "OwnerApprovalRequested:" + workItemId, Map.of("caseId", caseId));
+                    "OwnerApprovalRequested:" + workItemId, Map.of(
+                            "caseId", caseId,
+                            "releaseMode", gitConfig.releaseMode(),
+                            "validationMode", gitConfig.validationMode()));
         } catch (RuntimeException error) {
             aggregate.update(new PrdSession(
                     current.prdId(), current.systemId(), current.conversationId(), workItemId, caseId,

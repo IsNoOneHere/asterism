@@ -70,6 +70,7 @@ class DeepAgentsExecutionProvider(ExecutionProvider):
             handoff = str((request.model_extra or {}).get("handoff_summary") or "无")
         prompt = (
             f"目标: {request.goal}\n验收标准: {request.acceptance_criteria}\n"
+            f"人工反馈: {request.feedback or '无'}\n"
             f"计划: {request.plan.steps}\n本阶段步骤引用: {request.step_refs or ['全部']}\n"
             f"前序结构化交接: {handoff}"
         )

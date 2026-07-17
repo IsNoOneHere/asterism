@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Callable
 from hmac import compare_digest
 
@@ -9,6 +10,8 @@ from pydantic import ValidationError
 from agent_service.contracts import DraftRequest, DraftResult, ExecutionPlan, ExecutionRequest, ExecutionResult, PlanRequest, UiObservation
 from agent_service.llm import LlmClient, ModelConfig, OpenAIChatClient, default_model_config, merge_model_config
 from agent_service.settings import AgentSettings
+
+log = logging.getLogger(__name__)
 
 
 def create_app(
@@ -99,7 +102,45 @@ def create_app(
             },
         }
 
+    @app.post("/model-connection-test")
+    def model_connection_test(system_id: str, profile_id: str, request: Request) -> dict:
+        if not compare_digest(
+            request.headers.get("authorization", ""),
+            f"Bearer {settings.worker_callback_token}",
+        ):
+            raise HTTPException(status_code=401, detail="invalid internal token")
+        return _test_model_connection(fetch_model_config(system_id, "developer", profile_id))
+
     return app
+
+
+def _test_model_connection(config: ModelConfig) -> dict:
+    if not config.model:
+        return {"connected": False, "message": "模型名称未配置"}
+    if not config.api_key:
+        return {"connected": False, "message": "API Key 未配置"}
+    anthropic = config.provider == "anthropic"
+    base_url = config.base_url.rstrip("/") or ("https://api.anthropic.com" if anthropic else "https://api.openai.com/v1")
+    headers = {"Authorization": f"Bearer {config.api_key}"}
+    if anthropic:
+        headers.update({"x-api-key": config.api_key, "anthropic-version": "2023-06-01"})
+    try:
+        # 最多生成 1 token，同时验证地址、密钥和模型真实可用。
+        response = httpx.post(
+            base_url + ("/v1/messages" if anthropic else "/chat/completions"),
+            headers=headers,
+            json={"model": config.model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]},
+            timeout=10,
+        )
+        connected = response.is_success
+        log.info("模型连通性测试 provider=%s model=%s connected=%s status=%s",
+                 config.provider, config.model, connected, response.status_code)
+        return {"connected": connected,
+                "message": "连接正常" if connected else f"连接失败（HTTP {response.status_code}）"}
+    except httpx.HTTPError as error:
+        log.warning("模型连通性测试失败 provider=%s model=%s type=%s",
+                    config.provider, config.model, type(error).__name__)
+        return {"connected": False, "message": f"连接失败（{type(error).__name__}）"}
 
 
 def _strict_json(llm: LlmClient, prompt: str, model_config: ModelConfig, schema, error_detail: str):

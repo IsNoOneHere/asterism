@@ -19,7 +19,7 @@ const repoSchema = z.object({
 
 const schema = z.object({
   systemId: z.string().min(1, '请输入系统编号'), name: z.string().min(1, '请输入系统名称'), description: z.string(), ownerUserId: z.string().min(1, '请选择系统负责人'),
-  releaseMode: z.enum(['local', 'gitlab']), validationMode: z.enum(['auto', 'skip']),
+  releaseMode: z.enum(['local', 'gitlab']), validationMode: z.enum(['auto', 'manual', 'skip']),
   mrTargetBranch: z.string(), mrLabels: z.string(), gitlabBaseUrl: z.string(), gitlabToken: z.string(),
   repos: z.array(repoSchema).min(1, '至少配置一个代码仓库'),
 });
@@ -201,7 +201,7 @@ export function SystemsPage() {
           <fieldset className="config-subsection"><legend>Git 与发布</legend>
             <div className="config-dialog-fields system-dialog-fields">
               <label>发布模式<select {...form.register('releaseMode')}><option value="local">Local</option><option value="gitlab">GitLab MR</option></select></label>
-              <label>验证模式<select {...form.register('validationMode')}><option value="auto">自动运行仓库测试</option><option value="skip">交给 MR CI / 人工</option></select></label>
+              <label>验证模式<select {...form.register('validationMode')}><option value="auto">自动运行仓库测试</option><option value="manual">等待人工验证</option><option value="skip">跳过，交给 MR CI</option></select></label>
               <label>MR 目标分支<input {...form.register('mrTargetBranch')} placeholder="默认使用仓库 defaultBranch" /></label>
               <label>MR Labels<input {...form.register('mrLabels')} placeholder="每行一个" /></label>
               <label className="wide-field">GitLab 覆盖地址<input {...form.register('gitlabBaseUrl')} placeholder="留空使用全局 ASTERISM_GITLAB_BASE_URL" />

@@ -40,6 +40,22 @@ test('model profile can be added without ever rendering its key', async () => {
   expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/model-profiles', expect.objectContaining({ method: 'POST' }));
 });
 
+test.each([
+  { connected: true, label: '连接正常', className: 'connected' },
+  { connected: false, label: '连接失败', className: 'failed' },
+])('model connectivity test renders $label status', async ({ connected, label, className }) => {
+  const path = '/api/v5/systems/alpha-system/model-profiles/mp-1/connection-test';
+  setApiResponse(path, { connected, message: connected ? '连接正常' : '连接失败（HTTP 401）' });
+  renderApp('/models');
+
+  const button = await screen.findByRole('button', { name: '测试 Claude 主模型连通性' });
+  fireEvent.click(button);
+
+  await waitFor(() => expect(button).toHaveTextContent(label));
+  expect(button).toHaveClass(className);
+  expect(fetch).toHaveBeenCalledWith(path, expect.objectContaining({ method: 'POST' }));
+});
+
 test('custom agent can select deepagents profile and path scope', async () => {
   renderApp('/agents');
   await screen.findAllByText('frontend-dev');

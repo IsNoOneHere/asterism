@@ -5,11 +5,25 @@ from temporalio.common import RetryPolicy
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, ApplicationError
 
-from asterism_worker.contracts import AgentAssignment, CaseInput, ContextSnapshot, ExecutionPlan, ExecutionResult, GitlabPublishResult, HandoffContext, MergeRequestRef, PatchApplyResult, ProjectionEvent, RepoSnapshot, ValidationResult
+from asterism_worker.contracts import AgentAssignment, CaseInput, ContextSnapshot, ExecutionPlan, ExecutionResult, GitlabPublishResult, HandoffContext, LifecycleStatus, MergeRequestRef, PatchApplyResult, ProjectionEvent, RepoSnapshot, ValidationResult
 from asterism_worker.workflows.state_machine import CaseState, TERMINAL_STATUSES
 
 HANDOFF_DIFF_LIMIT_BYTES = 32 * 1024
 MERGE_POLL_INTERVAL = timedelta(seconds=60)
+ACTION_STATUSES = {
+    "owner_approved": {"waiting_owner_approval"},
+    "owner_rejected": {"waiting_owner_approval"},
+    "start_modification": {"activated"},
+    "patch_apply_approved": {"modification_completed"},
+    "patch_apply_rejected": {"modification_completed"},
+    "validation_passed": {"patch_applied"},
+    "validation_rejected": {"patch_applied"},
+    "release_approved": {"validation_passed"},
+    "rework": {"worker_blocked", "patch_rejected", "validation_failed", "waiting_merge"},
+    "check_merge_status": {"waiting_merge"},
+    "cancel_case": {"waiting_owner_approval", "activated", "worker_blocked", "modification_completed",
+                    "patch_rejected", "validation_failed", "validation_passed", "waiting_merge"},
+}
 
 
 @workflow.defn(name="AgentTeamV5CaseWorkflow")
@@ -17,7 +31,9 @@ class AsterismCaseWorkflow:
     def __init__(self) -> None:
         self.state = CaseState()
         self.case_input: CaseInput | None = None
-        self.pending_actions: list[tuple[str, str]] = []
+        self.pending_actions: list[tuple[str, str, dict]] = []
+        self.processed_signal_ids: set[str] = set()
+        self.signal_dedup_enabled = False
         self.execution_plan: ExecutionPlan | None = None
         self.context_snapshot: ContextSnapshot | None = None
         self.completed_stage_results: list[ExecutionResult] = []
@@ -28,6 +44,11 @@ class AsterismCaseWorkflow:
         self.merge_requests: list[MergeRequestRef] = []
         self.merged_repos: set[str] = set()
         self.gitlab_releases: list[dict] = []
+        self.local_releases: list[dict] = []
+        self.expected_remote_commits: dict[str, str] = {}
+        self.validation_commands: list[dict] = []
+        self.resume_phase = ""
+        self.rework_feedback = ""
 
     @workflow.run
     async def run(self, case_input: CaseInput) -> str:
@@ -37,6 +58,8 @@ class AsterismCaseWorkflow:
         # 多仓会改变 activity payload，旧 history 必须继续走原单仓命令。
         self.multi_repo_enabled = workflow.patched("multi-repo-workspace-v1")
         self.gitlab_release_enabled = workflow.patched("gitlab-release-v1")
+        # 新 signal 带请求上下文并在 workflow 内去重；旧 history 的字符串 signal 仍可 replay。
+        self.signal_dedup_enabled = workflow.patched("manual-action-context-v1")
         while self.state.status not in TERMINAL_STATUSES:
             if self._is_gitlab() and self.state.status.value == "waiting_merge":
                 try:
@@ -50,79 +73,98 @@ class AsterismCaseWorkflow:
             else:
                 await workflow.wait_condition(lambda: bool(self.pending_actions) or self.state.status in TERMINAL_STATUSES)
             while self.pending_actions:
-                action, signal_id = self.pending_actions.pop(0)
-                await self._handle_action(action, signal_id)
+                action, signal_id, context = self.pending_actions.pop(0)
+                if self.signal_dedup_enabled:
+                    self.processed_signal_ids.add(signal_id)
+                accepted = await self._handle_action(action, signal_id, context)
+                await self._emit("TemporalActionCompleted", signal_id, {
+                    "action": action,
+                    "signalId": signal_id,
+                    "accepted": accepted,
+                    "status": self.state.status.value,
+                    **context,
+                })
         return self.state.status.value
 
     @workflow.signal
-    async def owner_approved(self, signal_id: str) -> None:
-        self.pending_actions.append(("owner_approved", signal_id))
+    async def owner_approved(self, signal: str | dict) -> None:
+        self._enqueue("owner_approved", signal)
 
     @workflow.signal
-    async def start_modification(self, signal_id: str) -> None:
-        self.pending_actions.append(("start_modification", signal_id))
+    async def start_modification(self, signal: str | dict) -> None:
+        self._enqueue("start_modification", signal)
 
     @workflow.signal
-    async def patch_apply_approved(self, signal_id: str) -> None:
-        self.pending_actions.append(("patch_apply_approved", signal_id))
+    async def patch_apply_approved(self, signal: str | dict) -> None:
+        self._enqueue("patch_apply_approved", signal)
 
     @workflow.signal
-    async def patch_apply_rejected(self, signal_id: str) -> None:
-        self.pending_actions.append(("patch_apply_rejected", signal_id))
+    async def patch_apply_rejected(self, signal: str | dict) -> None:
+        self._enqueue("patch_apply_rejected", signal)
 
     @workflow.signal
-    async def validation_passed(self, signal_id: str) -> None:
-        self.pending_actions.append(("validation_passed", signal_id))
+    async def validation_passed(self, signal: str | dict) -> None:
+        self._enqueue("validation_passed", signal)
 
     @workflow.signal
-    async def validation_rejected(self, signal_id: str) -> None:
-        self.pending_actions.append(("validation_rejected", signal_id))
+    async def validation_rejected(self, signal: str | dict) -> None:
+        self._enqueue("validation_rejected", signal)
 
     @workflow.signal
-    async def rework(self, signal_id: str) -> None:
-        self.pending_actions.append(("rework", signal_id))
+    async def rework(self, signal: str | dict) -> None:
+        self._enqueue("rework", signal)
 
     @workflow.signal
-    async def release_approved(self, signal_id: str) -> None:
-        self.pending_actions.append(("release_approved", signal_id))
+    async def release_approved(self, signal: str | dict) -> None:
+        self._enqueue("release_approved", signal)
 
     @workflow.signal
-    async def check_merge_status(self, signal_id: str) -> None:
-        self.pending_actions.append(("check_merge_status", signal_id))
+    async def check_merge_status(self, signal: str | dict) -> None:
+        self._enqueue("check_merge_status", signal)
 
     @workflow.signal
-    async def cancel_case(self, signal_id: str) -> None:
-        self.pending_actions.append(("cancel_case", signal_id))
+    async def cancel_case(self, signal: str | dict) -> None:
+        self._enqueue("cancel_case", signal)
 
     @workflow.signal
-    async def owner_rejected(self, signal_id: str) -> None:
-        self.pending_actions.append(("owner_rejected", signal_id))
+    async def owner_rejected(self, signal: str | dict) -> None:
+        self._enqueue("owner_rejected", signal)
 
     @workflow.query
     def current_status(self) -> str:
         return self.state.status.value
 
-    async def _handle_action(self, action: str, signal_id: str) -> None:
+    async def _handle_action(self, action: str, signal_id: str, context: dict) -> bool:
+        if self.state.status.value not in ACTION_STATUSES.get(action, set()):
+            workflow.logger.warning("非法或过期 signal，已拒绝", extra={"action": action, "status": self.state.status.value})
+            return False
+        feedback = "\n".join(str(context.get(key, "")).strip() for key in ("note", "evidence")
+                             if str(context.get(key, "")).strip())
+        if feedback and action in {"patch_apply_rejected", "validation_rejected", "rework"}:
+            self.rework_feedback = feedback
         if action == "owner_approved":
             await self._emit(self.state.owner_approved(), signal_id, {})
-            return
+            return True
         if action == "start_modification":
             await self._start_modification(signal_id)
-            return
+            return True
         if action == "patch_apply_approved":
             await self._apply_patch(signal_id)
-            return
+            return True
         if action == "release_approved":
             await self._release(signal_id)
-            return
+            return True
         if action == "rework":
             await self._rework(signal_id)
-            return
+            return True
         if action == "check_merge_status":
             await self._poll_merge_requests(signal_id)
-            return
-        if action in {"patch_apply_rejected", "cancel_case", "owner_rejected"}:
-            await self._revert_if_needed(signal_id)
+            return True
+        if action == "validation_rejected" or (action == "cancel_case" and self.state.status == LifecycleStatus.validation_passed):
+            failed = await self._revert_if_needed(signal_id)
+            if failed:
+                await self._block_worker(signal_id, "patch_revert_failed", RuntimeError(failed))
+                return True
         events = {
             "patch_apply_rejected": self.state.patch_apply_rejected,
             "validation_passed": self.state.validation_passed,
@@ -130,7 +172,20 @@ class AsterismCaseWorkflow:
             "cancel_case": self.state.cancel_case,
             "owner_rejected": self.state.owner_rejected,
         }
-        await self._emit(events[action](), signal_id, {})
+        await self._emit(events[action](), signal_id, context)
+        return True
+
+    def _enqueue(self, action: str, signal: str | dict) -> None:
+        context = dict(signal) if isinstance(signal, dict) else {}
+        signal_id = str(context.pop("signal_id", "") if context else signal)
+        if not signal_id:
+            workflow.logger.warning("忽略缺少 signal_id 的手动动作", extra={"action": action})
+            return
+        duplicate = signal_id in self.processed_signal_ids or any(item[1] == signal_id for item in self.pending_actions)
+        if self.signal_dedup_enabled and duplicate:
+            workflow.logger.info("忽略重复手动动作", extra={"action": action, "signal_id": signal_id})
+            return
+        self.pending_actions.append((action, signal_id, context))
 
     async def _start_modification(self, signal_id: str) -> None:
         case_input = self._case_input()
@@ -172,6 +227,7 @@ class AsterismCaseWorkflow:
                 "memories": snapshot.approved_memories,
                 "allowed_paths": case_input.allowed_paths,
                 "context_manifest_id": snapshot.manifest_id,
+                "feedback": self.rework_feedback,
             }
             if self.multi_repo_enabled:
                 plan_request["repos"] = [repo.model_dump() for repo in case_input.effective_repos()]
@@ -223,6 +279,11 @@ class AsterismCaseWorkflow:
         self.context_snapshot = snapshot
         self.completed_stage_results = []
         self.failed_stage_index = None
+        self.local_releases = []
+        self.gitlab_releases = []
+        self.merge_requests = []
+        self.validation_commands = []
+        self.resume_phase = ""
         result = await self._run_execution_plan(signal_id, plan, snapshot)
         if result is None:
             return
@@ -336,6 +397,7 @@ class AsterismCaseWorkflow:
             "repo_path": repo.local_path if repo else case_input.repo_path,
             "goal": case_input.prd.goal,
             "acceptance_criteria": case_input.prd.acceptance_criteria,
+            "feedback": self.rework_feedback,
             "plan": self._plan_payload(plan),
             "memories": snapshot.approved_memories,
             "context_manifest_id": snapshot.manifest_id,
@@ -362,13 +424,41 @@ class AsterismCaseWorkflow:
 
     async def _rework(self, signal_id: str) -> None:
         waiting_merge = self.state.status.value == "waiting_merge"
+        resume_phase = self.resume_phase
         event = self.state.rework()
         await self._emit(event, signal_id, {})
         if event is None:
             return
         if waiting_merge:
             # MR 阶段重做直接生成新 diff，仍需人工审核后才更新远端分支。
+            self.expected_remote_commits = {item["repo"]: item["commitHash"] for item in self.gitlab_releases}
+            self.gitlab_releases = []
+            self.merge_requests = []
+            self.merged_repos = set()
             await self._start_modification(signal_id)
+            return
+        if resume_phase and self.context_snapshot is not None:
+            # 发布副作用已按仓库落审计，重试只恢复状态并继续未完成仓库，不重新调用 Agent。
+            result = ExecutionResult(summary="继续未完成的发布", diff_patch=self.state.diff_patch,
+                                     execution_provider="workflow-resume")
+            await self._finish_modification(signal_id, result, self.context_snapshot)
+            if resume_phase == "gitlab_publish":
+                await self._publish_gitlab(signal_id)
+            elif resume_phase == "gitlab_ready":
+                await self._publish_gitlab(signal_id)
+                if self.state.status == LifecycleStatus.patch_applied:
+                    await self._emit(self.state.validation_passed(), signal_id, {
+                        "commands": self.validation_commands, "reused": True,
+                    })
+                await self._release(signal_id)
+            else:
+                await self._apply_patch(signal_id)
+                if self.state.status == LifecycleStatus.patch_applied:
+                    await self._emit(self.state.validation_passed(), signal_id, {
+                        "commands": self.validation_commands, "reused": True,
+                    })
+                if self.state.status == LifecycleStatus.validation_passed:
+                    await self._release(signal_id)
             return
         if not self._can_resume():
             return
@@ -525,23 +615,32 @@ class AsterismCaseWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
             except (ActivityError, ApplicationError) as error:
-                await self._revert_changes(applied, signal_id)
-                await self._block_worker(signal_id, "patch_apply_failed", error,
+                failed = await self._revert_changes(applied, signal_id)
+                await self._block_worker(signal_id, "patch_revert_failed" if failed else "patch_apply_failed",
+                                         RuntimeError(failed) if failed else error,
                                          {"repo": repo.repo_id} if self.multi_repo_enabled else None)
                 return
             result = PatchApplyResult.model_validate(result_payload)
             if result.blocked:
-                await self._revert_changes(applied, signal_id)
-                await self._emit(self.state.patch_apply_blocked(), signal_id, {
-                    "reason": result.reason,
-                    **({"repo": repo.repo_id} if self.multi_repo_enabled else {}),
-                })
+                failed = await self._revert_changes(applied, signal_id)
+                if failed:
+                    await self._block_worker(signal_id, "patch_revert_failed", RuntimeError(failed),
+                                             {"repo": repo.repo_id} if self.multi_repo_enabled else None)
+                else:
+                    await self._emit(self.state.patch_apply_blocked(), signal_id, {
+                        "reason": result.reason,
+                        **({"repo": repo.repo_id} if self.multi_repo_enabled else {}),
+                    })
                 return
             applied.append((repo, diff_patch))
         await self._emit(self.state.patch_apply_approved(), signal_id,
                          {"repositories": [repo.repo_id for repo, _ in changes]} if self.multi_repo_enabled else {})
-        if any(repo.test_commands for repo, _ in changes):
+        if case_input.validation_mode == "auto" and any(repo.test_commands for repo, _ in changes):
             await self._run_validation(signal_id)
+        elif case_input.validation_mode != "manual":
+            await self._emit(self.state.validation_passed(), signal_id, {
+                "commands": [], "failedCommand": "", "stderrTail": "", "skipped": True,
+            })
 
     async def _publish_gitlab(self, signal_id: str) -> None:
         case_input = self._case_input()
@@ -549,8 +648,10 @@ class AsterismCaseWorkflow:
         await self._emit(self.state.patch_apply_approved(), signal_id, {
             "repositories": [repo.repo_id for repo, _ in changes],
         })
-        published: list[tuple[RepoSnapshot, str, GitlabPublishResult]] = []
+        prepared_repos = {item["repo"] for item in self.gitlab_releases}
         for repo, diff_patch in changes:
+            if repo.repo_id in prepared_repos:
+                continue
             try:
                 payload = await workflow.execute_activity(
                     "publish_merge_request",
@@ -565,15 +666,18 @@ class AsterismCaseWorkflow:
                         "validation_mode": case_input.validation_mode,
                         "mr_target_branch": case_input.mr_target_branch,
                         "mr_labels": case_input.mr_labels,
+                        "expected_remote_commit": self.expected_remote_commits.get(repo.repo_id, ""),
                     },
                     start_to_close_timeout=timedelta(minutes=15),
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
             except (ActivityError, ApplicationError) as error:
+                self.resume_phase = "gitlab_publish"
                 await self._block_worker(signal_id, "mr_create_failed", error, {"repo": repo.repo_id})
                 return
             result = GitlabPublishResult.model_validate(payload)
             if not result.validation.passed:
+                self.resume_phase = ""
                 await self._emit(self.state.validation_rejected(), signal_id, {
                     "repo": repo.repo_id,
                     "commands": [command.model_dump() for command in result.validation.commands],
@@ -582,43 +686,63 @@ class AsterismCaseWorkflow:
                 })
                 return
             if result.merge_request is None:
+                self.resume_phase = "gitlab_publish"
                 await self._block_worker(signal_id, "mr_create_failed", RuntimeError("MR response missing"),
                                          {"repo": repo.repo_id})
                 return
-            published.append((repo, diff_patch, result))
-
-        commands = [
-            {**command.model_dump(), "repo": repo.repo_id}
-            for repo, _, result in published
-            for command in result.validation.commands
-        ]
-        await self._emit(self.state.validation_passed(), signal_id, {
-            "commands": commands,
-            "failedCommand": "",
-            "stderrTail": "",
-            "skipped": case_input.validation_mode == "skip",
-        })
-        self.merge_requests = [result.merge_request for _, _, result in published if result.merge_request]
-        self.merged_repos = set()
-        self.gitlab_releases = [
-            {
+            self.validation_commands.extend(
+                {**command.model_dump(), "repo": repo.repo_id} for command in result.validation.commands
+            )
+            release = {
                 "repo": repo.repo_id,
+                "project": repo.gitlab_project,
                 "branch": result.branch,
                 "commitHash": result.commit_hash,
                 "changedPaths": self._diff_paths(diff_patch),
                 "mrIid": result.merge_request.mr_iid,
                 "mrUrl": result.merge_request.mr_url,
+                "state": result.merge_request.state,
             }
-            for repo, diff_patch, result in published
-            if result.merge_request
-        ]
+            self.gitlab_releases.append(release)
+            self.merge_requests.append(result.merge_request)
+            await self._emit("RepositoryReleasePrepared", signal_id, release,
+                             suffix=f"repo:{repo.repo_id}:{result.commit_hash}")
+
+        self.resume_phase = ""
+        if case_input.validation_mode == "manual":
+            return
+        await self._emit(self.state.validation_passed(), signal_id, {
+            "commands": self.validation_commands,
+            "failedCommand": "",
+            "stderrTail": "",
+            "skipped": case_input.validation_mode == "skip",
+        })
+        await self._activate_gitlab_mrs(signal_id, ready=False)
+
+    async def _activate_gitlab_mrs(self, signal_id: str, ready: bool) -> None:
+        if not self.merge_requests:
+            raise ApplicationError("没有可提交的 GitLab MR", non_retryable=True)
+        if ready:
+            payload = await workflow.execute_activity(
+                "ready_merge_requests",
+                {
+                    "system_id": self._case_input().system_id,
+                    "repos": [repo.model_dump() for repo in self._case_input().effective_repos()],
+                    "merge_requests": [item.model_dump() for item in self.merge_requests],
+                },
+                start_to_close_timeout=timedelta(minutes=1),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+            self.merge_requests = [MergeRequestRef.model_validate(item) for item in payload]
+        self.merged_repos = set()
         event_type = self.state.merge_requests_created()
-        for index, merge_request in enumerate(self.merge_requests):
-            release = self.gitlab_releases[index]
-            await self._emit(event_type if index == 0 else "MergeRequestCreated", signal_id, {
+        for merge_request in self.merge_requests:
+            release = next(item for item in self.gitlab_releases if item["repo"] == merge_request.repo)
+            await self._emit(event_type, signal_id, {
                 **release,
                 "state": merge_request.state,
             }, suffix=f"mr:{merge_request.repo}:{merge_request.mr_iid}")
+            event_type = "MergeRequestCreated"
         await self._poll_merge_requests("merge-created")
 
     async def _poll_merge_requests(self, causation_id: str) -> None:
@@ -675,8 +799,18 @@ class AsterismCaseWorkflow:
         if self.state.status.value != "validation_passed":
             workflow.logger.warning("非法 release_approved，已忽略", extra={"status": self.state.status.value})
             return
-        releases = []
+        if self._is_gitlab():
+            try:
+                await self._activate_gitlab_mrs(signal_id, ready=case_input.validation_mode == "manual")
+            except (ActivityError, ApplicationError) as error:
+                self.resume_phase = "gitlab_ready"
+                await self._block_worker(signal_id, "mr_ready_failed", error)
+            return
+        self.local_releases = [item for item in self.local_releases if not item.get("pushFailed")]
+        prepared_repos = {item["repo"] for item in self.local_releases}
         for repo, diff_patch in self._repo_diffs():
+            if repo.repo_id in prepared_repos:
+                continue
             try:
                 result = await workflow.execute_activity(
                     "run_release",
@@ -687,19 +821,30 @@ class AsterismCaseWorkflow:
                         "diff_patch": diff_patch,
                     },
                     start_to_close_timeout=timedelta(minutes=2),
-                    retry_policy=RetryPolicy(maximum_attempts=1),
+                    retry_policy=RetryPolicy(maximum_attempts=2),
                 )
             except (ActivityError, ApplicationError) as error:
+                self.resume_phase = "local_release"
                 await self._block_worker(signal_id, "release_failed", error,
                                          {"repo": repo.repo_id} if self.multi_repo_enabled else None)
                 return
-            releases.append({
+            release = {
                 "repo": repo.repo_id,
                 "branch": result.get("branch", ""),
                 "commitHash": result.get("commit_hash", ""),
                 "pushFailed": result.get("push_failed", ""),
                 "changedPaths": self._diff_paths(diff_patch),
-            })
+            }
+            self.local_releases.append(release)
+            await self._emit("RepositoryReleasePrepared", signal_id, release,
+                             suffix=f"repo:{repo.repo_id}:{release['commitHash']}")
+            if release["pushFailed"]:
+                self.resume_phase = "local_release"
+                await self._block_worker(signal_id, "push_failed", RuntimeError(release["pushFailed"]),
+                                         {"repo": repo.repo_id} if self.multi_repo_enabled else None)
+                return
+        releases = self.local_releases
+        self.resume_phase = ""
         first = releases[0]
         payload = {
             "branch": first["branch"],
@@ -712,10 +857,10 @@ class AsterismCaseWorkflow:
             payload["repositories"] = releases
         await self._emit(self.state.release_approved(), signal_id, payload)
 
-    async def _revert_if_needed(self, signal_id: str) -> None:
+    async def _revert_if_needed(self, signal_id: str) -> str:
         if not self.state.diff_patch or self._is_gitlab():
-            return
-        await self._revert_changes(self._repo_diffs(), signal_id)
+            return ""
+        return await self._revert_changes(self._repo_diffs(), signal_id)
 
     async def _run_validation(self, signal_id: str) -> None:
         commands = []
@@ -734,6 +879,12 @@ class AsterismCaseWorkflow:
                 for command in result.commands
             ])
             if not result.passed:
+                self.validation_commands = commands
+                failed = await self._revert_if_needed(signal_id)
+                if failed:
+                    await self._block_worker(signal_id, "patch_revert_failed", RuntimeError(failed),
+                                             {"repo": repo.repo_id} if self.multi_repo_enabled else None)
+                    return
                 await self._emit(self.state.validation_rejected(), signal_id, {
                     "commands": commands,
                     "failedCommand": result.failed_command,
@@ -741,24 +892,29 @@ class AsterismCaseWorkflow:
                     **({"repo": repo.repo_id} if self.multi_repo_enabled else {}),
                 })
                 return
+        self.validation_commands = commands
         await self._emit(self.state.validation_passed(), signal_id, {
             "commands": commands,
             "failedCommand": "",
             "stderrTail": "",
         })
 
-    async def _revert_changes(self, changes: list, signal_id: str) -> None:
+    async def _revert_changes(self, changes: list, signal_id: str) -> str:
         for repo, diff_patch in changes:
             try:
-                await workflow.execute_activity(
+                result = await workflow.execute_activity(
                     "revert_patch",
                     {"repo_path": repo.local_path, "diff_patch": diff_patch},
                     start_to_close_timeout=timedelta(minutes=1),
                     retry_policy=RetryPolicy(maximum_attempts=1),
                 )
-            except (ActivityError, ApplicationError):
-                workflow.logger.warning("回滚 patch activity 失败，继续处理信号",
+                if result.get("failed"):
+                    return f"{repo.repo_id}: {result['failed']}"
+            except (ActivityError, ApplicationError) as error:
+                workflow.logger.warning("回滚 patch activity 失败",
                                         extra={"signal_id": signal_id, "repo": repo.repo_id})
+                return f"{repo.repo_id}: {self._error_detail(error)}"
+        return ""
 
     async def _emit(self, event_type: str | None, signal_id: str, payload: dict, suffix: str = "") -> None:
         if event_type is None:

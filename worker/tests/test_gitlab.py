@@ -73,17 +73,27 @@ def test_existing_branch_uses_force_with_lease_and_cleans_credentials(monkeypatc
 
     def fake_run(command, **_kwargs):
         commands.append(command)
-        helper = next(value for value in command if value.startswith("credential.helper="))
-        credentials = workspace.parent / ".git-credentials"
-        # push 执行期间凭证存在且仅当前用户可读写。
-        assert helper.endswith(str(credentials))
-        assert stat.S_IMODE(credentials.stat().st_mode) == 0o600
-        stdout = "abc123 refs/heads/wi/wi-1\n" if "ls-remote" in command else ""
+        helpers = [value for value in command if value.startswith("credential.helper=")]
+        if helpers:
+            credentials = workspace.parent / ".git-credentials"
+            # 远端命令执行期间凭证存在且仅当前用户可读写。
+            assert helpers[0].endswith(str(credentials))
+            assert stat.S_IMODE(credentials.stat().st_mode) == 0o600
+        if "ls-remote" in command:
+            stdout = "abc123 refs/heads/wi/wi-1\n"
+        elif command[-1] == "refs/heads/wi/wi-1":
+            stdout = "def456\n"
+        elif command[-1] == "refs/heads/wi/wi-1^{tree}":
+            stdout = "new-tree\n"
+        elif command[-1] == "FETCH_HEAD^{tree}":
+            stdout = "old-tree\n"
+        else:
+            stdout = ""
         return SimpleNamespace(stdout=stdout)
 
     monkeypatch.setattr("asterism_worker.activities.gitlab.subprocess.run", fake_run)
 
-    _push_branch(workspace, "https://gitlab/group/api.git", token, "wi/wi-1")
+    _push_branch(workspace, "https://gitlab/group/api.git", token, "wi/wi-1", "abc123")
 
     assert any("--force-with-lease=refs/heads/wi/wi-1:abc123" in command for command in commands)
     assert token not in str(commands)

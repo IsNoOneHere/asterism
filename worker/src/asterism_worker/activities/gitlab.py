@@ -49,7 +49,9 @@ async def publish_merge_request(request: dict) -> dict:
             str(workspace), request["work_item_id"], request.get("title", ""), diff_patch,
         )
         clone_url = f"{base_url.rstrip('/')}/{repo.gitlab_project.strip('/')}.git"
-        _push_branch(workspace, clone_url, token, release.branch)
+        commit_hash = _push_branch(
+            workspace, clone_url, token, release.branch, request.get("expected_remote_commit", ""),
+        )
         merge_request = await _ensure_merge_request(
             base_url=base_url,
             token=token,
@@ -60,12 +62,13 @@ async def publish_merge_request(request: dict) -> dict:
             description=_description(request, settings.public_url or settings.control_plane_url),
             labels=request.get("mr_labels", []),
             repo_id=repo.repo_id,
+            draft=request.get("validation_mode") == "manual",
         )
         log.info("GitLab MR 已准备 repo=%s iid=%s", repo.repo_id, merge_request.mr_iid)
         return GitlabPublishResult(
             repo=repo.repo_id,
             branch=release.branch,
-            commit_hash=release.commit_hash,
+            commit_hash=commit_hash,
             merge_request=merge_request,
             validation=validation,
         ).model_dump()
@@ -91,28 +94,73 @@ async def check_merge_requests(request: dict) -> list[dict]:
                 mr_iid=current.mr_iid,
                 mr_url=str(data.get("web_url") or current.mr_url),
                 state=str(data.get("state", "opened")),
+                project=repo.gitlab_project,
             ).model_dump())
     log.info("GitLab MR 状态已轮询 count=%s", len(result))
     return result
 
 
-def _push_branch(workspace: Path, clone_url: str, token: str, branch: str) -> None:
+@activity.defn
+async def ready_merge_requests(request: dict) -> list[dict]:
+    settings = load_settings()
+    base_url, token = await fetch_git_connection(request["system_id"], settings)
+    repos = {repo.repo_id: repo for repo in map(RepoSnapshot.model_validate, request.get("repos", []))}
+    result = []
+    async with httpx.AsyncClient(timeout=20, headers={"PRIVATE-TOKEN": token}) as client:
+        for value in request.get("merge_requests", []):
+            current = MergeRequestRef.model_validate(value)
+            repo = repos[current.repo]
+            url = _mr_url(base_url, repo.gitlab_project, current.mr_iid)
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.json()
+            title = str(data.get("title", ""))
+            if title.lower().startswith("draft:"):
+                updated = await client.put(url, data={"title": title.split(":", 1)[1].strip()})
+                updated.raise_for_status()
+                data = updated.json()
+            result.append(_mr_ref(repo.repo_id, repo.gitlab_project, data).model_dump())
+    log.info("GitLab 候选 MR 已转为可合并 count=%s", len(result))
+    return result
+
+
+def _push_branch(workspace: Path, clone_url: str, token: str, branch: str,
+                 expected_remote_commit: str = "") -> str:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     with git_credentials(clone_url, token, workspace.parent) as auth:
         remote = subprocess.run(
             ["git", *auth, "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
             cwd=workspace, check=True, capture_output=True, text=True, env=env,
         ).stdout.strip()
+        local_ref = f"refs/heads/{branch}"
+        remote_ref = f"refs/heads/{branch}"
+        local_hash = subprocess.run(["git", "rev-parse", local_ref], cwd=workspace,
+                                    check=True, capture_output=True, text=True).stdout.strip()
+        remote_hash = remote.split()[0] if remote else ""
+        if remote_hash:
+            subprocess.run(["git", *auth, "fetch", "--no-tags", "origin", remote_ref], cwd=workspace,
+                           check=True, capture_output=True, text=True, env=env)
+            local_tree = subprocess.run(["git", "rev-parse", f"{local_ref}^{{tree}}"], cwd=workspace,
+                                        check=True, capture_output=True, text=True).stdout.strip()
+            remote_tree = subprocess.run(["git", "rev-parse", "FETCH_HEAD^{tree}"], cwd=workspace,
+                                         check=True, capture_output=True, text=True).stdout.strip()
+            if local_tree == remote_tree:
+                return remote_hash
+            if not expected_remote_commit or remote_hash != expected_remote_commit:
+                raise RuntimeError("远端工作项分支已被其他人修改")
+        elif expected_remote_commit:
+            raise RuntimeError("远端工作项分支已被删除")
         command = ["git", *auth, "push"]
-        if remote:
-            command.append(f"--force-with-lease=refs/heads/{branch}:{remote.split()[0]}")
-        command.extend(["origin", f"HEAD:refs/heads/{branch}"])
+        if remote_hash:
+            command.append(f"--force-with-lease={remote_ref}:{remote_hash}")
+        command.extend(["origin", f"{local_ref}:{remote_ref}"])
         subprocess.run(command, cwd=workspace, check=True, capture_output=True, text=True, env=env)
+        return local_hash
 
 
 async def _ensure_merge_request(base_url: str, token: str, project: str, source_branch: str,
                                 target_branch: str, title: str, description: str,
-                                labels: list[str], repo_id: str) -> MergeRequestRef:
+                                labels: list[str], repo_id: str, draft: bool = False) -> MergeRequestRef:
     headers = {"PRIVATE-TOKEN": token}
     url = _mrs_url(base_url, project)
     params = {"state": "opened", "source_branch": source_branch, "target_branch": target_branch}
@@ -121,11 +169,11 @@ async def _ensure_merge_request(base_url: str, token: str, project: str, source_
         existing.raise_for_status()
         values = existing.json()
         if values:
-            return _mr_ref(repo_id, values[0])
+            return _mr_ref(repo_id, project, values[0])
         response = await client.post(url, data={
             "source_branch": source_branch,
             "target_branch": target_branch,
-            "title": title,
+            "title": f"Draft: {title}" if draft else title,
             "description": description,
             "labels": ",".join(labels),
         })
@@ -134,9 +182,9 @@ async def _ensure_merge_request(base_url: str, token: str, project: str, source_
             existing.raise_for_status()
             values = existing.json()
             if values:
-                return _mr_ref(repo_id, values[0])
+                return _mr_ref(repo_id, project, values[0])
         response.raise_for_status()
-        return _mr_ref(repo_id, response.json())
+        return _mr_ref(repo_id, project, response.json())
 
 
 def _description(request: dict, public_url: str) -> str:
@@ -153,12 +201,13 @@ def _description(request: dict, public_url: str) -> str:
 """
 
 
-def _mr_ref(repo_id: str, data: dict) -> MergeRequestRef:
+def _mr_ref(repo_id: str, project: str, data: dict) -> MergeRequestRef:
     return MergeRequestRef(
         repo=repo_id,
         mr_iid=int(data["iid"]),
         mr_url=str(data.get("web_url", "")),
         state=str(data.get("state", "opened")),
+        project=project,
     )
 
 

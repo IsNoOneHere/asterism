@@ -212,6 +212,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v5/systems/{systemId}/model-profiles/{profileId}/connection-test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["testProfileConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v5/systems/{systemId}/knowledge": {
         parameters: {
             query?: never;
@@ -884,6 +900,14 @@ export interface components {
             tokenSet?: boolean;
             usingGlobalToken?: boolean;
         };
+        ActionRequest: {
+            requestId?: string;
+            expectedStatus?: string;
+            /** Format: int64 */
+            expectedProjectionSequence?: number;
+            note?: string;
+            evidence?: string;
+        };
         SignalResponse: {
             workItemId?: string;
             signalId?: string;
@@ -958,6 +982,10 @@ export interface components {
             model?: string;
             apiKeySet?: boolean;
             supportsVision?: boolean;
+        };
+        ConnectionResult: {
+            connected?: boolean;
+            message?: string;
         };
         CandidateRequest: {
             repo?: string;
@@ -1167,6 +1195,12 @@ export interface components {
             missingFields?: string[];
             status?: string;
         };
+        PendingAction: {
+            action?: string;
+            signalId?: string;
+            /** Format: date-time */
+            submittedAt?: string;
+        };
         SuspectedTarget: {
             entryId?: string;
             repo?: string;
@@ -1197,6 +1231,11 @@ export interface components {
             updatedAt?: string;
             canControl?: boolean;
             availableActions?: string[];
+            /** Format: int64 */
+            lastAppliedSequence?: number;
+            pendingAction?: components["schemas"]["PendingAction"];
+            releaseMode?: string;
+            validationMode?: string;
             targets?: components["schemas"]["SuspectedTarget"][];
         };
         ReadinessIssue: {
@@ -1391,7 +1430,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ActionRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {
@@ -1413,7 +1456,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ActionRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {
@@ -1435,7 +1482,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ActionRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {
@@ -1670,6 +1721,29 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    testProfileConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+                profileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ConnectionResult"];
                 };
             };
         };

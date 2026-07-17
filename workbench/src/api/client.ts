@@ -30,7 +30,7 @@ export type RepoConfig = {
 export type GitConfiguration = {
   repos: RepoConfig[];
   releaseMode: 'local' | 'gitlab';
-  validationMode: 'auto' | 'skip';
+  validationMode: 'auto' | 'manual' | 'skip';
   mrTargetBranch: string;
   mrLabels: string[];
   gitlabBaseUrl: string;
@@ -50,6 +50,10 @@ export type WorkItem = Schemas['WorkItemView'] & {
   waitingFor: string;
   canControl: boolean;
   availableActions: string[];
+  lastAppliedSequence: number;
+  pendingAction?: { action: string; signalId: string; submittedAt?: string } | null;
+  releaseMode?: 'local' | 'gitlab' | '';
+  validationMode?: 'auto' | 'manual' | 'skip' | '';
   createdAt?: string;
   updatedAt?: string;
   targets?: SuspectedTarget[];
@@ -58,6 +62,13 @@ export type WorkItemEvent = Schemas['DomainEventRecord'] & {
   sequence: number;
   eventId: string;
   eventType: string;
+};
+export type WorkItemActionRequest = {
+  requestId: string;
+  expectedStatus: string;
+  expectedProjectionSequence: number;
+  note?: string;
+  evidence?: string;
 };
 export type UserAccount = Schemas['UserAccountView'] & { userId: string; displayName: string; enabled: boolean };
 export type ContextSnapshot = Schemas['ContextSnapshot'] & { manifestId?: string | null };
@@ -227,6 +238,11 @@ export type AgentConfiguration = {
   engines: string[];
 };
 
+export type ModelConnectionTestResult = {
+  connected: boolean;
+  message: string;
+};
+
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string, public details?: unknown) {
     super(message);
@@ -299,6 +315,8 @@ export const api = {
     }),
   deleteModelProfile: (systemId: string, profileId: string) =>
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-profiles/' + encodeURIComponent(profileId), { method: 'DELETE' }),
+  testModelProfileConnection: (systemId: string, profileId: string) =>
+    request<ModelConnectionTestResult>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-profiles/' + encodeURIComponent(profileId) + '/connection-test', { method: 'POST' }),
   createAgent: (systemId: string, body: unknown) =>
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agents', {
       method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),
@@ -342,12 +360,12 @@ export const api = {
   workItem: (workItemId: string) => request<WorkItem>('/api/v5/work-items/' + encodeURIComponent(workItemId)),
   // 后端主线程会补该接口；前端先固定预期契约。
   workItemEvents: (workItemId: string) => request<WorkItemEvent[]>('/api/v5/work-items/' + encodeURIComponent(workItemId) + '/events'),
-  approveOwner: (workItemId: string) =>
-    request('/api/v5/work-items/' + workItemId + '/owner-approval', { method: 'POST' }),
-  submitSignal: (workItemId: string, signalName: string) =>
-    request('/api/v5/work-items/' + workItemId + '/signals/' + signalName, { method: 'POST' }),
-  checkMergeStatus: (workItemId: string) =>
-    request('/api/v5/work-items/' + workItemId + '/merge-status/check', { method: 'POST' }),
+  approveOwner: (workItemId: string, body: WorkItemActionRequest) =>
+    request('/api/v5/work-items/' + workItemId + '/owner-approval', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
+  submitSignal: (workItemId: string, signalName: string, body: WorkItemActionRequest) =>
+    request('/api/v5/work-items/' + workItemId + '/signals/' + signalName, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
+  checkMergeStatus: (workItemId: string, body: WorkItemActionRequest) =>
+    request('/api/v5/work-items/' + workItemId + '/merge-status/check', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
   users: () => request<UserAccount[]>('/api/v5/users'),
   upsertUser: (body: { userId: string; displayName: string; email?: string; password?: string }) =>
     request<UserAccount>('/api/v5/users', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),

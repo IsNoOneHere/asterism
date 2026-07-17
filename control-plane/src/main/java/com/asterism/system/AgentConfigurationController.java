@@ -43,6 +43,13 @@ public class AgentConfigurationController {
         return config.deleteProfile(systemId, profileId);
     }
 
+    @PostMapping("/model-profiles/{profileId}/connection-test")
+    ModelConnectionClient.ConnectionResult testProfileConnection(@PathVariable String systemId,
+            @PathVariable String profileId, Authentication actor) {
+        access.requireOwnerOrAdmin(systemId, actor);
+        return config.testProfile(systemId, profileId);
+    }
+
     @PostMapping("/agents")
     AgentConfigurationService.AgentConfigurationResponse createAgent(@PathVariable String systemId,
             @RequestBody AgentConfigurationService.AgentRequest request, Authentication actor) {

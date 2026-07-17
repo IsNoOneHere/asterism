@@ -3,14 +3,12 @@ package com.asterism.workitem;
 import com.asterism.common.ApiException;
 import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventRecord;
-import com.asterism.event.DomainEventType;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.git.GitIntegrationService;
 import com.asterism.git.GitLabClient;
 import com.asterism.knowledge.KnowledgeMatchService.SuspectedTarget;
 import com.asterism.projection.WorkItemProjection;
 import com.asterism.projection.WorkItemProjectionRepository;
-import com.asterism.temporal.TemporalCasePort;
 import com.asterism.prd.PrdSessionRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -31,20 +29,20 @@ import java.util.stream.StreamSupport;
 @RequestMapping("/api/v5/work-items")
 public class WorkItemController {
     private final WorkItemProjectionRepository workItems;
-    private final TemporalCasePort temporal;
     private final DomainEventService events;
+    private final WorkItemActionService actions;
     private final SystemAccessService access;
     private final PrdSessionRepository prdSessions;
     private final ObjectMapper objectMapper;
     private final GitIntegrationService git;
     private final GitLabClient gitLab;
 
-    public WorkItemController(WorkItemProjectionRepository workItems, TemporalCasePort temporal, DomainEventService events,
+    public WorkItemController(WorkItemProjectionRepository workItems, DomainEventService events, WorkItemActionService actions,
                               SystemAccessService access, PrdSessionRepository prdSessions, ObjectMapper objectMapper,
                               GitIntegrationService git, GitLabClient gitLab) {
         this.workItems = workItems;
-        this.temporal = temporal;
         this.events = events;
+        this.actions = actions;
         this.access = access;
         this.prdSessions = prdSessions;
         this.objectMapper = objectMapper;
@@ -100,90 +98,23 @@ public class WorkItemController {
     }
 
     @PostMapping("/{workItemId}/owner-approval")
-    SignalResponse ownerApproval(@PathVariable String workItemId, Authentication actor) {
-        var item = find(workItemId);
-        access.requireOwnerOrAdmin(item.systemId(), actor);
-        var internalId = item.workItemId();
-        var signalId = "owner-approved-" + internalId;
-        if (events.exists(signalId) && !events.hasUnrecoveredSignalFailure(internalId, signalId)) {
-            return new SignalResponse(item.displayWorkItemId(), signalId, "submitted");
-        }
-        var attempt = events.countSignalFailures(internalId, signalId) + 1;
-        var submissionKey = attempt == 1 ? signalId : signalId + ":retry:" + attempt;
-        events.append(new DomainEventService.AppendEvent(
-                DomainEventType.OwnerApprovalSignalSubmitted,
-                item.systemId(),
-                item.caseId(),
-                item.prdId(),
-                internalId,
-                actor.getName(),
-                "control-plane",
-                Map.of("signalName", "owner_approved", "signalId", signalId, "attempt", attempt),
-                internalId,
-                null,
-                submissionKey));
-        try {
-            // 事件已提交后再发 Temporal signal，避免数据库事务和外部调用互相污染。
-            temporal.signalCase(new TemporalCasePort.SignalCaseCommand(item.caseId(), "owner_approved", signalId));
-        } catch (RuntimeException error) {
-            events.append(new DomainEventService.AppendEvent(
-                    DomainEventType.TemporalSignalFailed,
-                    item.systemId(),
-                    item.caseId(),
-                    item.prdId(),
-                    internalId,
-                    actor.getName(),
-                    "control-plane",
-                    Map.of("signalName", "owner_approved", "signalId", signalId, "reason", error.getMessage()),
-                    internalId,
-                    null,
-                    "signal-failed:" + submissionKey));
-            throw new IllegalStateException("Temporal signal 提交失败", error);
-        }
-        return new SignalResponse(item.displayWorkItemId(), signalId, "submitted");
+    SignalResponse ownerApproval(@PathVariable String workItemId,
+                                 @RequestBody(required = false) WorkItemActionService.ActionRequest request,
+                                 Authentication actor) {
+        return actions.submit(workItemId, "owner_approved", request, actor);
     }
 
     @PostMapping("/{workItemId}/signals/{signalName}")
-    SignalResponse submitSignal(@PathVariable String workItemId, @PathVariable String signalName, Authentication actor) {
-        var item = find(workItemId);
-        access.requireOwnerOrAdmin(item.systemId(), actor);
-        var internalId = item.workItemId();
-        var attempt = events.countSubmittedSignals(internalId, signalName) + 1;
-        var signalId = signalName + "-" + internalId + "-" + attempt;
-        events.append(new DomainEventService.AppendEvent(
-                DomainEventType.TemporalSignalSubmitted,
-                item.systemId(),
-                item.caseId(),
-                item.prdId(),
-                internalId,
-                actor.getName(),
-                "control-plane",
-                Map.of("signalName", signalName, "signalId", signalId, "attempt", attempt),
-                internalId,
-                null,
-                signalId));
-        try {
-            temporal.signalCase(new TemporalCasePort.SignalCaseCommand(item.caseId(), signalName, signalId));
-        } catch (RuntimeException error) {
-            events.append(new DomainEventService.AppendEvent(
-                    DomainEventType.TemporalSignalFailed,
-                    item.systemId(),
-                    item.caseId(),
-                    item.prdId(),
-                    internalId,
-                    actor.getName(),
-                    "control-plane",
-                    Map.of("signalName", signalName, "signalId", signalId, "reason", error.getMessage()),
-                    internalId,
-                    null,
-                    "signal-failed:" + signalId));
-            throw new IllegalStateException("Temporal signal 提交失败", error);
-        }
-        return new SignalResponse(item.displayWorkItemId(), signalId, "submitted");
+    SignalResponse submitSignal(@PathVariable String workItemId, @PathVariable String signalName,
+                                @RequestBody(required = false) WorkItemActionService.ActionRequest request,
+                                Authentication actor) {
+        return actions.submit(workItemId, signalName, request, actor);
     }
 
     @PostMapping("/{workItemId}/merge-status/check")
-    SignalResponse checkMergeStatus(@PathVariable String workItemId, Authentication actor) {
+    SignalResponse checkMergeStatus(@PathVariable String workItemId,
+                                    @RequestBody(required = false) WorkItemActionService.ActionRequest request,
+                                    Authentication actor) {
         var item = find(workItemId);
         access.requireOwnerOrAdmin(item.systemId(), actor);
         if (!"waiting_merge".equals(item.lifecycleStatus())) {
@@ -197,14 +128,18 @@ public class WorkItemController {
             throw new ApiException(HttpStatus.CONFLICT, "MR_NOT_FOUND", "工作项没有可核验的 MR");
         }
         var unmerged = mergeRequests.stream().filter(mr -> {
-            var repo = repos.get(mr.repo());
-            return repo == null || !"merged".equals(gitLab.mergeRequest(
-                    config.baseUrl(), config.token(), repo.gitlabProject(), mr.iid()).state());
+            var project = mr.project();
+            if (project.isBlank()) {
+                var repo = repos.get(mr.repo());
+                project = repo == null ? "" : repo.gitlabProject();
+            }
+            return project.isBlank() || !"merged".equals(gitLab.mergeRequest(
+                    config.baseUrl(), config.token(), project, mr.iid()).state());
         }).map(mr -> mr.repo() + "!" + mr.iid()).toList();
         if (!unmerged.isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT, "MR_NOT_MERGED", "仍有 MR 未合并", unmerged);
         }
-        return submitSignal(item.workItemId(), "check_merge_status", actor);
+        return actions.submit(item.workItemId(), "check_merge_status", request, actor);
     }
 
     public record SignalResponse(String workItemId, String signalId, String status) {
@@ -217,11 +152,12 @@ public class WorkItemController {
     }
 
     private WorkItemView view(WorkItemProjection item, Authentication actor) {
-        var canControl = access.canControl(item.systemId(), actor);
+        var availability = actions.availability(item, actor);
         return new WorkItemView(item.displayWorkItemId(), item.systemId(), item.prdId(), item.caseId(), item.title(),
                 item.lifecycleStatus(), item.approvalStatus(), item.executionAllowed(), item.currentStage(), item.waitingFor(),
-                item.ownerUserId(), item.createdBy(), item.createdAt(), item.updatedAt(), canControl,
-                canControl ? actions(item.lifecycleStatus()) : List.of(), targets(item.prdId()));
+                item.ownerUserId(), item.createdBy(), item.createdAt(), item.updatedAt(), availability.canAct(),
+                availability.actions(), item.lastAppliedSequence(), availability.pendingAction(),
+                availability.releaseMode(), availability.validationMode(), targets(item.prdId()));
     }
 
     private List<SuspectedTarget> targets(String prdId) {
@@ -235,19 +171,6 @@ public class WorkItemController {
         } catch (JsonProcessingException error) {
             return List.of();
         }
-    }
-
-    private List<String> actions(String status) {
-        return switch (status) {
-            case "waiting_owner_approval" -> List.of("owner_approved", "owner_rejected", "cancel_case");
-            case "activated" -> List.of("start_modification", "cancel_case");
-            case "worker_blocked", "patch_rejected", "validation_failed" -> List.of("rework", "cancel_case");
-            case "modification_completed" -> List.of("patch_apply_approved", "patch_apply_rejected", "cancel_case");
-            case "patch_applied" -> List.of("validation_passed", "validation_rejected", "cancel_case");
-            case "validation_passed" -> List.of("release_approved", "cancel_case");
-            case "waiting_merge" -> List.of("check_merge_status", "rework", "cancel_case");
-            default -> List.of();
-        };
     }
 
     private List<MergeRequestReference> latestMergeRequests(String workItemId) {
@@ -266,7 +189,8 @@ public class WorkItemController {
                     || !event.causationId().startsWith(prefix)) continue;
             try {
                 var payload = objectMapper.readTree(event.payloadJson());
-                result.add(new MergeRequestReference(payload.path("repo").asText(), payload.path("mrIid").asInt()));
+                result.add(new MergeRequestReference(payload.path("repo").asText(), payload.path("project").asText(),
+                        payload.path("mrIid").asInt()));
             } catch (JsonProcessingException ignored) {
                 // 历史坏事件不参与人工核验，Temporal 轮询仍会继续。
             }
@@ -274,13 +198,15 @@ public class WorkItemController {
         return result;
     }
 
-    private record MergeRequestReference(String repo, int iid) {
+    private record MergeRequestReference(String repo, String project, int iid) {
     }
 
     public record WorkItemView(String workItemId, String systemId, String prdId, String caseId, String title,
                                String lifecycleStatus, String approvalStatus, boolean executionAllowed,
                                String currentStage, String waitingFor, String ownerUserId, String createdBy,
                                Instant createdAt, Instant updatedAt, boolean canControl, List<String> availableActions,
+                               long lastAppliedSequence, WorkItemActionService.PendingAction pendingAction,
+                               String releaseMode, String validationMode,
                                List<SuspectedTarget> targets) {
     }
 }

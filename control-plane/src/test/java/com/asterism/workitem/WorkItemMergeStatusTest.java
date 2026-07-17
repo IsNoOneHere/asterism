@@ -12,6 +12,8 @@ import com.asterism.temporal.TemporalCasePort;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Instant;
 import java.util.List;
@@ -27,7 +29,7 @@ class WorkItemMergeStatusTest {
     void manualMergeCheckVerifiesGitLabBeforeSignallingTemporal() {
         var fixture = fixture("merged");
 
-        var response = fixture.controller.checkMergeStatus("wi-1", fixture.actor);
+        var response = fixture.controller.checkMergeStatus("wi-1", null, fixture.actor);
 
         assertThat(response.status()).isEqualTo("submitted");
         verify(fixture.temporal).signalCase(argThat(command ->
@@ -38,9 +40,18 @@ class WorkItemMergeStatusTest {
     void manualMergeCheckRejectsUnmergedRequestWithoutSignal() {
         var fixture = fixture("opened");
 
-        assertThatThrownBy(() -> fixture.controller.checkMergeStatus("wi-1", fixture.actor))
+        assertThatThrownBy(() -> fixture.controller.checkMergeStatus("wi-1", null, fixture.actor))
                 .hasMessageContaining("仍有 MR 未合并");
         verify(fixture.temporal, never()).signalCase(any());
+    }
+
+    @Test
+    void frozenProjectFromEventWinsOverCurrentRepositoryConfiguration() {
+        var fixture = fixture("merged");
+
+        fixture.controller.checkMergeStatus("wi-1", null, fixture.actor);
+
+        verify(fixture.gitLab).mergeRequest("https://gitlab", "secret", "frozen/api", 9);
     }
 
     private Fixture fixture(String mrState) {
@@ -52,25 +63,38 @@ class WorkItemMergeStatusTest {
         var gitLab = mock(GitLabClient.class);
         var actor = new UsernamePasswordAuthenticationToken("owner", "n/a");
         var now = Instant.now();
-        when(workItems.findById("wi-1")).thenReturn(Optional.of(new WorkItemProjection(
+        var item = new WorkItemProjection(
                 "wi-1", "WI20260710001", "sys-1", "prd-1", "case-1", "任务", "waiting_merge", "approved", false,
-                "等待 GitLab 合并", "gitlab", "owner", false, 6, now, null, "owner", now, now)));
+                "等待 GitLab 合并", "gitlab", "owner", false, 6, now, null, "owner", now, now);
+        when(workItems.findById("wi-1")).thenReturn(Optional.of(item));
+        when(workItems.lockById("wi-1")).thenReturn(Optional.of(item));
         when(events.findByWorkItemId("wi-1")).thenReturn(List.of(new DomainEventRecord(
                 6L, "evt-6", "MergeRequestCreated", "v5.0", "sys-1", "case-1", "prd-1", "wi-1",
-                "worker", "worker", "{\"repo\":\"backend\",\"mrIid\":9}", "case-1",
+                "worker", "worker", "{\"repo\":\"backend\",\"project\":\"frozen/api\",\"mrIid\":9}", "case-1",
                 "patch-1:mr:backend:9", "key-6", now)));
         when(git.internal("sys-1")).thenReturn(new GitIntegrationService.InternalGitConfiguration(
-                List.of(new GitIntegrationService.RepoConfig("backend", "API", "backend", "group/api", "main",
+                List.of(new GitIntegrationService.RepoConfig("backend", "API", "backend", "current/api", "main",
                         "gitlab", "", List.of(), List.of(), List.of("test"))),
                 "gitlab", "auto", "main", List.of(), "https://gitlab", "secret"));
-        when(gitLab.mergeRequest("https://gitlab", "secret", "group/api", 9))
+        when(gitLab.mergeRequest("https://gitlab", "secret", "frozen/api", 9))
                 .thenReturn(new GitLabClient.MergeRequestStatus(9, mrState, "https://gitlab/mr/9"));
-        var controller = new WorkItemController(workItems, temporal, events, access,
+        var actionService = new WorkItemActionService(workItems, temporal, events, access,
+                new ObjectMapper(), directTransactions());
+        var controller = new WorkItemController(workItems, events, actionService, access,
                 mock(PrdSessionRepository.class), new ObjectMapper(), git, gitLab);
-        return new Fixture(controller, temporal, actor);
+        return new Fixture(controller, temporal, gitLab, actor);
     }
 
-    private record Fixture(WorkItemController controller, TemporalCasePort temporal,
+    private TransactionOperations directTransactions() {
+        return new TransactionOperations() {
+            @Override
+            public <T> T execute(TransactionCallback<T> action) {
+                return action.doInTransaction(null);
+            }
+        };
+    }
+
+    private record Fixture(WorkItemController controller, TemporalCasePort temporal, GitLabClient gitLab,
                            UsernamePasswordAuthenticationToken actor) {
     }
 }

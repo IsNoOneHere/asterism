@@ -53,7 +53,10 @@ public interface TemporalCasePort {
     record PrdPayload(String title, String goal, List<String> acceptanceCriteria, Map<String, Object> draftJson) {
     }
 
-    record SignalCaseCommand(String caseId, String signalName, String signalId) {
+    record SignalCaseCommand(String caseId, String signalName, String signalId, Map<String, Object> context) {
+        public SignalCaseCommand(String caseId, String signalName, String signalId) {
+            this(caseId, signalName, signalId, Map.of());
+        }
     }
 
     record RouteIndexCommand(String systemId, String repoPath, List<RepoSnapshot> repos) {

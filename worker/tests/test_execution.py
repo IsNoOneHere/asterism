@@ -281,12 +281,17 @@ def test_release_repo_commits_to_work_item_branch(tmp_path):
     (repo / "unrelated.txt").write_text("user change\n")
     (repo / "untracked.txt").write_text("user file\n")
 
-    result = release_repo(str(repo), "wi-1", "登录页错误提示", "diff --git a/README.md b/README.md\n")
+    diff_patch = subprocess.run(["git", "diff", "--", "README.md"], cwd=repo, text=True,
+                                check=True, capture_output=True).stdout
+    original_branch = subprocess.run(["git", "branch", "--show-current"], cwd=repo, text=True,
+                                     check=True, capture_output=True).stdout.strip()
+    result = release_repo(str(repo), "wi-1", "登录页错误提示", diff_patch)
+    retried = release_repo(str(repo), "wi-1", "登录页错误提示", diff_patch)
 
     assert result.branch == "wi/wi-1"
     assert result.commit_hash
     committed = subprocess.run(
-        ["git", "show", "--format=", "--name-only", "HEAD"],
+        ["git", "show", "--format=", "--name-only", result.commit_hash],
         cwd=repo,
         text=True,
         capture_output=True,
@@ -296,8 +301,39 @@ def test_release_repo_commits_to_work_item_branch(tmp_path):
         ["git", "status", "--porcelain"], cwd=repo, text=True, capture_output=True, check=True
     ).stdout
     assert committed == ["README.md"]
+    assert retried.commit_hash == result.commit_hash
+    assert subprocess.run(["git", "branch", "--show-current"], cwd=repo, text=True,
+                          check=True, capture_output=True).stdout.strip() == original_branch
+    assert " M README.md" in status
     assert " M unrelated.txt" in status
     assert "?? untracked.txt" in status
+
+
+def test_patch_retry_and_reverse_keep_unrelated_same_file_edit(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "app.txt"
+    target.write_text("agent-old\n" + "stable\n" * 8 + "user-old\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", "app.txt"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"],
+                   cwd=repo, check=True, capture_output=True)
+    target.write_text("agent-new\n" + "stable\n" * 8 + "user-old\n")
+    patch = subprocess.run(["git", "diff", "--", "app.txt"], cwd=repo,
+                           check=True, capture_output=True, text=True).stdout
+    subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=repo, check=True, capture_output=True)
+    target.write_text("agent-old\n" + "stable\n" * 8 + "user-new\n")
+
+    first = asyncio.run(execution_activities.apply_patch_to_repo({"repo_path": str(repo), "diff_patch": patch}))
+    retried = asyncio.run(execution_activities.apply_patch_to_repo({"repo_path": str(repo), "diff_patch": patch}))
+    reverted = asyncio.run(execution_activities.revert_patch({"repo_path": str(repo), "diff_patch": patch}))
+    retried_revert = asyncio.run(execution_activities.revert_patch({"repo_path": str(repo), "diff_patch": patch}))
+
+    assert first["blocked"] is False
+    assert retried["already_applied"] is True
+    assert reverted["failed"] == ""
+    assert retried_revert["already_reverted"] is True
+    assert target.read_text() == "agent-old\n" + "stable\n" * 8 + "user-new\n"
 
 
 def test_summarize_repo_includes_tree_and_manifest_heads(tmp_path):

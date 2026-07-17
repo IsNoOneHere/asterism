@@ -30,13 +30,15 @@ public class AgentConfigurationService {
     private final JdbcAggregateTemplate aggregate;
     private final ObjectMapper objectMapper;
     private final SystemConfigLock lock;
+    private final ModelConnectionClient connections;
 
     public AgentConfigurationService(SystemProfileRepository systems, JdbcAggregateTemplate aggregate,
-                                     ObjectMapper objectMapper, SystemConfigLock lock) {
+                                     ObjectMapper objectMapper, SystemConfigLock lock, ModelConnectionClient connections) {
         this.systems = systems;
         this.aggregate = aggregate;
         this.objectMapper = objectMapper;
         this.lock = lock;
+        this.connections = connections;
     }
 
     public AgentConfigurationResponse get(String systemId) {
@@ -48,6 +50,12 @@ public class AgentConfigurationService {
     public InternalAgentConfiguration internal(String systemId) {
         var state = load(systemId);
         return new InternalAgentConfiguration(state.profiles(), state.agents());
+    }
+
+    public ModelConnectionClient.ConnectionResult testProfile(String systemId, String profileId) {
+        var profiles = load(systemId).profiles();
+        profileIndex(profiles, profileId);
+        return connections.test(systemId, profileId);
     }
 
     @Transactional

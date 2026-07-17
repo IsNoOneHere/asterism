@@ -62,7 +62,14 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
 
     @Override
     public void signalCase(SignalCaseCommand command) {
-        client.newUntypedWorkflowStub(command.caseId()).signal(command.signalName(), command.signalId());
+        Object payload = command.signalId();
+        if (!command.context().isEmpty()) {
+            var values = new LinkedHashMap<String, Object>();
+            values.put("signal_id", command.signalId());
+            values.putAll(command.context());
+            payload = values;
+        }
+        client.newUntypedWorkflowStub(command.caseId()).signal(command.signalName(), payload);
         log.info("Temporal signal 已提交 caseId={} signal={}", command.caseId(), command.signalName());
     }
 

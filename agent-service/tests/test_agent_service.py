@@ -361,6 +361,55 @@ def test_readiness_returns_model_state_without_api_key():
     assert "secret-key" not in response.text
 
 
+def test_model_connection_uses_openai_compatible_endpoint(monkeypatch):
+    captured = {}
+
+    def post(url, **kwargs):
+        captured.update(url=url, **kwargs)
+        return SimpleNamespace(is_success=True, status_code=200)
+
+    monkeypatch.setattr("agent_service.app.httpx.post", post)
+    settings = AgentSettings(worker_callback_token="internal-token")
+    client = TestClient(create_app(
+        FakeLlmClient([]), settings,
+        model_config_fetcher=lambda *args: ModelConfig(
+            managed=True, provider="openai-compat", model="gpt-test",
+            base_url="https://models.example/v1", api_key="secret-key"),
+    ))
+
+    assert client.post("/model-connection-test", params={"system_id": "sys-1", "profile_id": "mp-1"}).status_code == 401
+    response = client.post("/model-connection-test", params={"system_id": "sys-1", "profile_id": "mp-1"},
+                           headers={"Authorization": "Bearer internal-token"})
+
+    assert response.json() == {"connected": True, "message": "连接正常"}
+    assert captured["url"] == "https://models.example/v1/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer secret-key"
+    assert captured["json"]["max_tokens"] == 1
+
+
+def test_model_connection_returns_anthropic_failure_without_response_body(monkeypatch):
+    captured = {}
+
+    def post(url, **kwargs):
+        captured.update(url=url, **kwargs)
+        return SimpleNamespace(is_success=False, status_code=401)
+
+    monkeypatch.setattr("agent_service.app.httpx.post", post)
+    client = TestClient(create_app(
+        FakeLlmClient([]), AgentSettings(worker_callback_token="internal-token"),
+        model_config_fetcher=lambda *args: ModelConfig(
+            managed=True, provider="anthropic", model="claude-test",
+            base_url="https://models.example/anthropic", api_key="secret-key"),
+    ))
+
+    response = client.post("/model-connection-test", params={"system_id": "sys-1", "profile_id": "mp-1"},
+                           headers={"Authorization": "Bearer internal-token"})
+
+    assert response.json() == {"connected": False, "message": "连接失败（HTTP 401）"}
+    assert captured["url"] == "https://models.example/anthropic/v1/messages"
+    assert captured["headers"]["x-api-key"] == "secret-key"
+
+
 def test_each_endpoint_uses_its_stage_model():
     stages = []
 

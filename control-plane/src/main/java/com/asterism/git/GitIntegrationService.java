@@ -104,7 +104,7 @@ public class GitIntegrationService {
         var releaseMode = text(request.releaseMode()).isBlank() ? "local" : request.releaseMode();
         var validationMode = text(request.validationMode()).isBlank() ? "auto" : request.validationMode();
         if (!Set.of("local", "gitlab").contains(releaseMode)) throw new IllegalArgumentException("不支持的 releaseMode");
-        if (!Set.of("auto", "skip").contains(validationMode)) throw new IllegalArgumentException("不支持的 validationMode");
+        if (!Set.of("auto", "manual", "skip").contains(validationMode)) throw new IllegalArgumentException("不支持的 validationMode");
         var ids = new HashSet<String>();
         var repos = request.repos().stream().map(repo -> normalizedRepo(repo, releaseMode, ids)).toList();
         var target = text(request.mrTargetBranch()).trim();

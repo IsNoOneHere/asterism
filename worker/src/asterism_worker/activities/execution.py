@@ -185,13 +185,18 @@ async def apply_patch_to_repo(request: dict) -> dict:
     gate = validate_patch_paths(parsed.diff_patch, parsed.allowed_paths, parsed.forbidden_paths)
     if gate.blocked:
         return gate.model_dump()
-    try:
-        subprocess.run(["git", "apply", "--check"], cwd=parsed.repo_path, input=parsed.diff_patch,
-                       text=True, check=True, capture_output=True)
+    check = subprocess.run(["git", "apply", "--check"], cwd=parsed.repo_path, input=parsed.diff_patch,
+                           text=True, capture_output=True)
+    if check.returncode == 0:
         subprocess.run(["git", "apply"], cwd=parsed.repo_path, input=parsed.diff_patch,
                        text=True, check=True, capture_output=True)
-    except subprocess.CalledProcessError as error:
-        return PatchApplyResult(blocked=True, reason=error.stderr.strip() or "git apply failed").model_dump()
+    else:
+        # Activity 重试时 Patch 可能已成功应用；反向检查通过即复用真实结果。
+        reverse = subprocess.run(["git", "apply", "-R", "--check"], cwd=parsed.repo_path,
+                                 input=parsed.diff_patch, text=True, capture_output=True)
+        if reverse.returncode != 0:
+            return PatchApplyResult(blocked=True, reason=check.stderr.strip() or "git apply failed").model_dump()
+        return PatchApplyResult(already_applied=True).model_dump()
     return PatchApplyResult().model_dump()
 
 
@@ -237,14 +242,23 @@ async def run_release(request: dict) -> dict:
 async def revert_patch(request: dict) -> dict:
     paths = changed_paths(request.get("diff_patch", ""))
     failed = ""
+    already_reverted = False
     if paths:
-        try:
-            subprocess.run(["git", "checkout", "--", *sorted(paths)], cwd=request.get("repo_path", ""),
-                           check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as error:
-            failed = error.stderr.strip() or "git checkout failed"
-            log.warning("取消/驳回时回滚 patch 失败", extra={"reason": failed})
-    return {"changed_paths": sorted(paths), "failed": failed}
+        repo_path = request.get("repo_path", "")
+        diff_patch = request.get("diff_patch", "")
+        reverse = subprocess.run(["git", "apply", "-R", "--check"], cwd=repo_path, input=diff_patch,
+                                 text=True, capture_output=True)
+        if reverse.returncode == 0:
+            subprocess.run(["git", "apply", "-R"], cwd=repo_path, input=diff_patch,
+                           text=True, check=True, capture_output=True)
+        else:
+            forward = subprocess.run(["git", "apply", "--check"], cwd=repo_path, input=diff_patch,
+                                     text=True, capture_output=True)
+            already_reverted = forward.returncode == 0
+            if not already_reverted:
+                failed = reverse.stderr.strip() or "reverse patch conflict"
+                log.warning("取消/驳回时回滚 patch 失败", extra={"reason": failed})
+    return {"changed_paths": sorted(paths), "failed": failed, "already_reverted": already_reverted}
 
 
 @activity.defn

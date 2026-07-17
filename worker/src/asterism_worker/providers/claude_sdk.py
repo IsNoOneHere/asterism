@@ -240,6 +240,7 @@ class ClaudeSdkExecutionProvider(ExecutionProvider):
             "请在当前隔离工作区自主读取并编辑文件，完成目标。不要提交 git commit；完成后给出简短摘要。\n\n"
             f"目标:\n{request.goal}\n\n"
             f"验收标准:\n{criteria}\n\n"
+            f"人工反馈:\n{request.feedback or '无'}\n\n"
             f"计划步骤:\n{steps}\n\n"
             f"本阶段步骤引用: {request.step_refs or ['全部']}\n"
             f"允许路径: {self._paths(request.allowed_paths)}\n"

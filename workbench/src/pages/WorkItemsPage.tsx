@@ -28,7 +28,11 @@ export function WorkItemsPage() {
     retry: false,
   });
   const approve = useMutation({
-    mutationFn: (id: string) => api.approveOwner(id),
+    mutationFn: (item: WorkItem) => api.approveOwner(item.workItemId, {
+      requestId: crypto.randomUUID(),
+      expectedStatus: item.lifecycleStatus,
+      expectedProjectionSequence: item.lastAppliedSequence,
+    }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-items'] }),
     onSettled: () => setApprovalTarget(null),
   });
@@ -93,7 +97,7 @@ export function WorkItemsPage() {
         pending={approve.isPending}
         tone="primary"
         onClose={() => setApprovalTarget(null)}
-        onConfirm={() => approvalTarget && approve.mutate(approvalTarget.workItemId)}
+        onConfirm={() => approvalTarget && approve.mutate(approvalTarget)}
       />
       <ActionConfirmDialog
         open={Boolean(approve.error)}

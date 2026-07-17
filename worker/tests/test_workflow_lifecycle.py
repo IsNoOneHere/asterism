@@ -20,17 +20,17 @@ def test_workflow_runs_legal_full_lifecycle():
         ("owner_approved", "owner-approved-wi-1"),
         ("start_modification", "start-modification-wi-1"),
         ("patch_apply_approved", "patch-apply-approved-wi-1"),
-        ("validation_passed", "validation-passed-wi-1"),
         ("release_approved", "release-approved-wi-1"),
     ]))
 
     assert result == "completed"
-    assert [event["eventType"] for event in events] == [
+    assert _business_types(events) == [
         "WorkItemActivated",
         "ExecutionPlanDrafted",
         "ModificationCompleted",
         "PatchApplied",
         "ValidationPassed",
+        "RepositoryReleasePrepared",
         "ReleaseCompleted",
     ]
     plan_event = next(event for event in events if event["eventType"] == "ExecutionPlanDrafted")
@@ -59,13 +59,14 @@ def test_workflow_auto_validates_success_after_patch_apply():
     }))
 
     assert result == "completed"
-    event_types = [event["eventType"] for event in events]
+    event_types = _business_types(events)
     assert event_types == [
         "WorkItemActivated",
         "ExecutionPlanDrafted",
         "ModificationCompleted",
         "PatchApplied",
         "ValidationPassed",
+        "RepositoryReleasePrepared",
         "ReleaseCompleted",
     ]
     validation = next(event for event in events if event["eventType"] == "ValidationPassed")
@@ -99,7 +100,7 @@ def test_workflow_keeps_manual_validation_when_test_commands_empty():
         ("patch_apply_approved", "patch-apply-approved-wi-1"),
         ("validation_passed", "validation-passed-wi-1"),
         ("release_approved", "release-approved-wi-1"),
-    ], test_commands=[]))
+    ], test_commands=[], validation_mode="manual"))
 
     assert result == "completed"
     assert [event["eventType"] for event in events].count("ValidationPassed") == 1
@@ -112,7 +113,7 @@ def test_workflow_ignores_illegal_signal():
     ]))
 
     assert result == "cancelled"
-    assert [event["eventType"] for event in events] == ["CaseCancelled"]
+    assert _business_types(events) == ["CaseCancelled"]
 
 
 def test_workflow_emits_duplicate_owner_approved_once():
@@ -132,7 +133,7 @@ def test_workflow_returns_when_owner_rejected():
     ]))
 
     assert result == "rejected"
-    assert [event["eventType"] for event in events] == ["WorkItemRejected"]
+    assert _business_types(events) == ["WorkItemRejected"]
 
 
 def test_workflow_rework_uses_distinct_modification_idempotency_keys():
@@ -146,7 +147,7 @@ def test_workflow_rework_uses_distinct_modification_idempotency_keys():
         ("patch_apply_approved", "patch-apply-approved-wi-2"),
         ("validation_passed", "validation-passed-wi-2"),
         ("release_approved", "release-approved-wi-2"),
-    ], test_commands=[]))
+    ], test_commands=[], validation_mode="manual"))
 
     modification_keys = [
         event["idempotencyKey"]
@@ -363,9 +364,9 @@ def test_workflow_handoff_non_conflicting_diff_reaches_release(tmp_path):
     ], assignments=assignments, observed_requests=requests, repo_path=str(repo), verify_combined_diff=True))
 
     assert result == "completed"
-    assert [event["eventType"] for event in events] == [
+    assert _business_types(events) == [
         "WorkItemActivated", "ExecutionPlanDrafted", "AgentStageCompleted", "AgentStageCompleted",
-        "ModificationCompleted", "PatchApplied", "ValidationPassed", "ReleaseCompleted",
+        "ModificationCompleted", "PatchApplied", "ValidationPassed", "RepositoryReleasePrepared", "ReleaseCompleted",
     ]
     modification = next(event for event in events if event["eventType"] == "ModificationCompleted")
     assert "web/app.ts" in modification["payload"]["diffPatch"]
@@ -398,7 +399,7 @@ def test_two_repositories_route_assignments_and_diff_gates_independently():
         ("release_approved", "release-approved-wi-1"),
     ], test_commands=[], assignments=assignments, handoff_mode="same-path-cross-repo",
        observed_requests=requests, observed_apply_requests=apply_requests,
-       observed_release_requests=release_requests, repos=repos))
+       observed_release_requests=release_requests, repos=repos, validation_mode="manual"))
 
     assert result == "completed"
     assert [(request["repo"]["repo_id"], request["repo_path"]) for request in requests] == [
@@ -428,8 +429,28 @@ def test_gitlab_all_merged_completes_after_waiting_merge():
     assert result == "completed"
     assert types.count("MergeRequestCreated") == 2
     assert types.count("MergeRequestMerged") == 2
-    assert types[-1] == "ReleaseCompleted"
+    assert _business_types(events)[-1] == "ReleaseCompleted"
     assert next(event for event in events if event["eventType"] == "ReleaseCompleted")["payload"]["repositories"][0]["state"] == "merged"
+
+
+def test_manual_gitlab_waits_for_evidence_before_ready_mr():
+    counts: dict[str, int] = {}
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+        ("validation_passed", {"signal_id": "validation-passed-wi-1", "evidence": "staging 通过"}),
+        ("release_approved", "release-approved-wi-1"),
+    ], assignments=_gitlab_assignments(), repos=_gitlab_repos(), release_mode="gitlab",
+       validation_mode="manual", merge_states=["merged", "merged"], activity_counts=counts))
+
+    types = _business_types(events)
+    assert result == "completed"
+    assert types.index("RepositoryReleasePrepared") < types.index("ValidationPassed") < types.index("MergeRequestCreated")
+    assert counts["ready_merge_requests"] == 1
+    completed = next(event for event in events if event["eventType"] == "TemporalActionCompleted"
+                     and event["payload"]["action"] == "validation_passed")
+    assert completed["payload"]["evidence"] == "staging 通过"
 
 
 def test_gitlab_partial_merge_does_not_complete():
@@ -558,6 +579,7 @@ async def _run_workflow(
     fail_role_attempts: int = 0,
     activity_counts: dict[str, int] | None = None,
     release_mode: str = "local",
+    validation_mode: str = "auto",
     merge_states: list[str] | None = None,
     publish_failure_repo: str = "",
     validation_failure_repo: str = "",
@@ -719,6 +741,12 @@ async def _run_workflow(
         states = merge_states or ["merged"] * len(request["merge_requests"])
         return [{**item, "state": states[index]} for index, item in enumerate(request["merge_requests"])]
 
+    @activity.defn(name="ready_merge_requests")
+    async def fake_ready_merge_requests(request: dict) -> list[dict]:
+        if activity_counts is not None:
+            activity_counts["ready_merge_requests"] = activity_counts.get("ready_merge_requests", 0) + 1
+        return request["merge_requests"]
+
     @activity.defn(name="send_projection_event")
     async def fake_send_projection_event(event: dict) -> None:
         # 收集 worker 回写，断言事件顺序和幂等键。
@@ -741,12 +769,13 @@ async def _run_workflow(
                 fake_run_validation,
                 fake_publish_merge_request,
                 fake_check_merge_requests,
+                fake_ready_merge_requests,
                 fake_send_projection_event,
             ],
         ):
             handle = await env.client.start_workflow(
                 AsterismCaseWorkflow.run,
-                _case_input(test_commands, repo_path, agent_config_snapshot, repos, release_mode),
+                _case_input(test_commands, repo_path, agent_config_snapshot, repos, release_mode, validation_mode),
                 id=f"case-{uuid4()}",
                 task_queue=TASK_QUEUE,
             )
@@ -758,7 +787,7 @@ async def _run_workflow(
 
 def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/repo",
                 agent_config_snapshot: dict | None = None, repos: list[dict] | None = None,
-                release_mode: str = "local") -> CaseInput:
+                release_mode: str = "local", validation_mode: str = "auto") -> CaseInput:
     payload = dict(
         case_id="case-1",
         work_item_id="wi-1",
@@ -776,7 +805,7 @@ def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/r
         test_commands=["pytest"] if test_commands is None else test_commands,
         repos=repos or [],
         release_mode=release_mode,
-        validation_mode="auto",
+        validation_mode=validation_mode,
         mr_target_branch="main",
     )
     if agent_config_snapshot is None:
@@ -784,6 +813,10 @@ def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/r
     else:
         payload["agent_config_snapshot"] = agent_config_snapshot
     return CaseInput.model_validate(payload)
+
+
+def _business_types(events: list[dict]) -> list[str]:
+    return [event["eventType"] for event in events if event["eventType"] != "TemporalActionCompleted"]
 
 
 def _agent_snapshot() -> dict:

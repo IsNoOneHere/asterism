@@ -5,7 +5,6 @@ import com.asterism.event.DomainEventService;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.projection.WorkItemProjection;
 import com.asterism.projection.WorkItemProjectionRepository;
-import com.asterism.temporal.TemporalCasePort;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 
@@ -26,7 +25,10 @@ class WorkItemControllerEventsTest {
         var event = event();
         when(workItems.findByDisplayWorkItemId("WI20260706001")).thenReturn(Optional.of(item()));
         when(events.findByWorkItemId("wi-1")).thenReturn(List.of(event));
-        var controller = new WorkItemController(workItems, mock(TemporalCasePort.class), events, access,
+        var actions = mock(WorkItemActionService.class);
+        when(actions.availability(any(), eq(actor))).thenReturn(new WorkItemActionService.Availability(
+                false, List.of(), null, "local", "auto"));
+        var controller = new WorkItemController(workItems, events, actions, access,
                 mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper(),
                 mock(com.asterism.git.GitIntegrationService.class), mock(com.asterism.git.GitLabClient.class));
 

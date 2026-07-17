@@ -123,6 +123,7 @@ class ExecutionRequest(BaseModel):
     repo: RepoSnapshot | None = None
     goal: str
     acceptance_criteria: list[str] = Field(default_factory=list)
+    feedback: str = ""
     plan: "ExecutionPlan"
     memories: list[dict[str, Any]] = Field(default_factory=list)
     context_manifest_id: str = ""
@@ -151,6 +152,7 @@ class PreviousAttempt(BaseModel):
 class PatchApplyResult(BaseModel):
     blocked: bool = False
     reason: str = ""
+    already_applied: bool = False
 
 
 class PatchApplyRequest(BaseModel):
@@ -204,6 +206,7 @@ class MergeRequestRef(BaseModel):
     mr_iid: int
     mr_url: str
     state: str = "opened"
+    project: str = ""
 
 
 class GitlabPublishResult(BaseModel):
@@ -256,6 +259,7 @@ class PlanRequest(BaseModel):
     memories: list[dict[str, Any]] = Field(default_factory=list)
     allowed_paths: list[str] = Field(default_factory=list)
     context_manifest_id: str
+    feedback: str = ""
     available_agents: list[AvailableAgent] | None = None
     agent_config_snapshot: AgentConfigSnapshot | None = None
 

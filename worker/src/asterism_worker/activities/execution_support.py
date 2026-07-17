@@ -1,5 +1,7 @@
+import os
 import shlex
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -151,28 +153,51 @@ def release_repo(repo_path: str, work_item_id: str, title: str, diff_patch: str,
     branch = f"wi/{work_item_id}"
     message = f"{title or 'work item'} ({work_item_id})"
     paths = sorted(changed_paths(diff_patch))
-    subprocess.run(["git", "checkout", "-B", branch], cwd=repo_path, check=True, capture_output=True, text=True)
-    # 只提交本工作项 diff 涉及的文件，保留仓库中用户已有的修改。
-    subprocess.run(["git", "add", "--", *paths], cwd=repo_path, check=True, capture_output=True, text=True)
-    subprocess.run([
-        "git",
-        "-c",
-        "user.name=asterism",
-        "-c",
-        "user.email=asterism@example.invalid",
-        "commit",
-        "-m",
-        message,
-        "--",
-        *paths,
-    ], cwd=repo_path, check=True, capture_output=True, text=True)
-    commit_hash = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_path, check=True, capture_output=True, text=True).stdout.strip()
+    if not paths:
+        raise RuntimeError("release diff is empty")
+    ref = f"refs/heads/{branch}"
+    previous = subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=repo_path,
+                              capture_output=True, text=True).stdout.strip()
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_path,
+                          check=True, capture_output=True, text=True).stdout.strip()
+    # 临时 index 只应用本工作项 Patch，不切换真实仓库分支，也不带入用户同文件的其它改动。
+    with tempfile.TemporaryDirectory(prefix="asterism-index-") as directory:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(directory) / "index")}
+        subprocess.run(["git", "read-tree", head], cwd=repo_path, env=env,
+                       check=True, capture_output=True, text=True)
+        subprocess.run(["git", "apply", "--cached"], cwd=repo_path, env=env, input=diff_patch,
+                       check=True, capture_output=True, text=True)
+        tree = subprocess.run(["git", "write-tree"], cwd=repo_path, env=env,
+                              check=True, capture_output=True, text=True).stdout.strip()
+    if previous and subprocess.run(["git", "rev-parse", f"{previous}^{{tree}}"], cwd=repo_path,
+                                   check=True, capture_output=True, text=True).stdout.strip() == tree:
+        commit_hash = previous
+    else:
+        env = {**os.environ, "GIT_AUTHOR_NAME": "asterism", "GIT_AUTHOR_EMAIL": "asterism@example.invalid",
+               "GIT_COMMITTER_NAME": "asterism", "GIT_COMMITTER_EMAIL": "asterism@example.invalid"}
+        commit_hash = subprocess.run(["git", "commit-tree", tree, "-p", head, "-m", message], cwd=repo_path,
+                                     env=env, check=True, capture_output=True, text=True).stdout.strip()
+        update = ["git", "update-ref", ref, commit_hash]
+        if previous:
+            update.append(previous)
+        subprocess.run(update, cwd=repo_path, check=True, capture_output=True, text=True)
     push_failed = ""
     if push:
         try:
-            subprocess.run(["git", "push", "-u", "origin", branch], cwd=repo_path, check=True, capture_output=True, text=True)
+            remote = subprocess.run(["git", "ls-remote", "--heads", "origin", ref], cwd=repo_path,
+                                    check=True, capture_output=True, text=True).stdout.strip()
+            remote_hash = remote.split()[0] if remote else ""
+            if remote_hash and previous and remote_hash not in {previous, commit_hash}:
+                raise RuntimeError("remote work-item branch changed")
+            command = ["git", "push"]
+            if remote_hash and remote_hash != commit_hash:
+                command.append(f"--force-with-lease={ref}:{remote_hash}")
+            command.extend(["origin", f"{ref}:{ref}"])
+            subprocess.run(command, cwd=repo_path, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as error:
             push_failed = error.stderr.strip() or "git push failed"
+        except RuntimeError as error:
+            push_failed = str(error)
     return ReleaseResult(branch=branch, commit_hash=commit_hash, push_failed=push_failed)
 
 

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react';
-import { Agent, AgentConfiguration, api, ModelProfile } from '../api/client';
+import { Agent, AgentConfiguration, api, ModelConnectionTestResult, ModelProfile } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { errorMessage, ErrorState } from '../components/Display';
 import { useCurrentSystem } from '../SystemContext';
@@ -23,6 +23,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const [agentName, setAgentName] = useState('');
   const [agent, setAgent] = useState<AgentDraft>(emptyAgent);
   const [message, setMessage] = useState('');
+  const [connectionTests, setConnectionTests] = useState<Record<string, ModelConnectionTestResult>>({});
   const [deleteTarget, setDeleteTarget] = useState<{ type: 'profile' | 'agent'; id: string; name: string } | null>(null);
   const config = useQuery({
     queryKey: ['agent-config', systemId],
@@ -40,8 +41,16 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
       : api.createModelProfile(systemId, profile),
     onSuccess: (value) => {
       accept(value, '模型 Profile 保存成功');
+      setConnectionTests({});
       profileDialogRef.current?.close();
     },
+  });
+  const testProfile = useMutation({
+    mutationFn: (id: string) => api.testModelProfileConnection(systemId, id),
+    onSuccess: (result, id) => setConnectionTests((current) => ({ ...current, [`${systemId}:${id}`]: result })),
+    onError: (error, id) => setConnectionTests((current) => ({
+      ...current, [`${systemId}:${id}`]: { connected: false, message: errorMessage(error) },
+    })),
   });
   const deleteProfile = useMutation({
     mutationFn: (id: string) => api.deleteModelProfile(systemId, id),
@@ -116,15 +125,23 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
           <button type="button" className="icon-text-button" disabled={!canManageCurrentSystem} onClick={() => openProfile()}><Plus size={16} />新增 Profile</button>
         </div>
         <div className="table-frame"><table className="data-table model-profile-table"><thead><tr><th>名称</th><th>协议 / 模型</th><th>状态</th><th>操作</th></tr></thead><tbody>
-          {(value?.modelProfiles ?? []).map((item) => <tr key={item.id}>
+          {(value?.modelProfiles ?? []).map((item) => {
+            const result = connectionTests[`${systemId}:${item.id}`];
+            const pending = testProfile.isPending && testProfile.variables === item.id;
+            return <tr key={item.id}>
             <td title={`${item.name || item.id} · ${item.baseUrl || '默认端点'}`}><strong>{item.name || item.id}</strong><small>{item.baseUrl || '默认端点'}</small></td>
             <td title={`${providerName(item.provider)} · ${item.model}`}>{providerName(item.provider)} · {item.model}</td>
             <td><span className={`key-status ${item.apiKeySet ? 'configured' : ''}`}><KeyRound size={14} aria-hidden="true" />{item.apiKeySet ? 'Key 已配置' : 'Key 未配置'}{item.supportsVision ? ' · Vision' : ''}</span></td>
             <td className="config-action-cell"><div className="button-row compact-actions">
+              <button type="button" className={`secondary connection-test ${result ? result.connected ? 'connected' : 'failed' : ''}`}
+                aria-label={`测试 ${item.name || item.id}连通性`} aria-live="polite" title={result?.message || '测试模型连通性'}
+                disabled={!canManageCurrentSystem || testProfile.isPending} onClick={() => testProfile.mutate(item.id)}>
+                {pending ? '测试中…' : result ? result.connected ? '连接正常' : '连接失败' : '测试连接'}
+              </button>
               <button type="button" className="icon-button" title="编辑 Profile" aria-label={`编辑 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => openProfile(item)}><Pencil size={16} /></button>
               <button type="button" className="icon-button danger" title="删除 Profile" aria-label={`删除 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => { deleteProfile.reset(); setDeleteTarget({ type: 'profile', id: item.id, name: item.name || item.id }); }}><Trash2 size={16} /></button>
             </div></td>
-          </tr>)}
+          </tr>})}
           {value?.modelProfiles.length === 0 && <tr><td className="empty-cell" colSpan={4}>还没有模型连接</td></tr>}
         </tbody></table></div>
       </div> : <div className="panel execution-agent-panel">

@@ -307,19 +307,20 @@ test('browser back restores work item query state', async () => {
   fireEvent.change(await screen.findByLabelText('搜索工作项'), { target: { value: '登录' } });
   await waitFor(() => expect(router.state.location.state).toMatchObject({ workItemList: { q: '登录' } }));
   fireEvent.click(await screen.findByRole('link', { name: 'wi-1' }));
-  expect(await screen.findByText('执行计划已生成')).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: '登录页错误提示' })).toBeInTheDocument();
 
   await act(async () => { await router.navigate(-1); });
   expect(await screen.findByLabelText('搜索工作项')).toHaveValue('登录');
 });
 
-test('work item detail shows drafted execution plan from event timeline', async () => {
+test('work item detail shows drafted execution plan in the execution stage', async () => {
   renderApp('/work-items/wi-1');
 
   expect(await screen.findByText('登录页错误提示')).toBeInTheDocument();
   expect(screen.queryByLabelText('当前工作系统')).not.toBeInTheDocument();
   expect(await screen.findByText('alpha-system')).toBeInTheDocument();
-  expect(await screen.findByText('执行计划已生成')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /计划与执行/ }));
+  expect((await screen.findAllByText('执行计划已生成')).length).toBeGreaterThan(0);
   expect(await screen.findByText('执行步骤')).toBeInTheDocument();
   expect(await screen.findByText(/错误密码时显示提示/)).toBeInTheDocument();
   expect(await screen.findByText('目标文件')).toBeInTheDocument();
@@ -331,26 +332,51 @@ test('work item detail shows drafted execution plan from event timeline', async 
   expect(screen.queryByText(/"steps"/)).not.toBeInTheDocument();
 });
 
-test('work item detail shows execution provider and token summary', async () => {
+test('work item polling keeps the stage selected by the user', async () => {
   renderApp('/work-items/wi-1');
 
-  expect(await screen.findByText('修改已完成')).toBeInTheDocument();
+  await screen.findByRole('heading', { name: '代码确认' });
+  fireEvent.click(screen.getByRole('button', { name: /计划与执行/ }));
+  expect(screen.getByRole('heading', { name: '计划与执行' })).toBeInTheDocument();
+  setApiResponse('/api/v5/work-items/wi-1', {
+    workItemId: 'wi-1', systemId: 'alpha-system', title: '登录页错误提示', lifecycleStatus: 'validation_passed',
+    currentStage: '等待上线确认', waitingFor: 'owner', canControl: true, availableActions: ['release_approved'],
+  });
+
+  await waitFor(() => expect(screen.getByRole('button', { name: /Git 提交与 MR/ })).toHaveAttribute('aria-current', 'step'), { timeout: 4500 });
+  expect(screen.getByRole('heading', { name: '计划与执行' })).toBeInTheDocument();
+}, 7000);
+
+test('work item detail keeps full diff in the code tab', async () => {
+  renderApp('/work-items/wi-1');
+
+  expect(await screen.findByRole('heading', { name: '代码确认' })).toBeInTheDocument();
+  expect(screen.queryByText(/diff --git a\/src\/login.tsx/)).not.toBeInTheDocument();
+  expect(screen.queryByText('原始 JSON')).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: '代码变更' }));
   expect((await screen.findAllByText('claude_sdk')).length).toBeGreaterThan(0);
   expect(await screen.findByText('输入 320 / 输出 80')).toBeInTheDocument();
-  expect(await screen.findByText('代码 diff')).toBeInTheDocument();
+  expect(await screen.findByText('完整 diff')).toBeInTheDocument();
   expect(await screen.findByText(/diff --git a\/src\/login.tsx/)).toBeInTheDocument();
 });
 
 test('work item detail shows agent stage handoff metadata', async () => {
   renderApp('/work-items/wi-1');
 
+  await screen.findByRole('heading', { name: '登录页错误提示' });
+  fireEvent.click(screen.getByRole('button', { name: /计划与执行/ }));
   expect(await screen.findByText('Agent 阶段已完成')).toBeInTheDocument();
-  expect(await screen.findByText('frontend')).toBeInTheDocument();
-  expect(await screen.findByText('前端修改完成')).toBeInTheDocument();
+  expect((await screen.findAllByText('frontend')).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText('前端修改完成')).length).toBeGreaterThan(0);
   expect((await screen.findAllByText('src/login.tsx')).length).toBeGreaterThan(0);
 });
 
 test('work item detail translates waiting role and merge request status', async () => {
+  setApiResponse('/api/v5/work-items/wi-1', {
+    workItemId: 'wi-1', systemId: 'alpha-system', title: '跨仓发布', lifecycleStatus: 'waiting_merge',
+    currentStage: '等待 GitLab 合并', waitingFor: 'gitlab', canControl: true, availableActions: ['check_merge_status'],
+  });
   setApiResponse('/api/v5/work-items/wi-1/events', [{
     sequence: 1,
     eventId: 'evt-mr',
@@ -361,9 +387,9 @@ test('work item detail translates waiting role and merge request status', async 
   }]);
   renderApp('/work-items/wi-1');
 
-  expect(await screen.findByText('系统负责人')).toBeInTheDocument();
-  expect(await screen.findByRole('heading', { name: 'GitLab 合并请求' })).toBeInTheDocument();
-  expect(screen.getByText('已打开')).toBeInTheDocument();
+  expect((await screen.findAllByText('GitLab')).length).toBeGreaterThan(0);
+  expect(screen.getByRole('link', { name: 'frontend !12' })).toHaveAttribute('href', 'https://gitlab.example/mr/12');
+  expect(screen.getByText('等待合并')).toBeInTheDocument();
 });
 
 test('work item detail shows completed and failed agent stages', async () => {
@@ -389,12 +415,9 @@ test('work item detail shows completed and failed agent stages', async () => {
 
   renderApp('/work-items/wi-1');
 
-  const progress = await screen.findByRole('list', { name: 'Agent Stage 进度' });
-  const stages = within(progress).getAllByRole('listitem');
-  expect(stages[0]).toHaveTextContent('frontend');
-  expect(stages[0]).toHaveTextContent('完成');
-  expect(stages[1]).toHaveTextContent('backend');
-  expect(stages[1]).toHaveTextContent('失败');
+  const progress = await screen.findByRole('list', { name: 'Agent 执行进度' });
+  expect(within(progress).getByText('frontend').closest('li')).toHaveTextContent('已完成');
+  expect(within(progress).getByText('backend').closest('li')).toHaveTextContent('失败');
 });
 
 test('waiting merge shows each GitLab MR and verified merge action', async () => {
@@ -415,8 +438,42 @@ test('waiting merge shows each GitLab MR and verified merge action', async () =>
 
   expect(await screen.findByRole('link', { name: 'frontend !1' })).toHaveAttribute('href', 'https://gitlab/web/1');
   expect(screen.getByRole('link', { name: 'backend !2' })).toHaveAttribute('href', 'https://gitlab/api/2');
-  expect(screen.getByRole('button', { name: '标记已合并' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '检查合并状态' })).toBeInTheDocument();
   expect(screen.getByText('已合并')).toBeInTheDocument();
+});
+
+test('work item detail audit tab contains all raw events without polluting the default flow', async () => {
+  renderApp('/work-items/wi-1');
+
+  const current = await screen.findByRole('button', { name: /代码确认/ });
+  expect(current).toHaveAttribute('aria-current', 'step');
+  expect(screen.queryByText('原始 JSON')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '事件审计' }));
+  expect((await screen.findAllByText('原始 JSON')).length).toBe(3);
+  expect(screen.getByText('ExecutionPlanDrafted')).toBeInTheDocument();
+});
+
+test('terminal work item fetches final events once before polling stops', async () => {
+  setApiResponse('/api/v5/work-items/wi-1', {
+    workItemId: 'wi-1', systemId: 'alpha-system', title: '发布完成', lifecycleStatus: 'completed',
+    currentStage: '已完成', waitingFor: '', canControl: false, availableActions: [],
+  });
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  let eventRequests = 0;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/v5/work-items/wi-1/events') {
+      eventRequests += 1;
+      const events = [{ sequence: 1, eventType: 'MergeRequestMerged', payloadJson: '{"repo":"frontend"}' }];
+      if (eventRequests > 1) events.push({ sequence: 2, eventType: 'ReleaseCompleted', payloadJson: '{"repo":"frontend"}' });
+      return jsonResponse(events);
+    }
+    return fallback(input, init);
+  });
+
+  renderApp('/work-items/wi-1');
+
+  expect(await screen.findByText('发布已完成')).toBeInTheDocument();
+  await waitFor(() => expect(eventRequests).toBe(2));
 });
 
 test('memory approve moves candidate out of pending tab', async () => {
