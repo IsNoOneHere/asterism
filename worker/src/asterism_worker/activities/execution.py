@@ -49,7 +49,8 @@ async def run_execution(request: dict) -> dict:
     )
     workspace = await prepare_repo_workspace(repo, parsed.system_id, settings)
     try:
-        validate_plan_targets(str(workspace), parsed.plan.target_files)
+        if parsed.repo is None:
+            validate_plan_targets(str(workspace), parsed.plan.target_files)
         context = collect_file_context(workspace, parsed.plan.target_files)
         def heartbeat_provider_event(event: dict) -> None:
             # SDK 每返回一个消息就续租 activity；单测直接调用 activity 时没有上下文。
@@ -202,15 +203,21 @@ async def validate_plan_targets_activity(request: dict) -> None:
         repos = [RepoSnapshot(repo_id="main", name="main", local_path=request.get("repo_path", ""))]
     repo_ids = [item.get("repo", "") for item in request.get("assignments", [])]
     selected = repos if not repo_ids else [repo for repo in repos if repo.repo_id in repo_ids or (not repo_ids[0] and len(repos) == 1)]
+    error = None
     for repo in selected:
         temporary = repo.clone_mode == "gitlab"
         workspace = (await prepare_repo_workspace(repo, request.get("system_id", ""), settings)
                      if temporary else Path(repo.local_path))
         try:
             validate_plan_targets(str(workspace), request.get("target_files", []))
+            return
+        except RuntimeError as current:
+            error = current
         finally:
             if temporary:
                 cleanup_repo_workspace(workspace)
+    if error:
+        raise error
 
 
 @activity.defn

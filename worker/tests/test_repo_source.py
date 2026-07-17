@@ -25,7 +25,7 @@ def test_local_repo_source_clones_into_isolated_workspace(tmp_path):
     assert not workspace.parent.exists()
 
 
-def test_gitlab_repo_source_uses_temporary_credential_store(monkeypatch, tmp_path):
+def test_gitlab_repo_source_uses_temporary_credential_store(monkeypatch, tmp_path, caplog):
     token = "secret-token-value"
     observed: dict[str, object] = {}
 
@@ -48,6 +48,7 @@ def test_gitlab_repo_source_uses_temporary_credential_store(monkeypatch, tmp_pat
     assert observed["credential_mode"] == 0o600
     assert token in str(observed["credential_text"])
     assert token not in str(observed["command"])
+    assert token not in caplog.text
     assert not (workspace.parent / ".git-credentials").exists()
     assert token not in (workspace / ".git" / "config").read_text()
     cleanup_repo_workspace(workspace)

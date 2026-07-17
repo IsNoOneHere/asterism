@@ -252,6 +252,23 @@ def test_validate_plan_targets_blocks_unsafe_paths(tmp_path):
         validate_plan_targets(str(tmp_path), ["../secrets.txt"])
 
 
+def test_multi_repo_target_validation_accepts_anchor_from_any_repository(tmp_path):
+    frontend = tmp_path / "frontend"
+    backend = tmp_path / "backend"
+    (frontend / "src").mkdir(parents=True)
+    backend.mkdir()
+    (frontend / "src" / "App.tsx").write_text("export default App\n")
+
+    asyncio.run(execution_activities.validate_plan_targets_activity({
+        "repos": [
+            {"repo_id": "frontend", "local_path": str(frontend)},
+            {"repo_id": "backend", "local_path": str(backend)},
+        ],
+        "assignments": [{"repo": "frontend"}, {"repo": "backend"}],
+        "target_files": ["src/App.tsx"],
+    }))
+
+
 def test_release_repo_commits_to_work_item_branch(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
