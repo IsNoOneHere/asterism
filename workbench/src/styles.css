@@ -1,14 +1,15 @@
 :root {
-  --canvas: #f7f7f5;
+  /* Codex 浅色主题：内容区纯白，辅助表面使用中性灰。 */
+  --canvas: #ffffff;
   --surface: #ffffff;
-  --surface-subtle: #fafaf9;
-  --surface-muted: #f3f3f1;
-  --text: #20232b;
-  --text-strong: #151820;
-  --muted: #6f7480;
-  --muted-strong: #555b68;
-  --border: #e3e4e8;
-  --border-strong: #d3d5dc;
+  --surface-subtle: #f9f9f9;
+  --surface-muted: #ececec;
+  --text: #1f1f1f;
+  --text-strong: #0d0d0d;
+  --muted: rgb(0 0 0 / 60%);
+  --muted-strong: #424242;
+  --border: #e5e5e5;
+  --border-strong: #d9d9d9;
   --accent: #5b6ee1;
   --accent-hover: #4c5fd2;
   --accent-soft: #eef0ff;
@@ -263,7 +264,7 @@ pre {
 
 .workspace-context-bar {
   align-items: center;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
   color: var(--muted);
   display: flex;
@@ -319,7 +320,7 @@ pre {
 
 .sidebar {
   align-self: start;
-  background: #fbfbfa;
+  background: #f9f9f9;
   border-right: 1px solid var(--border);
   color: var(--text);
   display: flex;
@@ -467,7 +468,7 @@ pre {
 }
 
 .sidebar nav a:hover {
-  background: #f1f1ef;
+  background: var(--surface-muted);
   color: var(--text);
 }
 
@@ -1948,6 +1949,13 @@ label {
   box-shadow: 0 0 0 3px rgba(91, 110, 225, 0.14);
   outline: none;
   outline-offset: 2px;
+}
+
+button.system-select-trigger:hover:not(:disabled),
+button.system-select-trigger[aria-expanded="true"] {
+  background: var(--surface);
+  border-color: #bdbdbd;
+  color: var(--text);
 }
 
 .system-select-chevron {
