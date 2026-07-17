@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Plus, Trash2 } from 'lucide-react';
 import { Link, useBlocker, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -278,62 +278,77 @@ export function NewPrdPage() {
           <button type="submit" disabled={pendingAssistant || !selectedSystemId || (!content.trim() && files.length === 0)}>发送</button>
         </form>
       </div>
-      <div className="panel">
-        <h2>工作项预览</h2>
-        <dl className="summary-list">
-          <dt>状态</dt>
-          <dd><StatusBadge value={result.lifecycleStatus || result.status || 'waiting_input'} /></dd>
-        </dl>
-        <div className="draft-editor">
-          <label>
-            标题
-            <input aria-label="PRD 标题" value={draftEditor.title} disabled={!draftEditable || pendingAssistant}
-              onChange={(event) => setDraftEditor((current) => ({ ...current, title: event.target.value }))} />
-          </label>
-          <label>
-            目标
-            <textarea aria-label="PRD 目标" rows={3} value={draftEditor.goal} disabled={!draftEditable || pendingAssistant}
-              onChange={(event) => setDraftEditor((current) => ({ ...current, goal: event.target.value }))} />
-          </label>
-          <div className={'draft-acceptance ' + (acceptanceMissing ? 'missing' : '')}>
-            <strong>验收标准</strong>
-            {acceptanceMissing && <div className="draft-field-tip">可以直接在这里填写，不用打字描述</div>}
-            {draftEditor.acceptanceCriteria.map((criterion, index) => (
-              <div className="draft-criterion" key={index}>
-                <input aria-label={`验收标准 ${index + 1}`} value={criterion} disabled={!draftEditable || pendingAssistant}
-                  onChange={(event) => setDraftEditor((current) => ({ ...current, acceptanceCriteria: current.acceptanceCriteria.map((item, itemIndex) => itemIndex === index ? event.target.value : item) }))} />
-                <button type="button" className="secondary" aria-label={`删除验收标准 ${index + 1}`} disabled={!draftEditable || pendingAssistant}
-                  onClick={() => setDraftEditor((current) => ({ ...current, acceptanceCriteria: current.acceptanceCriteria.filter((_, itemIndex) => itemIndex !== index) }))}>删除</button>
-              </div>
-            ))}
-            <button type="button" className="secondary" disabled={!draftEditable || pendingAssistant}
-              onClick={() => setDraftEditor((current) => ({ ...current, acceptanceCriteria: [...current.acceptanceCriteria, ''] }))}>添加验收标准</button>
+      <div className="panel prd-preview-panel">
+        <div className="prd-preview-head">
+          <h2>工作项预览</h2>
+          <div className="prd-preview-status">
+            <span>状态</span>
+            <StatusBadge value={result.lifecycleStatus || result.status || 'waiting_input'} />
           </div>
-          <button type="button" onClick={() => saveDraft.mutate()}
-            disabled={!prdId || !draftEditable || pendingAssistant || saveDraft.isPending}>保存草稿</button>
         </div>
-        {suspectedTargets.length > 0 && <div className="suspected-targets"><h3>疑似相关页面</h3>{suspectedTargets.map((target) => <div className="list-item" key={target.entryId}>
-          <div><strong>{target.title}</strong><span>{target.apiEndpoints?.join('、') || target.routePath || target.kind} · 置信度 {Math.round((target.confidence || 0) * 100)}%</span></div>
-          <button type="button" disabled={confirmTarget.isPending || confirmedTargets.some((item) => item.entryId === target.entryId)} onClick={() => confirmTarget.mutate({ entryId: target.entryId, accepted: true })}>{confirmedTargets.some((item) => item.entryId === target.entryId) ? '已确认' : '确认页面'}</button>
-        </div>)}</div>}
-        <button type="button" className={confirmable ? 'primary-strong' : ''} onClick={confirmPrd} disabled={!prdId || !confirmable || pendingAssistant || draftDirty || !readiness.data?.ready || confirm.isPending}>
-          确认并生成工作项
-        </button>
-        {draftDirty && <div className="warning">预览内容有未保存修改，请先保存草稿。</div>}
-        {readiness.isLoading && <div className="notice" role="status">正在检查系统执行条件…</div>}
-        {readiness.isError && <ErrorState title="执行条件检查失败" error={readiness.error} onRetry={() => readiness.refetch()} />}
-        {readiness.data && !readiness.data.ready && <div className="warning">
-          <strong>系统尚未具备真实执行条件</strong>
-          {readiness.data.issues?.length > 0 && <ul>{readiness.data.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}</ul>}
-        </div>}
-        {result.workItemId && (
-          <div className="success-text">
-            工作项已生成 <Link className="action-link" to={'/work-items/' + result.workItemId}>查看工作项</Link>
+        {result.workItemId ? (
+          <div className="prd-created-state" role="status">
+            <span className="prd-created-icon" aria-hidden="true"><CheckCircle2 size={22} /></span>
+            <div className="prd-created-copy">
+              <h3>工作项已生成</h3>
+              <p>需求已确认，可前往工作项详情查看后续执行状态。</p>
+            </div>
+            <div className="prd-created-actions">
+              <Link className="primary-action-link" to={'/work-items/' + result.workItemId}>查看工作项</Link>
+              <button type="button" className="secondary" onClick={reset}>创建另一项</button>
+            </div>
           </div>
-        )}
-        {prdId && <button type="button" className="secondary" onClick={reset}>创建另一项</button>}
-        {confirmTarget.error && <ErrorState title="页面确认失败" error={confirmTarget.error} />}
-        {saveDraft.error && <ErrorState title="草稿保存失败" error={saveDraft.error} />}
+        ) : <>
+          <div className="draft-editor">
+            <label>
+              标题
+              <input aria-label="PRD 标题" value={draftEditor.title} disabled={!draftEditable || pendingAssistant}
+                onChange={(event) => setDraftEditor((current) => ({ ...current, title: event.target.value }))} />
+            </label>
+            <label>
+              目标
+              <textarea aria-label="PRD 目标" rows={3} value={draftEditor.goal} disabled={!draftEditable || pendingAssistant}
+                onChange={(event) => setDraftEditor((current) => ({ ...current, goal: event.target.value }))} />
+            </label>
+            <div className={'draft-acceptance ' + (acceptanceMissing ? 'missing' : '')}>
+              <div className="draft-acceptance-head">
+                <strong>验收标准</strong>
+                {acceptanceMissing && <span className="draft-field-status">待补充</span>}
+              </div>
+              {acceptanceMissing && <div className="draft-field-tip">可以直接在这里填写，不用打字描述</div>}
+              {draftEditor.acceptanceCriteria.map((criterion, index) => (
+                <div className="draft-criterion" key={index}>
+                  <input aria-label={`验收标准 ${index + 1}`} value={criterion} disabled={!draftEditable || pendingAssistant}
+                    onChange={(event) => setDraftEditor((current) => ({ ...current, acceptanceCriteria: current.acceptanceCriteria.map((item, itemIndex) => itemIndex === index ? event.target.value : item) }))} />
+                  <button type="button" className="icon-button danger" aria-label={`删除验收标准 ${index + 1}`} disabled={!draftEditable || pendingAssistant}
+                    onClick={() => setDraftEditor((current) => ({ ...current, acceptanceCriteria: current.acceptanceCriteria.filter((_, itemIndex) => itemIndex !== index) }))}><Trash2 size={16} /></button>
+                </div>
+              ))}
+              <button type="button" className="secondary icon-text-button draft-add-criterion" disabled={!draftEditable || pendingAssistant}
+                onClick={() => setDraftEditor((current) => ({ ...current, acceptanceCriteria: [...current.acceptanceCriteria, ''] }))}><Plus size={16} />添加验收标准</button>
+            </div>
+          </div>
+          {suspectedTargets.length > 0 && <div className="suspected-targets"><h3>疑似相关页面</h3>{suspectedTargets.map((target) => <div className="list-item" key={target.entryId}>
+            <div><strong>{target.title}</strong><span>{target.apiEndpoints?.join('、') || target.routePath || target.kind} · 置信度 {Math.round((target.confidence || 0) * 100)}%</span></div>
+            <button type="button" disabled={confirmTarget.isPending || confirmedTargets.some((item) => item.entryId === target.entryId)} onClick={() => confirmTarget.mutate({ entryId: target.entryId, accepted: true })}>{confirmedTargets.some((item) => item.entryId === target.entryId) ? '已确认' : '确认页面'}</button>
+          </div>)}</div>}
+          {draftDirty && <div className="notice prd-preview-notice">预览内容已修改，保存草稿后即可确认。</div>}
+          {readiness.isLoading && <div className="notice" role="status">正在检查系统执行条件…</div>}
+          {readiness.isError && <ErrorState title="执行条件检查失败" error={readiness.error} onRetry={() => readiness.refetch()} />}
+          {readiness.data && !readiness.data.ready && <div className="warning">
+            <strong>系统尚未具备真实执行条件</strong>
+            {readiness.data.issues?.length > 0 && <ul>{readiness.data.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}</ul>}
+          </div>}
+          {prdId && <div className="prd-preview-actions">
+            <button type="button" className="secondary" onClick={() => saveDraft.mutate()}
+              disabled={!draftDirty || !draftEditable || pendingAssistant || saveDraft.isPending}>保存草稿</button>
+            <button type="button" className={confirmable ? 'primary-strong' : ''} onClick={confirmPrd} disabled={!confirmable || pendingAssistant || draftDirty || !readiness.data?.ready || confirm.isPending}>
+              确认并生成工作项
+            </button>
+          </div>}
+          {confirmTarget.error && <ErrorState title="页面确认失败" error={confirmTarget.error} />}
+          {saveDraft.error && <ErrorState title="草稿保存失败" error={saveDraft.error} />}
+        </>}
       </div>
       </div>}
       <ActionConfirmDialog

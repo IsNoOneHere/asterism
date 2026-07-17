@@ -181,6 +181,31 @@ test('draft editor highlights and saves missing acceptance criteria', async () =
   })));
 });
 
+test('generated work item replaces the draft editor with focused follow-up actions', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-complete') {
+      return jsonResponse({
+        prdId: 'prd-complete', systemId: 'alpha-system', conversationId: 'conv-complete', workItemId: 'wi-complete',
+        title: '已生成需求', status: 'confirmed', createdBy: 'admin',
+        draft: { title: '已生成需求', goal: '完成需求', acceptanceCriteria: ['通过验收'] }, missingFields: [],
+      });
+    }
+    if (path === '/api/v5/conversations/conv-complete') return jsonResponse({ messages: [], pendingAssistant: false });
+    return fallback(input, init);
+  });
+
+  renderApp('/work-items/new/prd-complete');
+
+  expect(await screen.findByRole('heading', { name: '工作项已生成' })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: '查看工作项' })).toHaveAttribute('href', '/work-items/wi-complete');
+  expect(screen.getByRole('button', { name: '创建另一项' })).toBeInTheDocument();
+  expect(screen.queryByLabelText('PRD 标题')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '保存草稿' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '确认并生成工作项' })).not.toBeInTheDocument();
+});
+
 test.each([
   ['是这个', true],
   ['不是', false],
