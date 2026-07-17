@@ -58,7 +58,7 @@ test('warns before leaving an unsaved work item description', async () => {
 test('browser back is blocked for unsent content on an existing draft', async () => {
   const router = renderAppWithRouter('/work-items');
   await act(async () => { await router.navigate('/work-items/new/prd-1'); });
-  expect(await screen.findByLabelText('PRD 标题')).toHaveValue('登录页错误提示');
+  await waitFor(() => expect(screen.getByLabelText('PRD 标题')).toHaveValue('登录页错误提示'));
   fireEvent.change(await screen.findByLabelText('需求描述'), { target: { value: '草稿里尚未发送的补充' } });
 
   act(() => { void router.navigate(-1); });
