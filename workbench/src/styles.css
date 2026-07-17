@@ -1626,15 +1626,21 @@ button.danger-action:hover:not(:disabled) {
   min-width: 720px;
 }
 
-.model-profile-table th:last-child,
 .model-profile-table td:last-child {
   text-align: right;
   width: 220px;
 }
 
-.agent-role-table th:last-child,
 .agent-role-table td:last-child {
   text-align: right;
+  width: 120px;
+}
+
+.model-profile-table th:last-child {
+  width: 220px;
+}
+
+.agent-role-table th:last-child {
   width: 120px;
 }
 
@@ -2076,9 +2082,15 @@ button.system-select-trigger[aria-expanded="true"] {
 .data-table th,
 .data-table td {
   border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   padding: 14px 16px;
-  text-align: left;
+  text-align: center;
   vertical-align: middle;
+}
+
+.data-table th:last-child,
+.data-table td:last-child {
+  border-right: 0;
 }
 
 .data-table th {
@@ -2308,16 +2320,18 @@ button.system-select-trigger[aria-expanded="true"] {
   width: auto;
 }
 
-/* 操作表头和按钮共用右对齐列，避免宽表中产生视觉错位。 */
-.system-table th:last-child,
+/* 操作按钮保持右对齐，表头沿用全局居中规则。 */
 .system-table td:last-child {
   text-align: right;
   width: 224px;
 }
 
+.system-table th:last-child {
+  width: 224px;
+}
+
 .users-table th:last-child {
   min-width: 144px;
-  text-align: right;
   width: 144px;
 }
 
