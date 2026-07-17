@@ -53,7 +53,7 @@ class WorkItemMergeStatusTest {
         var actor = new UsernamePasswordAuthenticationToken("owner", "n/a");
         var now = Instant.now();
         when(workItems.findById("wi-1")).thenReturn(Optional.of(new WorkItemProjection(
-                "wi-1", "sys-1", "prd-1", "case-1", "任务", "waiting_merge", "approved", false,
+                "wi-1", "WI20260710001", "sys-1", "prd-1", "case-1", "任务", "waiting_merge", "approved", false,
                 "等待 GitLab 合并", "gitlab", "owner", false, 6, now, null, "owner", now, now)));
         when(events.findByWorkItemId("wi-1")).thenReturn(List.of(new DomainEventRecord(
                 6L, "evt-6", "MergeRequestCreated", "v5.0", "sys-1", "case-1", "prd-1", "wi-1",

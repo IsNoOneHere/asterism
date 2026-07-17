@@ -1,6 +1,7 @@
 package com.asterism.projection;
 
 import com.asterism.event.DomainEventRecord;
+import com.asterism.prd.PrdSession;
 import com.asterism.prd.PrdSessionRepository;
 import org.junit.jupiter.api.Test;
 
@@ -15,8 +16,22 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class ProjectionServiceTest {
+    @Test
+    void firstProjectionUsesPrdTitle() {
+        var store = new InMemoryStore();
+        var sessions = mock(PrdSessionRepository.class);
+        when(sessions.findById("prd-1")).thenReturn(Optional.of(new PrdSession(
+                "prd-1", "sys-1", "conversation-1", null, null, "心跳接口", "新增心跳接口",
+                "{}", "[]", "confirmed", "owner", null, null, Instant.now(), Instant.now())));
+
+        new ProjectionService(store, sessions).apply(event(1, "OwnerApprovalRequested"));
+
+        assertThat(store.findById("wi-1").orElseThrow().title()).isEqualTo("心跳接口");
+    }
+
     @Test
     void ownerApprovalSignalDoesNotActivateWorkItem() {
         var store = new InMemoryStore();

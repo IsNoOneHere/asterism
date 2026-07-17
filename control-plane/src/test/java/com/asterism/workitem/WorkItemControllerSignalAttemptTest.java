@@ -72,6 +72,7 @@ class WorkItemControllerSignalAttemptTest {
         var now = Instant.now();
         return new WorkItemProjection(
                 "wi-1",
+                "WI20260706001",
                 "sys-1",
                 "prd-1",
                 "case-1",

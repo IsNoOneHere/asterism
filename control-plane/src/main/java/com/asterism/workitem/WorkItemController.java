@@ -96,29 +96,30 @@ public class WorkItemController {
     Iterable<DomainEventRecord> events(@PathVariable String workItemId, Authentication actor) {
         var item = find(workItemId);
         access.requireMember(item.systemId(), actor);
-        return events.findByWorkItemId(workItemId);
+        return events.findByWorkItemId(item.workItemId());
     }
 
     @PostMapping("/{workItemId}/owner-approval")
     SignalResponse ownerApproval(@PathVariable String workItemId, Authentication actor) {
         var item = find(workItemId);
         access.requireOwnerOrAdmin(item.systemId(), actor);
-        var signalId = "owner-approved-" + workItemId;
-        if (events.exists(signalId) && !events.hasUnrecoveredSignalFailure(workItemId, signalId)) {
-            return new SignalResponse(workItemId, signalId, "submitted");
+        var internalId = item.workItemId();
+        var signalId = "owner-approved-" + internalId;
+        if (events.exists(signalId) && !events.hasUnrecoveredSignalFailure(internalId, signalId)) {
+            return new SignalResponse(item.displayWorkItemId(), signalId, "submitted");
         }
-        var attempt = events.countSignalFailures(workItemId, signalId) + 1;
+        var attempt = events.countSignalFailures(internalId, signalId) + 1;
         var submissionKey = attempt == 1 ? signalId : signalId + ":retry:" + attempt;
         events.append(new DomainEventService.AppendEvent(
                 DomainEventType.OwnerApprovalSignalSubmitted,
                 item.systemId(),
                 item.caseId(),
                 item.prdId(),
-                workItemId,
+                internalId,
                 actor.getName(),
                 "control-plane",
                 Map.of("signalName", "owner_approved", "signalId", signalId, "attempt", attempt),
-                workItemId,
+                internalId,
                 null,
                 submissionKey));
         try {
@@ -130,34 +131,35 @@ public class WorkItemController {
                     item.systemId(),
                     item.caseId(),
                     item.prdId(),
-                    workItemId,
+                    internalId,
                     actor.getName(),
                     "control-plane",
                     Map.of("signalName", "owner_approved", "signalId", signalId, "reason", error.getMessage()),
-                    workItemId,
+                    internalId,
                     null,
                     "signal-failed:" + submissionKey));
             throw new IllegalStateException("Temporal signal 提交失败", error);
         }
-        return new SignalResponse(workItemId, signalId, "submitted");
+        return new SignalResponse(item.displayWorkItemId(), signalId, "submitted");
     }
 
     @PostMapping("/{workItemId}/signals/{signalName}")
     SignalResponse submitSignal(@PathVariable String workItemId, @PathVariable String signalName, Authentication actor) {
         var item = find(workItemId);
         access.requireOwnerOrAdmin(item.systemId(), actor);
-        var attempt = events.countSubmittedSignals(workItemId, signalName) + 1;
-        var signalId = signalName + "-" + workItemId + "-" + attempt;
+        var internalId = item.workItemId();
+        var attempt = events.countSubmittedSignals(internalId, signalName) + 1;
+        var signalId = signalName + "-" + internalId + "-" + attempt;
         events.append(new DomainEventService.AppendEvent(
                 DomainEventType.TemporalSignalSubmitted,
                 item.systemId(),
                 item.caseId(),
                 item.prdId(),
-                workItemId,
+                internalId,
                 actor.getName(),
                 "control-plane",
                 Map.of("signalName", signalName, "signalId", signalId, "attempt", attempt),
-                workItemId,
+                internalId,
                 null,
                 signalId));
         try {
@@ -168,16 +170,16 @@ public class WorkItemController {
                     item.systemId(),
                     item.caseId(),
                     item.prdId(),
-                    workItemId,
+                    internalId,
                     actor.getName(),
                     "control-plane",
                     Map.of("signalName", signalName, "signalId", signalId, "reason", error.getMessage()),
-                    workItemId,
+                    internalId,
                     null,
                     "signal-failed:" + signalId));
             throw new IllegalStateException("Temporal signal 提交失败", error);
         }
-        return new SignalResponse(workItemId, signalId, "submitted");
+        return new SignalResponse(item.displayWorkItemId(), signalId, "submitted");
     }
 
     @PostMapping("/{workItemId}/merge-status/check")
@@ -190,7 +192,7 @@ public class WorkItemController {
         var config = git.internal(item.systemId());
         var repos = config.repos().stream().collect(java.util.stream.Collectors.toMap(
                 GitIntegrationService.RepoConfig::repoId, value -> value));
-        var mergeRequests = latestMergeRequests(workItemId);
+        var mergeRequests = latestMergeRequests(item.workItemId());
         if (mergeRequests.isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT, "MR_NOT_FOUND", "工作项没有可核验的 MR");
         }
@@ -202,19 +204,21 @@ public class WorkItemController {
         if (!unmerged.isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT, "MR_NOT_MERGED", "仍有 MR 未合并", unmerged);
         }
-        return submitSignal(workItemId, "check_merge_status", actor);
+        return submitSignal(item.workItemId(), "check_merge_status", actor);
     }
 
     public record SignalResponse(String workItemId, String signalId, String status) {
     }
 
     private WorkItemProjection find(String workItemId) {
-        return workItems.findById(workItemId).orElseThrow(() -> new IllegalArgumentException("工作项不存在"));
+        return workItems.findById(workItemId)
+                .or(() -> workItems.findByDisplayWorkItemId(workItemId))
+                .orElseThrow(() -> new IllegalArgumentException("工作项不存在"));
     }
 
     private WorkItemView view(WorkItemProjection item, Authentication actor) {
         var canControl = access.canControl(item.systemId(), actor);
-        return new WorkItemView(item.workItemId(), item.systemId(), item.prdId(), item.caseId(), item.title(),
+        return new WorkItemView(item.displayWorkItemId(), item.systemId(), item.prdId(), item.caseId(), item.title(),
                 item.lifecycleStatus(), item.approvalStatus(), item.executionAllowed(), item.currentStage(), item.waitingFor(),
                 item.ownerUserId(), item.createdBy(), item.createdAt(), item.updatedAt(), canControl,
                 canControl ? actions(item.lifecycleStatus()) : List.of(), targets(item.prdId()));

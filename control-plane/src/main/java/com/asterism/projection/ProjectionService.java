@@ -64,12 +64,14 @@ public class ProjectionService {
     private WorkItemProjection nextProjection(DomainEventRecord event, WorkItemProjection current, LifecycleStatus target) {
         var now = event.createdAt() == null ? Instant.now() : event.createdAt();
         var first = current == null;
+        var title = first ? prdTitle(event) : current.title();
         return new WorkItemProjection(
                 event.workItemId(),
+                first ? event.workItemId() : current.displayWorkItemId(),
                 event.systemId(),
                 event.prdId(),
                 event.caseId(),
-                first ? event.workItemId() : current.title(),
+                title,
                 target.name(),
                 approvalStatus(event.eventType(), current),
                 target == LifecycleStatus.activated || target == LifecycleStatus.modification_completed || target == LifecycleStatus.patch_applied,
@@ -83,6 +85,15 @@ public class ProjectionService {
                 first ? event.actorId() : current.createdBy(),
                 first ? now : current.createdAt(),
                 now);
+    }
+
+    private String prdTitle(DomainEventRecord event) {
+        if (event.prdId() == null) return event.workItemId();
+        // 工作项标题沿用用户确认的 PRD 标题，避免把内部关联 ID 暴露在列表中。
+        return prdSessions.findById(event.prdId())
+                .map(session -> session.title())
+                .filter(title -> !title.isBlank())
+                .orElse(event.workItemId());
     }
 
     private String approvalStatus(String eventType, WorkItemProjection current) {

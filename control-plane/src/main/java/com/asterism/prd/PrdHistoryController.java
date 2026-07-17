@@ -2,6 +2,7 @@ package com.asterism.prd;
 
 import com.asterism.identity.JdbcUserAccountService;
 import com.asterism.identity.SystemAccessService;
+import com.asterism.projection.WorkItemProjectionRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,13 +23,16 @@ public class PrdHistoryController {
     private final PrdSessionRepository sessions;
     private final SystemAccessService access;
     private final JdbcUserAccountService users;
+    private final WorkItemProjectionRepository workItems;
     private final ObjectMapper objectMapper;
 
     public PrdHistoryController(PrdSessionRepository sessions, SystemAccessService access,
-                                JdbcUserAccountService users, ObjectMapper objectMapper) {
+                                JdbcUserAccountService users, WorkItemProjectionRepository workItems,
+                                ObjectMapper objectMapper) {
         this.sessions = sessions;
         this.access = access;
         this.users = users;
+        this.workItems = workItems;
         this.objectMapper = objectMapper;
     }
 
@@ -49,9 +53,14 @@ public class PrdHistoryController {
     }
 
     private PrdSessionView view(PrdSession session, String creatorDisplayName) {
-        return new PrdSessionView(session.prdId(), session.systemId(), session.conversationId(), session.workItemId(),
+        return new PrdSessionView(session.prdId(), session.systemId(), session.conversationId(), displayWorkItemId(session.workItemId()),
                 session.caseId(), session.title(), session.goal(), readMap(session.draftJson()), readList(session.missingFields()),
                 session.status(), session.createdBy(), creatorDisplayName, session.createdAt(), session.updatedAt());
+    }
+
+    private String displayWorkItemId(String workItemId) {
+        if (workItemId == null) return null;
+        return workItems.findById(workItemId).map(item -> item.displayWorkItemId()).orElse(workItemId);
     }
 
     private Map<String, String> displayNames() {

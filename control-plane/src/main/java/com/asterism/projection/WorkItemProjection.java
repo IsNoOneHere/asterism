@@ -9,6 +9,7 @@ import java.time.Instant;
 @Table("work_items")
 public record WorkItemProjection(
         @Id @Column("work_item_id") String workItemId,
+        @Column("display_work_item_id") String displayWorkItemId,
         @Column("system_id") String systemId,
         @Column("prd_id") String prdId,
         @Column("case_id") String caseId,
@@ -27,4 +28,3 @@ public record WorkItemProjection(
         @Column("created_at") Instant createdAt,
         @Column("updated_at") Instant updatedAt) {
 }
-

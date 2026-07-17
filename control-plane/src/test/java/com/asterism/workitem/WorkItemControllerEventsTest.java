@@ -18,27 +18,29 @@ import static org.mockito.Mockito.*;
 
 class WorkItemControllerEventsTest {
     @Test
-    void eventsEndpointChecksSystemAccessAndReturnsTimeline() {
+    void displayIdResolvesToInternalTimelineAndRemainsPublic() {
         var workItems = mock(WorkItemProjectionRepository.class);
         var events = mock(DomainEventService.class);
         var access = mock(SystemAccessService.class);
         var actor = new UsernamePasswordAuthenticationToken("requester", "n/a");
         var event = event();
-        when(workItems.findById("wi-1")).thenReturn(Optional.of(item()));
+        when(workItems.findByDisplayWorkItemId("WI20260706001")).thenReturn(Optional.of(item()));
         when(events.findByWorkItemId("wi-1")).thenReturn(List.of(event));
         var controller = new WorkItemController(workItems, mock(TemporalCasePort.class), events, access,
                 mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper(),
                 mock(com.asterism.git.GitIntegrationService.class), mock(com.asterism.git.GitLabClient.class));
 
-        var timeline = controller.events("wi-1", actor);
+        var detail = controller.detail("WI20260706001", actor);
+        var timeline = controller.events("WI20260706001", actor);
 
-        verify(access).requireMember("sys-1", actor);
+        verify(access, times(2)).requireMember("sys-1", actor);
+        assertThat(detail.workItemId()).isEqualTo("WI20260706001");
         assertThat(timeline).containsExactly(event);
     }
 
     private WorkItemProjection item() {
         var now = Instant.now();
-        return new WorkItemProjection("wi-1", "sys-1", "prd-1", "case-1", "任务",
+        return new WorkItemProjection("wi-1", "WI20260706001", "sys-1", "prd-1", "case-1", "任务",
                 "activated", "approved", true, "Worker 已激活", "worker", "owner",
                 false, 2, now, null, "requester", now, now);
     }

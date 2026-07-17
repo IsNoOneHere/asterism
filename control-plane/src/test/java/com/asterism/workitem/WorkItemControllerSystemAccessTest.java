@@ -40,6 +40,7 @@ class WorkItemControllerSystemAccessTest {
         var now = Instant.now();
         return new WorkItemProjection(
                 "wi-b",
+                "WI20260706001",
                 "system-b",
                 "prd-b",
                 "case-b",
