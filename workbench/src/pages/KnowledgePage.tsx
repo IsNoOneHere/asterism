@@ -27,7 +27,8 @@ export function KnowledgePage() {
     queryKey: ['knowledge', systemId, status],
     queryFn: () => api.knowledge(systemId, status),
     enabled: Boolean(systemId),
-    retry: false,
+    // 容器热替换可能截断较大的只读响应，自动补一次请求即可恢复。
+    retry: 1,
   });
   const gitConfig = useQuery({
     queryKey: ['git-config', systemId],
