@@ -22,9 +22,6 @@ const labels: Record<string, string> = {
   case_start_failed: '启动失败',
   case_starting: '启动中',
   confirmed: '已确认',
-  imported: '历史导入',
-  imported_pending: '历史待处理',
-  imported_completed: '历史已完成',
   allocated: '已分配',
   candidate: '待审批',
   disabled: '已停用',
@@ -32,8 +29,8 @@ const labels: Record<string, string> = {
 };
 
 const danger = new Set(['worker_blocked', 'patch_rejected', 'validation_failed', 'case_start_failed', 'rejected']);
-const warning = new Set(['waiting_owner_approval', 'pending', 'need_clarification', 'waiting_user_confirm', 'imported_pending']);
-const success = new Set(['completed', 'validation_passed', 'approved', 'confirmed', 'imported_completed']);
+const warning = new Set(['waiting_owner_approval', 'pending', 'need_clarification', 'waiting_user_confirm']);
+const success = new Set(['completed', 'validation_passed', 'approved', 'confirmed']);
 const info = new Set(['activated', 'modification_completed', 'patch_applied', 'waiting_merge', 'case_starting']);
 
 export function StatusBadge({ value }: { value?: string | null }) {
