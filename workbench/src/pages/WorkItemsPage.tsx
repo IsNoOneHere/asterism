@@ -113,7 +113,7 @@ function WorkItemRow({ item, navigationState, canAct, pending, onApprove }: { it
   return (
     <tr>
       <td><Link className="work-item-id-link" state={navigationState} to={'/work-items/' + item.workItemId}>{item.workItemId}</Link></td>
-      <td className="work-item-title">{item.title || '未命名工作项'}</td>
+      <td className="work-item-title" title={item.title || '未命名工作项'}>{item.title || '未命名工作项'}</td>
       <td><StatusBadge value={item.lifecycleStatus} /></td>
       <td><StatusBadge value={item.approvalStatus} /></td>
       <td>{item.executionAllowed ? '允许' : '关闭'}</td>

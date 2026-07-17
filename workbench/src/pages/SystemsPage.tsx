@@ -160,8 +160,8 @@ export function SystemsPage() {
           {pagination.pageItems.map((system) => {
             const canManage = isAdmin || system.ownerUserId === currentUser.userId || (system.systemId === systemId && canManageCurrentSystem);
             return <tr key={system.systemId}>
-            <td><div className="table-title"><strong>{system.name}</strong><span>{system.systemId}{system.description ? ` · ${system.description}` : ''}</span></div></td>
-            <td className="path-cell">{system.repoPath}</td>
+            <td><div className="table-title" title={[system.name, system.systemId, system.description].filter(Boolean).join(' · ')}><strong>{system.name}</strong><span>{system.systemId}{system.description ? ` · ${system.description}` : ''}</span></div></td>
+            <td className="path-cell" title={system.repoPath}>{system.repoPath}</td>
             <td>{ownerName(enabledUsers, system.ownerUserId)}</td>
             <td>{system.systemId === systemId ? <span className="status-badge success">当前系统</span> : <span className="status-badge neutral">可用</span>}</td>
             <td><div className="button-row compact-actions">

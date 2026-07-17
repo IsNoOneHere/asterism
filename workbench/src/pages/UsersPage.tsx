@@ -203,8 +203,8 @@ export function UsersPage({ currentUserId }: { currentUserId: string }) {
           <ErrorState title="用户列表加载失败" error={users.error} onRetry={() => users.refetch()} /> : <>
           <div className={`table-frame users-table-frame${openActionMenu ? ' menu-open' : ''}`}><table className="data-table management-table users-table"><thead><tr><th>用户</th><th>邮箱</th><th>状态</th><th>操作</th></tr></thead><tbody>
             {userPagination.pageItems.map((user) => <tr key={user.userId}>
-              <td><div className="table-title"><strong>{user.displayName}</strong><span>{user.userId}</span></div></td>
-              <td>{user.email || '未设置'}</td>
+              <td><div className="table-title" title={`${user.displayName} · ${user.userId}`}><strong>{user.displayName}</strong><span>{user.userId}</span></div></td>
+              <td title={user.email || '未设置'}>{user.email || '未设置'}</td>
               <td><span className={`status-badge ${user.enabled ? 'success' : 'neutral'}`}>{user.enabled ? '已启用' : '已禁用'}</span></td>
               <td><div className="user-row-actions">
                 {/* 高频操作直接显示，低频和危险操作统一收进更多菜单。 */}
@@ -240,9 +240,9 @@ export function UsersPage({ currentUserId }: { currentUserId: string }) {
           <ErrorState title="成员列表加载失败" error={members.error} onRetry={() => members.refetch()} /> : <>
           <div className="table-frame"><table className="data-table management-table"><thead><tr><th>成员</th><th>角色</th><th>所属系统</th><th>操作</th></tr></thead><tbody>
             {memberPagination.pageItems.map((member) => <tr key={member.userId + member.role}>
-              <td><div className="table-title"><strong>{member.displayName || member.userId}</strong><span>{member.userId}</span></div></td>
+              <td><div className="table-title" title={`${member.displayName || member.userId} · ${member.userId}`}><strong>{member.displayName || member.userId}</strong><span>{member.userId}</span></div></td>
               <td><span className="status-badge info">{roleName(member.role)}</span></td>
-              <td>{systemId}</td>
+              <td title={systemId}>{systemId}</td>
               <td><button type="button" className="danger-outline" onClick={() => openConfirmation({ type: 'remove-member', userId: member.userId, role: member.role })}>移除</button></td>
             </tr>)}
             {!filteredMembers.length && <tr><td className="empty-cell" colSpan={4}>{query ? '没有匹配的成员' : '当前系统暂无成员'}</td></tr>}

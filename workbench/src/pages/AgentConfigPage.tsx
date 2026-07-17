@@ -117,8 +117,8 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
         </div>
         <div className="table-frame"><table className="data-table model-profile-table"><thead><tr><th>名称</th><th>协议 / 模型</th><th>状态</th><th>操作</th></tr></thead><tbody>
           {(value?.modelProfiles ?? []).map((item) => <tr key={item.id}>
-            <td><strong>{item.name || item.id}</strong><small>{item.baseUrl || '默认端点'}</small></td>
-            <td>{providerName(item.provider)} · {item.model}</td>
+            <td title={`${item.name || item.id} · ${item.baseUrl || '默认端点'}`}><strong>{item.name || item.id}</strong><small>{item.baseUrl || '默认端点'}</small></td>
+            <td title={`${providerName(item.provider)} · ${item.model}`}>{providerName(item.provider)} · {item.model}</td>
             <td><span className={`key-status ${item.apiKeySet ? 'configured' : ''}`}><KeyRound size={14} aria-hidden="true" />{item.apiKeySet ? 'Key 已配置' : 'Key 未配置'}{item.supportsVision ? ' · Vision' : ''}</span></td>
             <td className="config-action-cell"><div className="button-row compact-actions">
               <button type="button" className="icon-button" title="编辑 Profile" aria-label={`编辑 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => openProfile(item)}><Pencil size={16} /></button>
@@ -134,9 +134,9 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
         </div>
         <div className="table-frame"><table className="data-table agent-role-table"><thead><tr><th>Agent</th><th>Engine / Profile</th><th>范围</th><th>操作</th></tr></thead><tbody>
           {(value?.agents ?? []).map((item) => <tr key={item.name}>
-            <td><strong>{item.name}</strong>{item.kind === 'builtin' && <span className="default-badge">内置 · {builtinPurpose[item.name]}</span>}</td>
-            <td>{item.engine ? `${item.engine} · ` : ''}{profileName(value?.modelProfiles ?? [], item.modelProfileRef)}</td>
-            <td>{item.pathScope.join(', ') || (item.name === 'product' || item.name === 'planner' ? '不执行代码' : '跟随系统')}</td>
+            <td title={item.name}><strong>{item.name}</strong>{item.kind === 'builtin' && <span className="default-badge">内置 · {builtinPurpose[item.name]}</span>}</td>
+            <td title={`${item.engine ? `${item.engine} · ` : ''}${profileName(value?.modelProfiles ?? [], item.modelProfileRef)}`}>{item.engine ? `${item.engine} · ` : ''}{profileName(value?.modelProfiles ?? [], item.modelProfileRef)}</td>
+            <td title={item.pathScope.join(', ') || (item.name === 'product' || item.name === 'planner' ? '不执行代码' : '跟随系统')}>{item.pathScope.join(', ') || (item.name === 'product' || item.name === 'planner' ? '不执行代码' : '跟随系统')}</td>
             <td className="config-action-cell"><div className="button-row compact-actions">
               <button type="button" className="icon-button" title="编辑 Agent" aria-label={`编辑 ${item.name}`} disabled={!canManageCurrentSystem} onClick={() => openAgent(item)}><Pencil size={16} /></button>
               {item.kind === 'custom' && <button type="button" className="icon-button danger" title="删除 Agent" aria-label={`删除 ${item.name}`} disabled={!canManageCurrentSystem} onClick={() => { deleteAgent.reset(); setDeleteTarget({ type: 'agent', id: item.name, name: item.name }); }}><Trash2 size={16} /></button>}

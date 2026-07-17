@@ -109,10 +109,10 @@ export function KnowledgePage() {
       <ErrorState title="知识条目加载失败" error={entries.error} onRetry={() => entries.refetch()} /> : <>
       <div className="table-frame"><table className="data-table management-table knowledge-table"><thead><tr><th>知识条目</th><th>类型</th><th>路由 / 接口</th><th>来源</th><th>操作</th></tr></thead><tbody>
         {values.map((entry) => <tr key={entry.entryId}>
-          <td><div className="table-title"><strong>{entry.title}</strong><span>仓库：{entry.repo || 'main'} · {entry.anchorTexts.length ? `${entry.anchorTexts.length} 个文字锚点` : '未设置文字锚点'}</span></div></td>
+          <td><div className="table-title" title={entry.title}><strong>{entry.title}</strong><span>仓库：{entry.repo || 'main'} · {entry.anchorTexts.length ? `${entry.anchorTexts.length} 个文字锚点` : '未设置文字锚点'}</span></div></td>
           <td><span className="status-badge info">{kindName(entry.kind)}</span></td>
-          <td><div className="table-title"><strong>{entry.routePath || '未设置路由'}</strong><span>{entry.apiEndpoints.join('、') || '未设置接口'}</span></div></td>
-          <td>{entry.source || '手工录入'}</td>
+          <td><div className="table-title" title={`${entry.routePath || '未设置路由'} · ${entry.apiEndpoints.join('、') || '未设置接口'}`}><strong>{entry.routePath || '未设置路由'}</strong><span>{entry.apiEndpoints.join('、') || '未设置接口'}</span></div></td>
+          <td title={entry.source || '手工录入'}>{entry.source || '手工录入'}</td>
           <td>{!canManageCurrentSystem ? <span className="status-badge neutral">仅查看</span> : status === 'candidate' ? <div className="button-row compact-actions"><button type="button" disabled={update.isPending} onClick={() => { update.reset(); update.mutate({ entryId: entry.entryId, next: 'approved' }); }}>批准</button><button type="button" className="secondary" disabled={update.isPending} onClick={() => { update.reset(); setConfirmAction({ entryId: entry.entryId, title: entry.title, next: 'rejected' }); }}>拒绝</button></div> : status === 'approved' ? <button type="button" className="danger-outline" disabled={update.isPending} onClick={() => { update.reset(); setConfirmAction({ entryId: entry.entryId, title: entry.title, next: 'disabled' }); }}>停用</button> : <span className="status-badge neutral">已归档</span>}</td>
         </tr>)}
         {!values.length && <tr><td className="empty-cell" colSpan={5}>{query ? '没有匹配的知识条目' : '当前状态下暂无知识条目'}</td></tr>}

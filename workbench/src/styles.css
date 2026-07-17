@@ -2079,7 +2079,14 @@ label {
 }
 
 .data-table tbody tr {
+  height: 72px;
   transition: background 120ms ease;
+}
+
+.data-table tbody td:not(.empty-cell):not([colspan]) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .data-table tbody tr:hover {
@@ -2102,8 +2109,11 @@ label {
 }
 
 .table-title a,
-.table-title strong {
-  overflow-wrap: anywhere;
+.table-title strong,
+.table-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .table-title span {
