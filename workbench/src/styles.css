@@ -2230,12 +2230,63 @@ label {
 }
 
 .users-table th:last-child {
-  min-width: 350px;
-  width: 350px;
+  min-width: 144px;
+  text-align: right;
+  width: 144px;
 }
 
-.users-table .compact-actions {
-  flex-wrap: wrap;
+.users-table td:last-child {
+  text-align: right;
+}
+
+.user-row-actions {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.row-action-menu {
+  position: relative;
+}
+
+.users-table-frame.menu-open {
+  min-height: 210px;
+}
+
+.row-action-menu-panel {
+  display: grid;
+  gap: 2px;
+  left: auto;
+  min-width: 168px;
+  right: 0;
+  text-align: left;
+  top: calc(100% + 6px);
+}
+
+.users-table tbody tr:last-child:not(:first-child) .row-action-menu-panel {
+  bottom: calc(100% + 6px);
+  top: auto;
+}
+
+button.row-action-menu-item {
+  gap: 9px;
+  justify-content: flex-start;
+}
+
+button.row-action-menu-item.danger {
+  color: var(--danger);
+}
+
+button.row-action-menu-item.danger:hover:not(:disabled),
+button.row-action-menu-item.danger:focus-visible {
+  background: var(--danger-soft);
+  color: var(--danger-hover);
+}
+
+button.row-action-menu-item:disabled {
+  background: transparent;
+  border-color: transparent;
 }
 
 .button-row.wrap {

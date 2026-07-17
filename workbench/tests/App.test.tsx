@@ -154,12 +154,13 @@ test.each([
 });
 
 test.each([
-  { path: '/systems', button: '删除系统 alpha-system', confirmButton: '删除系统', requestPath: '/api/v5/systems/alpha-system' },
-  { path: '/users', button: '删除用户 demo-user', confirmButton: '删除用户', requestPath: '/api/v5/users/demo-user' },
-])('$path uses the unified confirmation dialog and sends DELETE', async ({ path, button, confirmButton, requestPath }) => {
+  { path: '/systems', menu: undefined, button: '删除系统 alpha-system', confirmButton: '删除系统', requestPath: '/api/v5/systems/alpha-system' },
+  { path: '/users', menu: '更多操作 demo-user', button: '删除用户 demo-user', confirmButton: '删除用户', requestPath: '/api/v5/users/demo-user' },
+])('$path uses the unified confirmation dialog and sends DELETE', async ({ path, menu, button, confirmButton, requestPath }) => {
   renderApp(path);
 
-  fireEvent.click(await screen.findByRole('button', { name: button }));
+  if (menu) fireEvent.click(await screen.findByRole('button', { name: menu }));
+  fireEvent.click(await screen.findByRole(menu ? 'menuitem' : 'button', { name: button }));
   const dialog = screen.getByRole('dialog');
   expect(dialog).toHaveAttribute('open');
   expect(fetch).not.toHaveBeenCalledWith(requestPath, expect.objectContaining({ method: 'DELETE' }));
@@ -195,10 +196,28 @@ test('disabled users require an explicit enable action and current user cannot d
   ]);
   renderApp('/users');
 
-  expect(await screen.findByRole('button', { name: '禁用' })).toBeDisabled();
-  fireEvent.click(screen.getByRole('button', { name: '启用' }));
+  fireEvent.click(await screen.findByRole('button', { name: '更多操作 admin' }));
+  expect(screen.getByRole('menuitem', { name: '禁用用户' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: '更多操作 disabled-user' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: '启用用户' }));
 
   await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/users/disabled-user/enable', expect.objectContaining({ method: 'POST' })));
+});
+
+test('user rows keep frequent actions visible and place destructive actions in the more menu', async () => {
+  renderApp('/users');
+
+  expect(await screen.findByRole('button', { name: '编辑用户 demo-user' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '重置 demo-user 的密码' })).toBeInTheDocument();
+  expect(screen.queryByRole('menuitem', { name: '删除用户 demo-user' })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: '更多操作 demo-user' }));
+  expect(screen.getByRole('menuitem', { name: '删除用户 demo-user' })).toBeInTheDocument();
+  expect(document.querySelector('.users-table-frame')).toHaveClass('menu-open');
+
+  fireEvent.click(screen.getByRole('tab', { name: /当前系统成员/ }));
+  fireEvent.click(screen.getByRole('tab', { name: /用户列表/ }));
+  expect(screen.queryByRole('menuitem', { name: '删除用户 demo-user' })).not.toBeInTheDocument();
 });
 
 test('work item page loads selected system from systems api', async () => {

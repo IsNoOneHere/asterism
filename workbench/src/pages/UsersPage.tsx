@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyRound, Pencil, Plus, Trash2, UserPlus } from 'lucide-react';
+import { Ellipsis, KeyRound, Pencil, Plus, Trash2, UserCheck, UserPlus, UserX } from 'lucide-react';
 import { api, UserAccount } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { errorMessage, ErrorState } from '../components/Display';
@@ -28,6 +28,7 @@ export function UsersPage({ currentUserId }: { currentUserId: string }) {
   const [resetForm, setResetForm] = useState({ userId: '', password: '', confirm: '' });
   const [message, setMessage] = useState('');
   const [query, setQuery] = useState('');
+  const [openActionMenu, setOpenActionMenu] = useState('');
   const [confirmAction, setConfirmAction] = useState<UserConfirmAction | null>(null);
   const enabledUsers = (users.data ?? []).filter((user) => user.enabled);
   const members = useQuery({
@@ -121,6 +122,7 @@ export function UsersPage({ currentUserId }: { currentUserId: string }) {
   const operationPending = removeUser.isPending || disable.isPending || enable.isPending || removeMembership.isPending;
 
   function openUserEditor(user?: UserAccount) {
+    setOpenActionMenu('');
     upsert.reset();
     setEditingUser(Boolean(user));
     setUserForm(user
@@ -139,12 +141,14 @@ export function UsersPage({ currentUserId }: { currentUserId: string }) {
   }
 
   function openPasswordReset(userId: string) {
+    setOpenActionMenu('');
     reset.reset();
     setResetForm({ userId, password: '', confirm: '' });
     resetDialogRef.current?.showModal();
   }
 
   function openConfirmation(action: UserConfirmAction) {
+    setOpenActionMenu('');
     removeUser.reset();
     disable.reset();
     enable.reset();
@@ -182,39 +186,56 @@ export function UsersPage({ currentUserId }: { currentUserId: string }) {
 
       <div className="panel management-panel">
         <div className="tabs management-tabs" role="tablist" aria-label="用户与成员列表">
-          <button type="button" role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'active' : ''} onClick={() => { setTab('users'); setQuery(''); }}>用户列表 <span>{userValues.length}</span></button>
-          <button type="button" role="tab" aria-selected={tab === 'members'} className={tab === 'members' ? 'active' : ''} onClick={() => { setTab('members'); setQuery(''); }}>当前系统成员 <span>{memberValues.length}</span></button>
+          <button type="button" role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'active' : ''} onClick={() => { setTab('users'); setQuery(''); setOpenActionMenu(''); }}>用户列表 <span>{userValues.length}</span></button>
+          <button type="button" role="tab" aria-selected={tab === 'members'} className={tab === 'members' ? 'active' : ''} onClick={() => { setTab('members'); setQuery(''); setOpenActionMenu(''); }}>当前系统成员 <span>{memberValues.length}</span></button>
         </div>
         <div className="management-toolbar">
           <SearchField
             value={query}
             label={tab === 'users' ? '搜索用户' : '搜索成员'}
             placeholder={tab === 'users' ? '搜索姓名、账号或邮箱' : '搜索姓名、账号或角色'}
-            onChange={setQuery}
+            onChange={(value) => { setQuery(value); setOpenActionMenu(''); }}
           />
           <span className="result-summary">显示 {tab === 'users' ? filteredUsers.length : filteredMembers.length} / {tab === 'users' ? userValues.length : memberValues.length}</span>
         </div>
 
         {tab === 'users' ? users.isLoading ? <div className="empty" role="status">用户加载中…</div> : users.isError ?
           <ErrorState title="用户列表加载失败" error={users.error} onRetry={() => users.refetch()} /> : <>
-          <div className="table-frame"><table className="data-table management-table users-table"><thead><tr><th>用户</th><th>邮箱</th><th>状态</th><th>操作</th></tr></thead><tbody>
+          <div className={`table-frame users-table-frame${openActionMenu ? ' menu-open' : ''}`}><table className="data-table management-table users-table"><thead><tr><th>用户</th><th>邮箱</th><th>状态</th><th>操作</th></tr></thead><tbody>
             {userPagination.pageItems.map((user) => <tr key={user.userId}>
               <td><div className="table-title"><strong>{user.displayName}</strong><span>{user.userId}</span></div></td>
               <td>{user.email || '未设置'}</td>
               <td><span className={`status-badge ${user.enabled ? 'success' : 'neutral'}`}>{user.enabled ? '已启用' : '已禁用'}</span></td>
-              <td><div className="button-row compact-actions">
-                <button type="button" className="secondary icon-text-button" onClick={() => openUserEditor(user)}><Pencil size={15} />编辑</button>
-                <button type="button" className="secondary icon-text-button" onClick={() => openPasswordReset(user.userId)}><KeyRound size={15} />重置密码</button>
-                {user.enabled ? <button type="button" className="danger-outline" title={user.userId === currentUserId ? '不能禁用当前登录用户' : undefined}
-                  onClick={() => openConfirmation({ type: 'disable', userId: user.userId, name: user.displayName || user.userId })} disabled={user.userId === currentUserId}>禁用</button>
-                  : <button type="button" className="secondary" disabled={enable.isPending} onClick={() => { clearOperationError(); setMessage(''); enable.mutate(user.userId); }}>启用</button>}
-                <button type="button" className="danger-outline icon-text-button" aria-label={`删除用户 ${user.userId}`} title={user.userId === currentUserId ? '不能删除当前登录用户' : undefined}
-                  disabled={removeUser.isPending || user.userId === currentUserId} onClick={() => openConfirmation({ type: 'delete', userId: user.userId, name: user.displayName || user.userId })}><Trash2 size={15} />删除</button>
+              <td><div className="user-row-actions">
+                {/* 高频操作直接显示，低频和危险操作统一收进更多菜单。 */}
+                <button type="button" className="secondary icon-button" aria-label={`编辑用户 ${user.userId}`} title="编辑用户" onClick={() => openUserEditor(user)}><Pencil size={16} /></button>
+                <button type="button" className="secondary icon-button" aria-label={`重置 ${user.userId} 的密码`} title="重置密码" onClick={() => openPasswordReset(user.userId)}><KeyRound size={16} /></button>
+                <div className="row-action-menu" onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpenActionMenu('');
+                }} onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    setOpenActionMenu('');
+                    event.currentTarget.querySelector('button')?.focus();
+                  }
+                }}>
+                  <button type="button" className="secondary icon-button" aria-label={`更多操作 ${user.userId}`} title="更多操作"
+                    aria-haspopup="menu" aria-expanded={openActionMenu === user.userId}
+                    onClick={() => setOpenActionMenu((value) => value === user.userId ? '' : user.userId)}><Ellipsis size={17} /></button>
+                  {openActionMenu === user.userId && <div className="system-select-menu row-action-menu-panel" role="menu" aria-label={`${user.displayName || user.userId} 的更多操作`}>
+                    {user.enabled ? <button type="button" role="menuitem" className="system-select-option row-action-menu-item" title={user.userId === currentUserId ? '不能禁用当前登录用户' : undefined}
+                      onClick={() => openConfirmation({ type: 'disable', userId: user.userId, name: user.displayName || user.userId })} disabled={user.userId === currentUserId}><UserX size={16} /><span>禁用用户</span></button>
+                      : <button type="button" role="menuitem" className="system-select-option row-action-menu-item" disabled={enable.isPending}
+                        onClick={() => { setOpenActionMenu(''); clearOperationError(); setMessage(''); enable.mutate(user.userId); }}><UserCheck size={16} /><span>启用用户</span></button>}
+                    <button type="button" role="menuitem" className="system-select-option row-action-menu-item danger" aria-label={`删除用户 ${user.userId}`}
+                      title={user.userId === currentUserId ? '不能删除当前登录用户' : undefined}
+                      disabled={removeUser.isPending || user.userId === currentUserId} onClick={() => openConfirmation({ type: 'delete', userId: user.userId, name: user.displayName || user.userId })}><Trash2 size={16} /><span>删除用户</span></button>
+                  </div>}
+                </div>
               </div></td>
             </tr>)}
             {!filteredUsers.length && <tr><td className="empty-cell" colSpan={4}>{query ? '没有匹配的用户' : '暂无用户'}</td></tr>}
           </tbody></table></div>
-          <Pagination total={filteredUsers.length} page={userPagination.page} totalPages={userPagination.totalPages} onPageChange={userPagination.setPage} />
+          <Pagination total={filteredUsers.length} page={userPagination.page} totalPages={userPagination.totalPages} onPageChange={(page) => { setOpenActionMenu(''); userPagination.setPage(page); }} />
         </> : members.isLoading ? <div className="empty" role="status">成员加载中…</div> : members.isError ?
           <ErrorState title="成员列表加载失败" error={members.error} onRetry={() => members.refetch()} /> : <>
           <div className="table-frame"><table className="data-table management-table"><thead><tr><th>成员</th><th>角色</th><th>所属系统</th><th>操作</th></tr></thead><tbody>
