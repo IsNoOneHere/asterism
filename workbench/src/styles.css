@@ -1572,8 +1572,7 @@ button.danger-action:hover:not(:disabled) {
 .config-dialog-fields,
 .agent-role-fields {
   display: grid;
-  gap: 0 14px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
 }
 
 .checkbox-field,
@@ -2795,8 +2794,6 @@ button.row-action-menu-item:disabled {
     padding: 10px 12px;
   }
 
-  .config-dialog-fields,
-  .agent-role-fields,
   .config-boundary {
     grid-template-columns: 1fr;
   }
