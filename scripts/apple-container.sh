@@ -232,7 +232,9 @@ up_services() {
     server start-dev --ip 0.0.0.0 --db-filename /tmp/temporal.db
   TEMPORAL_IP="$(container_ip temporal)"
 
-  NO_PROXY="localhost,127.0.0.1,::1,$GATEWAY_IP,$POSTGRES_IP,$TEMPORAL_IP"
+  # GitLab 位于内网时必须绕过宿主代理，确保 worker 直接完成 A→B 访问。
+  GITLAB_HOST="$(printf '%s\n' "$ASTERISM_GITLAB_BASE_URL" | sed -E 's#^https?://##; s#[:/].*$##')"
+  NO_PROXY="localhost,127.0.0.1,::1,$GATEWAY_IP,$POSTGRES_IP,$TEMPORAL_IP${GITLAB_HOST:+,$GITLAB_HOST}"
   no_proxy="$NO_PROXY"
   export NO_PROXY no_proxy
   run_external_service agent-service \
@@ -261,7 +263,7 @@ up_services() {
   # HTTP 服务统一走宿主发布端口，避免 Apple Container 重启后动态 IP 变化。
   V5_AGENT_CONTROL_PLANE_URL="http://$GATEWAY_IP:8085"
   export V5_AGENT_CONTROL_PLANE_URL
-  NO_PROXY="localhost,127.0.0.1,::1,$GATEWAY_IP,$POSTGRES_IP,$TEMPORAL_IP"
+  NO_PROXY="localhost,127.0.0.1,::1,$GATEWAY_IP,$POSTGRES_IP,$TEMPORAL_IP${GITLAB_HOST:+,$GITLAB_HOST}"
   no_proxy="$NO_PROXY"
   export NO_PROXY no_proxy
   if [ -n "${V5_APPLE_PROXY_URL:-}" ]; then
