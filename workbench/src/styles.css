@@ -1544,13 +1544,16 @@ button.danger-action:hover:not(:disabled) {
 
 .config-dialog {
   max-height: calc(100vh - 48px);
-  overflow-y: auto;
-  padding: 26px 28px;
+  overflow: hidden;
+  padding: 0;
   width: min(560px, calc(100vw - 32px));
 }
 
 .config-dialog form {
   margin: 0;
+  max-height: calc(100vh - 50px);
+  overflow-y: auto;
+  padding: 26px 28px;
 }
 
 .config-dialog form > .button-row:last-child {
@@ -2835,7 +2838,7 @@ button.row-action-menu-item:disabled {
     grid-template-columns: 1fr;
   }
 
-  .config-dialog {
+  .config-dialog form {
     padding: 22px 20px;
   }
 
