@@ -62,7 +62,7 @@ export function NewPrdPage() {
     defaultValues: { systemId, content: '' },
   });
   const selectedSystemId = form.watch('systemId');
-  const content = form.watch('content');
+  const content = form.watch('content') ?? '';
   const draftDirty = Boolean(prdId) && JSON.stringify(draftEditor) !== JSON.stringify(savedDraftEditor);
   const hasUnsavedChanges = Boolean(content.trim() || files.length || draftDirty);
   const shouldBlock = useCallback(() => hasUnsavedChanges && !allowNavigation.current, [hasUnsavedChanges]);
