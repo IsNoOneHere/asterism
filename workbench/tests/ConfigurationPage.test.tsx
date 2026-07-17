@@ -135,12 +135,15 @@ test('new system leaves MR target branch empty for per-repository defaults', asy
 
 test('git publishing configuration edits multiple repositories without rendering token', async () => {
   renderApp('/systems');
-  fireEvent.click((await screen.findAllByRole('button', { name: '编辑' }))[0]);
+  fireEvent.click((await screen.findAllByRole('button', { name: 'Git 配置' }))[0]);
 
   const dialog = await screen.findByRole('dialog');
   expect(dialog).toHaveTextContent('Git 与发布');
+  expect(screen.getByLabelText('发布模式')).toBeInTheDocument();
+  expect(screen.getByLabelText('验证模式')).toBeInTheDocument();
   expect(screen.getByLabelText('MR 目标分支')).toHaveValue('');
   expect(screen.getByLabelText('GitLab Token')).toHaveAttribute('placeholder', '留空保留现有 Token');
+  expect(screen.getByRole('heading', { name: '仓库列表' })).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('发布模式'), { target: { value: 'gitlab' } });
   fireEvent.change(screen.getByLabelText('GitLab Token'), { target: { value: 'temporary-value' } });
   fireEvent.click(screen.getByRole('button', { name: '添加仓库' }));

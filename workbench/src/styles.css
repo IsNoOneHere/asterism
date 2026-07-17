@@ -2261,11 +2261,19 @@ label {
   width: 36px;
 }
 
-/* 操作表头和图标共用紧凑右对齐列，避免宽表中产生视觉错位。 */
+/* Git 配置使用可见文字入口，其余行操作继续保持紧凑图标。 */
+.system-table .button-row.compact-actions > .git-config-action {
+  font-size: 0.8125rem;
+  gap: 6px;
+  padding: 0 10px;
+  width: auto;
+}
+
+/* 操作表头和按钮共用右对齐列，避免宽表中产生视觉错位。 */
 .system-table th:last-child,
 .system-table td:last-child {
   text-align: right;
-  width: 112px;
+  width: 224px;
 }
 
 .users-table th:last-child {
