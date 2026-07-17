@@ -2097,6 +2097,12 @@ button.system-select-trigger[aria-expanded="true"] {
   white-space: nowrap;
 }
 
+/* 操作列展示控件，不生成容易被误认为隐藏文字的省略号。 */
+.data-table tbody td:last-child {
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .data-table tbody tr:hover {
   background: #fbfbfd;
 }
@@ -2150,6 +2156,13 @@ button.system-select-trigger[aria-expanded="true"] {
 .work-item-title {
   font-weight: 600;
   line-height: 1.45;
+}
+
+.work-item-title > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .table-action {

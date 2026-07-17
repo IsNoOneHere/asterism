@@ -65,7 +65,7 @@ export function WorkItemsPage() {
       </div>
       <div className="table-frame">
         <table className="data-table work-items-table">
-          <colgroup><col style={{ width: '17%' }} /><col style={{ width: '20%' }} /><col style={{ width: '12%' }} /><col style={{ width: '11%' }} /><col style={{ width: '8%' }} /><col style={{ width: '14%' }} /><col style={{ width: '8%' }} /><col style={{ width: '10%' }} /></colgroup>
+          <colgroup><col style={{ width: '15%' }} /><col style={{ width: '20%' }} /><col style={{ width: '12%' }} /><col style={{ width: '11%' }} /><col style={{ width: '8%' }} /><col style={{ width: '14%' }} /><col style={{ width: '8%' }} /><col style={{ width: '12%' }} /></colgroup>
           <thead><tr><th>工作项 ID</th><th>标题</th><th>生命周期</th><th>审批</th><th>执行</th><th>更新时间</th><th>创建人</th><th>动作</th></tr></thead>
           <tbody>
             {pagination.pageItems.map((item) => (
@@ -113,7 +113,7 @@ function WorkItemRow({ item, navigationState, canAct, pending, onApprove }: { it
   return (
     <tr>
       <td><Link className="work-item-id-link" state={navigationState} to={'/work-items/' + item.workItemId}>{item.workItemId}</Link></td>
-      <td className="work-item-title" title={item.title || '未命名工作项'}>{item.title || '未命名工作项'}</td>
+      <td className="work-item-title"><span title={item.title || '未命名工作项'}>{item.title || '未命名工作项'}</span></td>
       <td><StatusBadge value={item.lifecycleStatus} /></td>
       <td><StatusBadge value={item.approvalStatus} /></td>
       <td>{item.executionAllowed ? '允许' : '关闭'}</td>
