@@ -153,6 +153,27 @@ test.each([
   expect(screen.getByRole('heading', { name: heading })).toBeInTheDocument();
 });
 
+test('knowledge list requests one server page instead of the full dataset', async () => {
+  const firstPage = '/api/v5/systems/alpha-system/knowledge/page?status=candidate&page=1&pageSize=10&query=';
+  const secondPage = '/api/v5/systems/alpha-system/knowledge/page?status=candidate&page=2&pageSize=10&query=';
+  const entry = (entryId: string, title: string) => ({
+    entryId, systemId: 'alpha-system', repo: 'main', kind: 'page', title,
+    anchorTexts: [], routePath: '/login', apiEndpoints: [], codeRefs: [],
+    status: 'candidate', source: 'code_index', sourceRef: '',
+  });
+  setApiResponse(firstPage, { items: [entry('knowledge-1', '第一页知识')], total: 21, page: 1, pageSize: 10, totalPages: 3 });
+  setApiResponse(secondPage, { items: [entry('knowledge-11', '第二页知识')], total: 21, page: 2, pageSize: 10, totalPages: 3 });
+  renderApp('/knowledge');
+
+  expect(await screen.findByText('第一页知识')).toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledWith(firstPage, expect.anything());
+  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+
+  expect(await screen.findByText('第二页知识')).toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledWith(secondPage, expect.anything());
+  expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).startsWith('/api/v5/systems/alpha-system/knowledge?'))).toBe(false);
+});
+
 test.each([
   { path: '/systems', menu: undefined, button: '删除系统 alpha-system', confirmButton: '删除系统', requestPath: '/api/v5/systems/alpha-system' },
   { path: '/users', menu: '更多操作 demo-user', button: '删除用户 demo-user', confirmButton: '删除用户', requestPath: '/api/v5/users/demo-user' },

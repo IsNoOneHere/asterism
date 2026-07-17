@@ -612,6 +612,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v5/systems/{systemId}/knowledge/page": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["page"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v5/systems/{systemId}/agent-config": {
         parameters: {
             query?: never;
@@ -1201,6 +1217,17 @@ export interface components {
             effectiveExecutionProvider?: string;
             stages?: components["schemas"]["ReadinessStage"][];
             issues?: components["schemas"]["ReadinessIssue"][];
+        };
+        KnowledgePageView: {
+            items?: components["schemas"]["KnowledgeView"][];
+            /** Format: int64 */
+            total?: number;
+            /** Format: int32 */
+            page?: number;
+            /** Format: int32 */
+            pageSize?: number;
+            /** Format: int32 */
+            totalPages?: number;
         };
         PrdSessionView: {
             prdId?: string;
@@ -2345,6 +2372,33 @@ export interface operations {
                 };
                 content: {
                     "*/*": Record<string, never>;
+                };
+            };
+        };
+    };
+    page: {
+        parameters: {
+            query?: {
+                status?: string;
+                query?: string;
+                page?: number;
+                pageSize?: number;
+            };
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["KnowledgePageView"];
                 };
             };
         };

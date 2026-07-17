@@ -182,6 +182,11 @@ export function resetAppTestState() {
       candidateMemories = [...candidateMemories, { ...body, memoryId: 'mem-new', status: 'candidate', createdAt: '2026-07-05T13:00:00Z' }];
       return jsonResponse(candidateMemories[candidateMemories.length - 1]);
     }
+    if (path.startsWith('/api/v5/systems/alpha-system/knowledge/page?') && !init?.method) {
+      return jsonResponse(Object.prototype.hasOwnProperty.call(responseOverrides, path) ? responseOverrides[path] : {
+        items: [], total: 0, page: 1, pageSize: 10, totalPages: 1,
+      });
+    }
     if (path.startsWith('/api/v5/systems/alpha-system/knowledge?') && !init?.method) {
       return jsonResponse([]);
     }

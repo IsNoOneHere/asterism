@@ -32,6 +32,17 @@ public class SystemKnowledgeController {
         return knowledge.list(systemId, status);
     }
 
+    @GetMapping("/page")
+    SystemKnowledgeService.KnowledgePageView page(@PathVariable String systemId,
+                                                  @RequestParam(defaultValue = "candidate") String status,
+                                                  @RequestParam(defaultValue = "") String query,
+                                                  @RequestParam(defaultValue = "1") int page,
+                                                  @RequestParam(defaultValue = "10") int pageSize,
+                                                  Authentication actor) {
+        access.requireMember(systemId, actor);
+        return knowledge.listPage(systemId, status, query, page, pageSize);
+    }
+
     @PostMapping
     SystemKnowledgeService.KnowledgeView create(@PathVariable String systemId,
                                                 @RequestBody SystemKnowledgeService.CandidateRequest request,

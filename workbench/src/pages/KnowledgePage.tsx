@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FormEvent, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
 import { api } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { ErrorState } from '../components/Display';
-import { Pagination, usePagination } from '../components/Pagination';
+import { Pagination } from '../components/Pagination';
 import { SearchField } from '../components/SearchField';
 import { useCurrentSystem } from '../SystemContext';
 
@@ -22,13 +22,13 @@ export function KnowledgePage() {
   const [routePath, setRoutePath] = useState('');
   const [apiEndpoints, setApiEndpoints] = useState('');
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
   const [confirmAction, setConfirmAction] = useState<{ entryId: string; title: string; next: 'rejected' | 'disabled' } | null>(null);
   const entries = useQuery({
-    queryKey: ['knowledge', systemId, status],
-    queryFn: () => api.knowledge(systemId, status),
+    queryKey: ['knowledge', systemId, status, page, query],
+    queryFn: () => api.knowledgePage(systemId, status, page, query.trim()),
     enabled: Boolean(systemId),
-    // 容器热替换可能截断较大的只读响应，自动补一次请求即可恢复。
-    retry: 1,
+    retry: false,
   });
   const gitConfig = useQuery({
     queryKey: ['git-config', systemId],
@@ -36,15 +36,10 @@ export function KnowledgePage() {
     enabled: Boolean(systemId) && canManageCurrentSystem,
     retry: false,
   });
-  const values = entries.data ?? [];
-  const filteredValues = useMemo(() => {
-    const keyword = query.trim().toLowerCase();
-    if (!keyword) return values;
-    return values.filter((entry) => [entry.title, entry.repo, entry.kind, kindName(entry.kind), entry.routePath, entry.source, ...entry.anchorTexts, ...entry.apiEndpoints]
-      .some((value) => value?.toLowerCase().includes(keyword)));
-  }, [query, values]);
-  // 知识库固定每页 10 条，切换状态时自动回到第一页。
-  const pagination = usePagination(filteredValues, `${systemId}:${status}:${query}`, 1, entries.isSuccess, 10);
+  const values = entries.data?.items ?? [];
+  useEffect(() => {
+    if (entries.data && entries.data.page !== page) setPage(entries.data.page);
+  }, [entries.data, page]);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['knowledge', systemId] });
   const create = useMutation({
     mutationFn: () => api.createKnowledge(systemId, {
@@ -79,6 +74,12 @@ export function KnowledgePage() {
     dialogRef.current?.showModal();
   }
 
+  function selectStatus(next: Status) {
+    setStatus(next);
+    setQuery('');
+    setPage(1);
+  }
+
   return <section className="management-page">
     <header className="page-head management-head">
       <div><h1>系统知识库</h1><p>维护页面、路由和接口知识；只有已批准条目会参与截图匹配。</p></div>
@@ -95,28 +96,28 @@ export function KnowledgePage() {
 
     <div className="panel management-panel">
       <div className="tabs management-tabs" role="tablist" aria-label="知识条目状态">
-        <button type="button" role="tab" aria-selected={status === 'candidate'} className={status === 'candidate' ? 'active' : ''} onClick={() => { setStatus('candidate'); setQuery(''); }}>待审批</button>
-        <button type="button" role="tab" aria-selected={status === 'approved'} className={status === 'approved' ? 'active' : ''} onClick={() => { setStatus('approved'); setQuery(''); }}>已批准</button>
-        <button type="button" role="tab" aria-selected={status === 'rejected'} className={status === 'rejected' ? 'active' : ''} onClick={() => { setStatus('rejected'); setQuery(''); }}>已拒绝</button>
-        <button type="button" role="tab" aria-selected={status === 'disabled'} className={status === 'disabled' ? 'active' : ''} onClick={() => { setStatus('disabled'); setQuery(''); }}>已停用</button>
+        <button type="button" role="tab" aria-selected={status === 'candidate'} className={status === 'candidate' ? 'active' : ''} onClick={() => selectStatus('candidate')}>待审批</button>
+        <button type="button" role="tab" aria-selected={status === 'approved'} className={status === 'approved' ? 'active' : ''} onClick={() => selectStatus('approved')}>已批准</button>
+        <button type="button" role="tab" aria-selected={status === 'rejected'} className={status === 'rejected' ? 'active' : ''} onClick={() => selectStatus('rejected')}>已拒绝</button>
+        <button type="button" role="tab" aria-selected={status === 'disabled'} className={status === 'disabled' ? 'active' : ''} onClick={() => selectStatus('disabled')}>已停用</button>
       </div>
       <div className="management-toolbar">
-        <SearchField value={query} label="搜索知识条目" placeholder="搜索标题、路由、接口或锚点" onChange={setQuery} />
-        <span className="result-summary">显示 {filteredValues.length} / {values.length}</span>
+        <SearchField value={query} label="搜索知识条目" placeholder="搜索标题、路由、接口或锚点" onChange={(value) => { setQuery(value); setPage(1); }} />
+        {entries.data && <span className="result-summary">共 {entries.data.total} 条</span>}
       </div>
       {entries.isLoading ? <div className="empty" role="status">知识条目加载中…</div> : entries.isError ?
       <ErrorState title="知识条目加载失败" error={entries.error} onRetry={() => entries.refetch()} /> : <>
       <div className="table-frame"><table className="data-table management-table knowledge-table"><thead><tr><th>知识条目</th><th>类型</th><th>路由 / 接口</th><th>来源</th><th>操作</th></tr></thead><tbody>
-        {pagination.pageItems.map((entry) => <tr key={entry.entryId}>
+        {values.map((entry) => <tr key={entry.entryId}>
           <td><div className="table-title"><strong>{entry.title}</strong><span>仓库：{entry.repo || 'main'} · {entry.anchorTexts.join('、') || '未设置可见文字锚点'}</span></div></td>
           <td><span className="status-badge info">{kindName(entry.kind)}</span></td>
           <td><div className="table-title"><strong>{entry.routePath || '未设置路由'}</strong><span>{entry.apiEndpoints.join('、') || '未设置接口'}</span></div></td>
           <td>{entry.source || '手工录入'}</td>
           <td>{!canManageCurrentSystem ? <span className="status-badge neutral">仅查看</span> : status === 'candidate' ? <div className="button-row compact-actions"><button type="button" disabled={update.isPending} onClick={() => { update.reset(); update.mutate({ entryId: entry.entryId, next: 'approved' }); }}>批准</button><button type="button" className="secondary" disabled={update.isPending} onClick={() => { update.reset(); setConfirmAction({ entryId: entry.entryId, title: entry.title, next: 'rejected' }); }}>拒绝</button></div> : status === 'approved' ? <button type="button" className="danger-outline" disabled={update.isPending} onClick={() => { update.reset(); setConfirmAction({ entryId: entry.entryId, title: entry.title, next: 'disabled' }); }}>停用</button> : <span className="status-badge neutral">已归档</span>}</td>
         </tr>)}
-        {!filteredValues.length && <tr><td className="empty-cell" colSpan={5}>{query ? '没有匹配的知识条目' : '当前状态下暂无知识条目'}</td></tr>}
+        {!values.length && <tr><td className="empty-cell" colSpan={5}>{query ? '没有匹配的知识条目' : '当前状态下暂无知识条目'}</td></tr>}
       </tbody></table></div>
-      <Pagination total={filteredValues.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
+      <Pagination total={entries.data?.total ?? 0} page={entries.data?.page ?? page} totalPages={entries.data?.totalPages ?? 1} onPageChange={setPage} />
       </>}
     </div>
 

@@ -147,6 +147,13 @@ export type KnowledgeEntry = {
   sourceRef: string;
   createdAt?: string;
 };
+export type KnowledgePageResult = {
+  items: KnowledgeEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
 export type PrdMessageResult = {
   prdId?: string;
   conversationId?: string;
@@ -373,6 +380,10 @@ export const api = {
     request<ContextSnapshot>('/api/v5/context-snapshots?systemId=' + encodeURIComponent(systemId)),
   knowledge: (systemId: string, status: string) =>
     request<KnowledgeEntry[]>('/api/v5/systems/' + encodeURIComponent(systemId) + '/knowledge?status=' + encodeURIComponent(status)),
+  knowledgePage: (systemId: string, status: string, page: number, query: string) =>
+    request<KnowledgePageResult>('/api/v5/systems/' + encodeURIComponent(systemId) + '/knowledge/page?' + new URLSearchParams({
+      status, page: String(page), pageSize: '10', query,
+    })),
   createKnowledge: (systemId: string, body: unknown) =>
     request<KnowledgeEntry>('/api/v5/systems/' + encodeURIComponent(systemId) + '/knowledge', {
       method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),

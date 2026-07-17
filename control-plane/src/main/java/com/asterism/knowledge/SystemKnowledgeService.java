@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 
@@ -35,6 +36,19 @@ public class SystemKnowledgeService {
                 ? entries.findBySystemIdOrderByCreatedAtDesc(systemId)
                 : entries.findBySystemIdAndStatusOrderByCreatedAtDesc(systemId, status);
         return values.stream().map(this::view).toList();
+    }
+
+    // 知识库列表只返回当前页，避免索引条目增多后一次传输超大 JSON。
+    public KnowledgePageView listPage(String systemId, String status, String query, int page, int pageSize) {
+        var safePageSize = Math.min(Math.max(pageSize, 1), 50);
+        var keyword = "%" + text(query).trim().toLowerCase(Locale.ROOT) + "%";
+        var total = entries.countPage(systemId, status, keyword);
+        var totalPages = Math.max(1, (int) ((total + safePageSize - 1) / safePageSize));
+        var safePage = Math.min(Math.max(page, 1), totalPages);
+        var values = entries.findPage(systemId, status, keyword, safePageSize,
+                (long) (safePage - 1) * safePageSize);
+        return new KnowledgePageView(values.stream().map(this::view).toList(), total, safePage,
+                safePageSize, totalPages);
     }
 
     public KnowledgeView createManual(String systemId, CandidateRequest request, String actor) {
@@ -137,5 +151,8 @@ public class SystemKnowledgeService {
                                 List<String> anchorTexts, String routePath, List<String> apiEndpoints,
                                 List<String> codeRefs, String status, String source, String sourceRef,
                                 String createdBy, Instant createdAt, String approvedBy, Instant approvedAt) {
+    }
+
+    public record KnowledgePageView(List<KnowledgeView> items, long total, int page, int pageSize, int totalPages) {
     }
 }
