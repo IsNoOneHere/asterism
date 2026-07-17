@@ -40,7 +40,7 @@ export function SystemsPage() {
   const { systems, systemId, setSystemId, currentUser, isAdmin, systemMembers, canManageCurrentSystem } = useCurrentSystem();
   const users = useQuery({ queryKey: ['users'], queryFn: api.users, enabled: isAdmin, retry: false });
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [mode, setMode] = useState<'edit' | 'new'>('new');
+  const [mode, setMode] = useState<'new' | 'system' | 'git'>('new');
   const [message, setMessage] = useState('');
   const [query, setQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<SystemProfile | null>(null);
@@ -71,16 +71,25 @@ export function SystemsPage() {
 
   const save = useMutation({
     mutationFn: async (value: FormValue) => {
-      const body = { ...toProfileRequest(value), gitConfiguration: toGitRequest(value) };
-      return mode === 'new' ? api.createSystem(body) : api.updateSystemProfile(value.systemId, body);
+      // 三种入口分别调用自己的接口，避免保存一个区域时意外改动另一区域。
+      if (mode === 'new') {
+        const saved = await api.createSystem({ ...toProfileRequest(value), gitConfiguration: toGitRequest(value) });
+        return saved.systemId;
+      }
+      if (mode === 'system') {
+        await api.updateSystemProfile(value.systemId, toSystemRequest(value, editingSystem!));
+      } else {
+        await api.updateGitConfiguration(value.systemId, toGitRequest(value));
+      }
+      return value.systemId;
     },
-    onSuccess: (saved) => {
-      console.info('v5 workbench 保存系统', { systemId: saved.systemId });
+    onSuccess: (savedSystemId) => {
+      console.info('v5 workbench 保存系统配置', { systemId: savedSystemId, mode });
       dialogRef.current?.close();
-      setMessage('系统配置保存成功');
-      setSystemId(saved.systemId);
-      queryClient.invalidateQueries({ queryKey: ['systems'] });
-      queryClient.invalidateQueries({ queryKey: ['git-config', saved.systemId] });
+      setMessage(mode === 'git' ? 'Git 配置保存成功' : mode === 'system' ? '系统信息保存成功' : '系统创建成功');
+      if (mode === 'new') setSystemId(savedSystemId);
+      if (mode !== 'git') queryClient.invalidateQueries({ queryKey: ['systems'] });
+      if (mode !== 'system') queryClient.invalidateQueries({ queryKey: ['git-config', savedSystemId] });
     },
   });
   const removeSystem = useMutation({
@@ -94,27 +103,31 @@ export function SystemsPage() {
     onSettled: () => setDeleteTarget(null),
   });
 
-  async function openEditor(system?: SystemProfile) {
-    setMode(system ? 'edit' : 'new');
+  async function openEditor(system?: SystemProfile, nextMode: 'new' | 'system' | 'git' = system ? 'system' : 'new') {
+    setMode(nextMode);
     setEditingSystem(system ?? null);
     setMessage('');
     save.reset();
     setEditorError(undefined);
-    setEditorLoading(Boolean(system));
+    setEditorLoading(nextMode === 'git');
     if (!dialogRef.current?.open) dialogRef.current?.showModal();
     if (system) {
-      form.reset({ ...emptyForm, systemId: system.systemId, name: system.name, ownerUserId: system.ownerUserId });
-      try {
-        const git = await queryClient.fetchQuery({
-          queryKey: ['git-config', system.systemId], queryFn: () => api.gitConfiguration(system.systemId),
-        });
-        form.reset(fromSystem(system, git));
-        setTokenSet(git.tokenSet);
-        setEffectiveGitLabUrl(git.effectiveGitlabBaseUrl);
-      } catch (error) {
-        setEditorError(error);
-      } finally {
-        setEditorLoading(false);
+      form.reset({ ...emptyForm, systemId: system.systemId, name: system.name, description: system.description || '', ownerUserId: system.ownerUserId });
+      setTokenSet(false);
+      setEffectiveGitLabUrl('');
+      if (nextMode === 'git') {
+        try {
+          const git = await queryClient.fetchQuery({
+            queryKey: ['git-config', system.systemId], queryFn: () => api.gitConfiguration(system.systemId),
+          });
+          form.reset(fromSystem(system, git));
+          setTokenSet(git.tokenSet);
+          setEffectiveGitLabUrl(git.effectiveGitlabBaseUrl);
+        } catch (error) {
+          setEditorError(error);
+        } finally {
+          setEditorLoading(false);
+        }
       }
     } else {
       form.reset(emptyForm);
@@ -153,8 +166,8 @@ export function SystemsPage() {
             <td>{system.systemId === systemId ? <span className="status-badge success">当前系统</span> : <span className="status-badge neutral">可用</span>}</td>
             <td><div className="button-row compact-actions">
               {/* Git 配置保留独立可见入口，避免藏在通用编辑按钮中。 */}
-              <button type="button" className="secondary icon-text-button git-config-action" title={canManage ? '配置 Git 与发布' : '只有系统 owner/admin 可以编辑'} disabled={!canManage} onClick={() => void openEditor(system)}><GitBranch size={15} />Git 配置</button>
-              <button type="button" className="secondary icon-text-button" title={canManage ? undefined : '只有系统 owner/admin 可以编辑'} disabled={!canManage} onClick={() => void openEditor(system)}><Pencil size={15} />编辑</button>
+              <button type="button" className="secondary icon-text-button git-config-action" title={canManage ? '配置 Git 与发布' : '只有系统 owner/admin 可以编辑'} disabled={!canManage} onClick={() => void openEditor(system, 'git')}><GitBranch size={15} />Git 配置</button>
+              <button type="button" className="secondary icon-text-button" title={canManage ? undefined : '只有系统 owner/admin 可以编辑'} disabled={!canManage} onClick={() => void openEditor(system, 'system')}><Pencil size={15} />编辑</button>
               <button type="button" className="danger-outline icon-text-button" aria-label={`删除系统 ${system.systemId}`} title={canManage ? undefined : '只有系统 owner/admin 可以删除'} disabled={!canManage || removeSystem.isPending} onClick={() => setDeleteTarget(system)}><Trash2 size={15} />删除</button>
             </div></td>
           </tr>;})}
@@ -172,17 +185,19 @@ export function SystemsPage() {
 
       <dialog ref={dialogRef} className="confirm-dialog config-dialog system-config-dialog" aria-labelledby="system-dialog-title">
         <form onSubmit={form.handleSubmit((value) => save.mutate(value))}>
-          <div className="config-section-head compact"><div><h2 id="system-dialog-title">{mode === 'new' ? '新建系统' : '编辑系统配置'}</h2><p>仓库范围和发布配置会随新工作项快照。</p></div></div>
-          {editorLoading && <div className="notice" role="status">正在加载 Git 与发布配置…</div>}
-          {Boolean(editorError) && <ErrorState title="系统配置加载失败" error={editorError} onRetry={() => void openEditor(editingSystem ?? undefined)} />}
+          <div className="config-section-head compact"><div><h2 id="system-dialog-title">{mode === 'new' ? '新建系统' : mode === 'system' ? '编辑系统信息' : 'Git 与发布配置'}</h2><p>{mode === 'system' ? '只修改系统名称、描述和负责人。' : mode === 'git' ? '只管理发布策略与代码仓库。' : '设置系统基础信息、发布策略与代码仓库。'}</p></div></div>
+          {mode === 'git' && editorLoading && <div className="notice" role="status">正在加载 Git 与发布配置…</div>}
+          {mode === 'git' && Boolean(editorError) && <ErrorState title="Git 配置加载失败" error={editorError} onRetry={() => void openEditor(editingSystem ?? undefined, 'git')} />}
           <fieldset className="dialog-fieldset" disabled={editorLoading || Boolean(editorError)}>
+          {mode !== 'git' &&
           <div className="config-dialog-fields system-dialog-fields">
-            <label>系统编号<input {...form.register('systemId')} readOnly={mode === 'edit'} /></label>
+            <label>系统编号<input {...form.register('systemId')} readOnly={mode !== 'new'} /></label>
             <label>名称<input {...form.register('name')} /></label>
             <label className="wide-field">描述<textarea rows={2} {...form.register('description')} /></label>
             <label>系统负责人<select {...form.register('ownerUserId')} disabled={isAdmin && users.isLoading}><option value="">{users.isLoading ? '用户加载中…' : '请选择用户'}</option>{enabledUsers.map((user) => <option key={user.userId} value={user.userId}>{user.displayName || user.userId}</option>)}</select></label>
-          </div>
+          </div>}
 
+          {mode !== 'system' &&
           <fieldset className="config-subsection"><legend>Git 与发布</legend>
             <div className="config-dialog-fields system-dialog-fields">
               <label>发布模式<select {...form.register('releaseMode')}><option value="local">Local</option><option value="gitlab">GitLab MR</option></select></label>
@@ -215,12 +230,12 @@ export function SystemsPage() {
                 </div>
               </section>)}
             </div>
-          </fieldset>
+          </fieldset>}
           </fieldset>
 
           {validationError && <div className="error-text" role="alert">{validationError}</div>}
           {save.isError && <div className="error-text" role="alert">{save.error.message}</div>}
-          <div className="button-row"><button type="button" className="secondary" onClick={() => dialogRef.current?.close()}>取消</button><button type="submit" disabled={editorLoading || Boolean(editorError) || save.isPending}>保存系统</button></div>
+          <div className="button-row"><button type="button" className="secondary" onClick={() => dialogRef.current?.close()}>取消</button><button type="submit" disabled={editorLoading || Boolean(editorError) || save.isPending}>{mode === 'new' ? '创建系统' : mode === 'system' ? '保存系统信息' : '保存 Git 配置'}</button></div>
         </form>
       </dialog>
     </section>
@@ -244,6 +259,12 @@ function toProfileRequest(value: FormValue) {
     allowedPaths: lines(repo.allowedPaths), forbiddenPaths: lines(repo.forbiddenPaths), testCommands: lines(repo.testCommands) };
 }
 
+function toSystemRequest(value: FormValue, system: SystemProfile) {
+  // 基础信息编辑沿用原有仓库边界，避免隐藏字段被默认值覆盖。
+  return { name: value.name, description: value.description, repoPath: system.repoPath, ownerUserId: value.ownerUserId,
+    allowedPaths: storedLines(system.allowedPaths), forbiddenPaths: storedLines(system.forbiddenPaths), testCommands: storedLines(system.testCommands) };
+}
+
 function toGitRequest(value: FormValue) {
   return { releaseMode: value.releaseMode, validationMode: value.validationMode, mrTargetBranch: value.mrTargetBranch,
     mrLabels: lines(value.mrLabels), gitlabBaseUrl: value.gitlabBaseUrl, gitlabToken: value.gitlabToken,
@@ -253,6 +274,15 @@ function toGitRequest(value: FormValue) {
 
 function lines(value: string) {
   return value.split('\n').map((item) => item.trim()).filter(Boolean);
+}
+
+function storedLines(value?: string) {
+  if (!value) return [];
+  try {
+    return JSON.parse(value) as string[];
+  } catch {
+    return lines(value);
+  }
 }
 
 function ownerName(users: { userId: string; displayName: string }[], ownerUserId: string) {

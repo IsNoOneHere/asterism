@@ -139,7 +139,7 @@ test('permission lookup failure is shown as an error instead of a read-only noti
 });
 
 test.each([
-  { path: '/systems', button: '编辑', heading: '编辑系统配置' },
+  { path: '/systems', button: '编辑', heading: '编辑系统信息' },
   { path: '/users', button: '新增用户', heading: '新增用户' },
   { path: '/knowledge', button: '新增条目', heading: '新增知识条目' },
 ])('$path keeps the list first and opens $heading in a dialog', async ({ path, button, heading }) => {

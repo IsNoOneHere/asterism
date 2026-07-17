@@ -133,32 +133,55 @@ test('new system leaves MR target branch empty for per-repository defaults', asy
   expect(screen.getByLabelText('MR 目标分支')).toHaveValue('');
 });
 
+test('system information editor only updates the basic profile', async () => {
+  renderApp('/systems');
+  fireEvent.click((await screen.findAllByRole('button', { name: '编辑' }))[0]);
+
+  const dialog = await screen.findByRole('dialog');
+  expect(within(dialog).getByRole('heading', { name: '编辑系统信息' })).toBeInTheDocument();
+  expect(within(dialog).getByLabelText('系统编号')).toHaveAttribute('readonly');
+  expect(within(dialog).getByLabelText('名称')).toHaveValue('Alpha System');
+  expect(within(dialog).queryByLabelText('发布模式')).not.toBeInTheDocument();
+  expect(within(dialog).queryByText('仓库列表')).not.toBeInTheDocument();
+  fireEvent.change(within(dialog).getByLabelText('名称'), { target: { value: 'Alpha Platform' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: '保存系统信息' }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/profile', expect.objectContaining({ method: 'PATCH' })));
+  const call = vi.mocked(fetch).mock.calls.find(([path, init]) => path === '/api/v5/systems/alpha-system/profile' && init?.method === 'PATCH');
+  expect(JSON.parse(String(call?.[1]?.body))).toEqual(expect.objectContaining({ name: 'Alpha Platform', repoPath: '/tmp/alpha', ownerUserId: 'admin' }));
+  expect(JSON.parse(String(call?.[1]?.body))).not.toHaveProperty('gitConfiguration');
+  expect(fetch).not.toHaveBeenCalledWith('/api/v5/systems/alpha-system/git-config', expect.objectContaining({ method: 'PUT' }));
+});
+
 test('git publishing configuration edits multiple repositories without rendering token', async () => {
   renderApp('/systems');
   fireEvent.click((await screen.findAllByRole('button', { name: 'Git 配置' }))[0]);
 
   const dialog = await screen.findByRole('dialog');
-  expect(dialog).toHaveTextContent('Git 与发布');
-  expect(screen.getByLabelText('发布模式')).toBeInTheDocument();
-  expect(screen.getByLabelText('验证模式')).toBeInTheDocument();
-  expect(screen.getByLabelText('MR 目标分支')).toHaveValue('');
-  expect(screen.getByLabelText('GitLab Token')).toHaveAttribute('placeholder', '留空保留现有 Token');
-  expect(screen.getByRole('heading', { name: '仓库列表' })).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText('发布模式'), { target: { value: 'gitlab' } });
-  fireEvent.change(screen.getByLabelText('GitLab Token'), { target: { value: 'temporary-value' } });
-  fireEvent.click(screen.getByRole('button', { name: '添加仓库' }));
-  fireEvent.change(screen.getByLabelText('仓库 2 GitLab Project'), { target: { value: 'alpha/api' } });
-  fireEvent.change(screen.getByLabelText('仓库 2 克隆方式'), { target: { value: 'gitlab' } });
-  fireEvent.click(screen.getByRole('button', { name: '保存系统' }));
+  expect(within(dialog).getByRole('heading', { name: 'Git 与发布配置' })).toBeInTheDocument();
+  expect(within(dialog).queryByLabelText('系统编号')).not.toBeInTheDocument();
+  expect(dialog.querySelector('input[name="name"]')).not.toBeInTheDocument();
+  expect(within(dialog).queryByLabelText('系统负责人')).not.toBeInTheDocument();
+  expect(within(dialog).getByLabelText('发布模式')).toBeInTheDocument();
+  expect(within(dialog).getByLabelText('验证模式')).toBeInTheDocument();
+  expect(within(dialog).getByLabelText('MR 目标分支')).toHaveValue('');
+  expect(within(dialog).getByLabelText('GitLab Token')).toHaveAttribute('placeholder', '留空保留现有 Token');
+  expect(within(dialog).getByRole('heading', { name: '仓库列表' })).toBeInTheDocument();
+  fireEvent.change(within(dialog).getByLabelText('发布模式'), { target: { value: 'gitlab' } });
+  fireEvent.change(within(dialog).getByLabelText('GitLab Token'), { target: { value: 'temporary-value' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: '添加仓库' }));
+  fireEvent.change(within(dialog).getByLabelText('仓库 2 GitLab Project'), { target: { value: 'alpha/api' } });
+  fireEvent.change(within(dialog).getByLabelText('仓库 2 克隆方式'), { target: { value: 'gitlab' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: '保存 Git 配置' }));
 
-  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/profile', expect.objectContaining({ method: 'PATCH' })));
-  const call = vi.mocked(fetch).mock.calls.find(([path, init]) => path === '/api/v5/systems/alpha-system/profile' && init?.method === 'PATCH');
-  const body = JSON.parse(String(call?.[1]?.body)).gitConfiguration;
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/git-config', expect.objectContaining({ method: 'PUT' })));
+  const call = vi.mocked(fetch).mock.calls.find(([path, init]) => path === '/api/v5/systems/alpha-system/git-config' && init?.method === 'PUT');
+  const body = JSON.parse(String(call?.[1]?.body));
   expect(body.releaseMode).toBe('gitlab');
   expect(body.mrTargetBranch).toBe('');
   expect(body.repos).toHaveLength(2);
   expect(body.repos[1].gitlabProject).toBe('alpha/api');
-  expect(vi.mocked(fetch).mock.calls.filter(([path, init]) => path === '/api/v5/systems/alpha-system/profile' && init?.method === 'PATCH')).toHaveLength(1);
-  expect(fetch).not.toHaveBeenCalledWith('/api/v5/systems/alpha-system/git-config', expect.objectContaining({ method: 'PUT' }));
+  expect(vi.mocked(fetch).mock.calls.filter(([path, init]) => path === '/api/v5/systems/alpha-system/git-config' && init?.method === 'PUT')).toHaveLength(1);
+  expect(fetch).not.toHaveBeenCalledWith('/api/v5/systems/alpha-system/profile', expect.objectContaining({ method: 'PATCH' }));
   expect(screen.queryByText('temporary-value')).not.toBeInTheDocument();
 });
