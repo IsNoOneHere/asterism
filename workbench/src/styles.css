@@ -1627,7 +1627,11 @@ button.danger-action:hover:not(:disabled) {
 }
 
 .model-profile-table th:last-child,
-.model-profile-table td:last-child,
+.model-profile-table td:last-child {
+  text-align: right;
+  width: 220px;
+}
+
 .agent-role-table th:last-child,
 .agent-role-table td:last-child {
   text-align: right;
