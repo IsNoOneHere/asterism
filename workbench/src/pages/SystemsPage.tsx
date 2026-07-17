@@ -167,8 +167,8 @@ export function SystemsPage() {
             <td><div className="button-row compact-actions">
               {/* Git 配置保留独立可见入口，避免藏在通用编辑按钮中。 */}
               <button type="button" className="secondary icon-text-button git-config-action" title={canManage ? '配置 Git 与发布' : '只有系统 owner/admin 可以编辑'} disabled={!canManage} onClick={() => void openEditor(system, 'git')}><GitBranch size={15} />Git 配置</button>
-              <button type="button" className="secondary icon-text-button" title={canManage ? undefined : '只有系统 owner/admin 可以编辑'} disabled={!canManage} onClick={() => void openEditor(system, 'system')}><Pencil size={15} />编辑</button>
-              <button type="button" className="danger-outline icon-text-button" aria-label={`删除系统 ${system.systemId}`} title={canManage ? undefined : '只有系统 owner/admin 可以删除'} disabled={!canManage || removeSystem.isPending} onClick={() => setDeleteTarget(system)}><Trash2 size={15} />删除</button>
+              <button type="button" className="secondary icon-button icon-text-button" title={canManage ? undefined : '只有系统 owner/admin 可以编辑'} disabled={!canManage} onClick={() => void openEditor(system, 'system')}><Pencil size={15} />编辑</button>
+              <button type="button" className="danger-outline icon-button icon-text-button" aria-label={`删除系统 ${system.systemId}`} title={canManage ? undefined : '只有系统 owner/admin 可以删除'} disabled={!canManage || removeSystem.isPending} onClick={() => setDeleteTarget(system)}><Trash2 size={15} />删除</button>
             </div></td>
           </tr>;})}
           {!filteredSystems.length && <tr><td className="empty-cell" colSpan={5}>{query ? '没有匹配的系统' : '还没有系统配置'}</td></tr>}
