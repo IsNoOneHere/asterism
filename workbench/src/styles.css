@@ -2262,6 +2262,13 @@ label {
   width: 36px;
 }
 
+/* 操作表头和图标共用紧凑右对齐列，避免宽表中产生视觉错位。 */
+.system-table th:last-child,
+.system-table td:last-child {
+  text-align: right;
+  width: 112px;
+}
+
 .users-table th:last-child {
   min-width: 144px;
   text-align: right;
