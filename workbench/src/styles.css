@@ -2189,6 +2189,7 @@ button.system-select-trigger[aria-expanded="true"] {
 .work-item-title {
   font-weight: 600;
   line-height: 1.45;
+  position: relative;
 }
 
 .work-item-title > span {
@@ -2196,6 +2197,39 @@ button.system-select-trigger[aria-expanded="true"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 标题被截断时，用表格内悬浮卡片稳定展示全文。 */
+.data-table tbody td.work-item-title {
+  overflow: visible;
+}
+
+.work-item-title:hover,
+.work-item-title:focus-visible {
+  z-index: 3;
+}
+
+.work-item-title:hover::after,
+.work-item-title:focus-visible::after {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  content: attr(data-full-title);
+  font-weight: 500;
+  left: 50%;
+  line-height: 1.45;
+  max-width: min(420px, calc(100vw - 48px));
+  overflow-wrap: anywhere;
+  padding: 9px 11px;
+  pointer-events: none;
+  position: absolute;
+  text-align: left;
+  top: calc(100% - 8px);
+  transform: translateX(-50%);
+  white-space: normal;
+  width: max-content;
 }
 
 .table-action {

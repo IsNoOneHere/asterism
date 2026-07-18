@@ -114,10 +114,11 @@ export function WorkItemsPage() {
 }
 
 function WorkItemRow({ item, navigationState, canAct, pending, onApprove }: { item: WorkItem; navigationState: WorkItemNavigationState; canAct: boolean; pending: boolean; onApprove: () => void }) {
+  const title = item.title || '未命名工作项';
   return (
     <tr>
       <td><Link className="work-item-id-link" state={navigationState} to={'/work-items/' + item.workItemId}>{item.workItemId}</Link></td>
-      <td className="work-item-title"><span title={item.title || '未命名工作项'}>{item.title || '未命名工作项'}</span></td>
+      <td className="work-item-title" data-full-title={title} tabIndex={0}><span>{title}</span></td>
       <td><StatusBadge value={item.lifecycleStatus} /></td>
       <td><StatusBadge value={item.approvalStatus} /></td>
       <td>{item.executionAllowed ? '允许' : '关闭'}</td>
