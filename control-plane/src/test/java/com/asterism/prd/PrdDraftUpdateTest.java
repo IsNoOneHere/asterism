@@ -18,9 +18,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class PrdDraftUpdateTest {
@@ -86,6 +88,25 @@ class PrdDraftUpdateTest {
 
         assertThatThrownBy(() -> service.updateDraft("prd-1", "标题", null, null, actor))
                 .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void deletesDraftEvenWhenWorkItemAlreadyExists() {
+        var sessions = mock(PrdSessionRepository.class);
+        var messages = mock(ConversationMessageRepository.class);
+        var access = mock(SystemAccessService.class);
+        var now = Instant.now();
+        var confirmed = new PrdSession("prd-1", "sys-1", "conv-1", "wi-1", "case-1", "标题", "目标",
+                "{}", "[]", "waiting_owner_approval", "user", null, null, now, now);
+        when(sessions.findById("prd-1")).thenReturn(Optional.of(confirmed));
+        var service = service(sessions, messages, access, mock(JdbcAggregateTemplate.class),
+                mock(DomainEventService.class));
+
+        service.deleteDraft("prd-1", actor);
+
+        verify(access).requireMember("sys-1", actor);
+        verify(sessions).markDeleted(eq("prd-1"), any(Instant.class));
+        verifyNoInteractions(messages);
     }
 
     private PrdConversationService service(PrdSessionRepository sessions, ConversationMessageRepository messages,

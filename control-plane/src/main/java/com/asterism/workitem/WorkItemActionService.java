@@ -97,6 +97,7 @@ public class WorkItemActionService {
 
     private PreparedSignal prepare(String workItemId, String action, ActionRequest rawRequest, Authentication actor) {
         var item = workItems.lockById(workItemId).orElseThrow(() -> new IllegalArgumentException("工作项不存在"));
+        if (item.deleted()) throw new IllegalArgumentException("工作项不存在");
         var request = rawRequest == null ? new ActionRequest(null, null, null, null, null) : rawRequest;
         var requestId = request.requestId() == null || request.requestId().isBlank()
                 ? UUID.randomUUID().toString() : request.requestId().trim();
@@ -214,6 +215,7 @@ public class WorkItemActionService {
 
     private WorkItemProjection resolve(String workItemId) {
         return workItems.findById(workItemId).or(() -> workItems.findByDisplayWorkItemId(workItemId))
+                .filter(item -> !item.deleted())
                 .orElseThrow(() -> new IllegalArgumentException("工作项不存在"));
     }
 

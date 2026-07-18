@@ -124,6 +124,11 @@ export function resetAppTestState() {
   // 测试只关心前端请求路径，不启动真实控制面。
   vi.stubGlobal('fetch', vi.fn((path: string, init?: RequestInit) => {
     if (path.startsWith('/api/v5/work-items?')) return jsonResponse(workItems);
+    if (path.startsWith('/api/v5/work-items/') && init?.method === 'DELETE') {
+      const workItemId = decodeURIComponent(path.split('/').pop() || '');
+      workItems = workItems.filter((item: any) => item.workItemId !== workItemId);
+      return jsonResponse(undefined);
+    }
     if (path === '/api/v5/systems/alpha-system/agent-config' && !init?.method) return jsonResponse(agentConfiguration);
     if (path === '/api/v5/systems/alpha-system/git-config' && !init?.method) return jsonResponse(gitConfiguration);
     if (path === '/api/v5/systems/alpha-system/git-config' && init?.method === 'PUT') {

@@ -13,6 +13,8 @@ import com.asterism.prd.PrdSessionRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.core.Authentication;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
@@ -28,6 +30,7 @@ import java.util.stream.StreamSupport;
 @RestController
 @RequestMapping("/api/v5/work-items")
 public class WorkItemController {
+    private static final Logger log = LoggerFactory.getLogger(WorkItemController.class);
     private final WorkItemProjectionRepository workItems;
     private final DomainEventService events;
     private final WorkItemActionService actions;
@@ -97,6 +100,16 @@ public class WorkItemController {
         return events.findByWorkItemId(item.workItemId());
     }
 
+    @DeleteMapping("/{workItemId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void delete(@PathVariable String workItemId, Authentication actor) {
+        var item = findAny(workItemId);
+        access.requireMember(item.systemId(), actor);
+        if (!actor.getName().equals(item.createdBy())) access.requireOwnerOrAdmin(item.systemId(), actor);
+        if (!item.deleted()) workItems.save(deleted(item));
+        log.info("工作项已删除 workItem={} actor={}", item.workItemId(), actor.getName());
+    }
+
     @PostMapping("/{workItemId}/owner-approval")
     SignalResponse ownerApproval(@PathVariable String workItemId,
                                  @RequestBody(required = false) WorkItemActionService.ActionRequest request,
@@ -146,18 +159,36 @@ public class WorkItemController {
     }
 
     private WorkItemProjection find(String workItemId) {
+        var item = findAny(workItemId);
+        if (item.deleted()) throw new IllegalArgumentException("工作项不存在");
+        return item;
+    }
+
+    private WorkItemProjection findAny(String workItemId) {
         return workItems.findById(workItemId)
                 .or(() -> workItems.findByDisplayWorkItemId(workItemId))
                 .orElseThrow(() -> new IllegalArgumentException("工作项不存在"));
+    }
+
+    private WorkItemProjection deleted(WorkItemProjection item) {
+        // 删除与生命周期解耦，只隐藏业务入口，不改写工作流状态与事件。
+        return new WorkItemProjection(item.workItemId(), item.displayWorkItemId(), item.systemId(), item.prdId(),
+                item.caseId(), item.title(), item.lifecycleStatus(), item.approvalStatus(), item.executionAllowed(),
+                item.currentStage(), item.waitingFor(), item.ownerUserId(), true, item.lastAppliedSequence(),
+                item.activatedAt(), item.completedAt(), item.createdBy(), item.createdAt(), Instant.now());
     }
 
     private WorkItemView view(WorkItemProjection item, Authentication actor) {
         var availability = actions.availability(item, actor);
         return new WorkItemView(item.displayWorkItemId(), item.systemId(), item.prdId(), item.caseId(), item.title(),
                 item.lifecycleStatus(), item.approvalStatus(), item.executionAllowed(), item.currentStage(), item.waitingFor(),
-                item.ownerUserId(), item.createdBy(), item.createdAt(), item.updatedAt(), availability.canAct(),
+                item.ownerUserId(), item.createdBy(), item.createdAt(), item.updatedAt(), canDelete(item, actor), availability.canAct(),
                 availability.actions(), item.lastAppliedSequence(), availability.pendingAction(),
                 availability.releaseMode(), availability.validationMode(), targets(item.prdId()));
+    }
+
+    private boolean canDelete(WorkItemProjection item, Authentication actor) {
+        return actor.getName().equals(item.createdBy()) || access.canControl(item.systemId(), actor);
     }
 
     private List<SuspectedTarget> targets(String prdId) {
@@ -204,7 +235,8 @@ public class WorkItemController {
     public record WorkItemView(String workItemId, String systemId, String prdId, String caseId, String title,
                                String lifecycleStatus, String approvalStatus, boolean executionAllowed,
                                String currentStage, String waitingFor, String ownerUserId, String createdBy,
-                               Instant createdAt, Instant updatedAt, boolean canControl, List<String> availableActions,
+                               Instant createdAt, Instant updatedAt, boolean canDelete, boolean canControl,
+                               List<String> availableActions,
                                long lastAppliedSequence, WorkItemActionService.PendingAction pendingAction,
                                String releaseMode, String validationMode,
                                List<SuspectedTarget> targets) {

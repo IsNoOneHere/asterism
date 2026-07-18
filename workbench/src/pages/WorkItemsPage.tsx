@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api, WorkItem } from '../api/client';
@@ -19,6 +20,7 @@ export function WorkItemsPage() {
   const [q, setQ] = useState(restored.q);
   const [sort, setSort] = useState(restored.sort);
   const [approvalTarget, setApprovalTarget] = useState<WorkItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WorkItem | null>(null);
 
   const items = useQuery({
     queryKey: ['work-items', scope, systemId, status, q, sort],
@@ -35,6 +37,11 @@ export function WorkItemsPage() {
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-items'] }),
     onSettled: () => setApprovalTarget(null),
+  });
+  const remove = useMutation({
+    mutationFn: (workItemId: string) => api.deleteWorkItem(workItemId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['work-items'] }),
+    onSettled: () => setDeleteTarget(null),
   });
   const values = items.data ?? [];
   const pagination = usePagination(values, [scope, systemId, status, q, sort].join(':'), restored.page, items.isSuccess);
@@ -78,8 +85,10 @@ export function WorkItemsPage() {
                 item={item}
                 navigationState={navigationState}
                 canAct={item.canControl}
-                pending={approve.isPending}
+                approvalPending={approve.isPending}
+                deletePending={remove.isPending}
                 onApprove={() => { approve.reset(); setApprovalTarget(item); }}
+                onDelete={() => { remove.reset(); setDeleteTarget(item); }}
               />
             ))}
             {items.isLoading && <tr><td className="empty-cell" colSpan={8}>工作项加载中…</td></tr>}
@@ -109,24 +118,58 @@ export function WorkItemsPage() {
         onClose={() => approve.reset()}
         onConfirm={() => approve.reset()}
       />
+      <ActionConfirmDialog
+        open={Boolean(deleteTarget)}
+        title="删除该工作项？"
+        description={`“${deleteTarget?.title || deleteTarget?.workItemId || ''}”将从工作项列表移除，历史事件仍会保留。`}
+        confirmLabel="删除工作项"
+        pending={remove.isPending}
+        tone="danger"
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && remove.mutate(deleteTarget.workItemId)}
+      />
+      <ActionConfirmDialog
+        open={Boolean(remove.error)}
+        title="删除失败"
+        description={errorMessage(remove.error, '工作项删除失败')}
+        confirmLabel="知道了"
+        alert
+        showCancel={false}
+        onClose={() => remove.reset()}
+        onConfirm={() => remove.reset()}
+      />
     </div>
   );
 }
 
-function WorkItemRow({ item, navigationState, canAct, pending, onApprove }: { item: WorkItem; navigationState: WorkItemNavigationState; canAct: boolean; pending: boolean; onApprove: () => void }) {
+function WorkItemRow({ item, navigationState, canAct, approvalPending, deletePending, onApprove, onDelete }: {
+  item: WorkItem;
+  navigationState: WorkItemNavigationState;
+  canAct: boolean;
+  approvalPending: boolean;
+  deletePending: boolean;
+  onApprove: () => void;
+  onDelete: () => void;
+}) {
   const title = item.title || '未命名工作项';
   return (
     <tr>
       <td><Link className="work-item-id-link" state={navigationState} to={'/work-items/' + item.workItemId}>{item.workItemId}</Link></td>
-      <td className="work-item-title" data-full-title={title} tabIndex={0}><span>{title}</span></td>
+      <td className="work-item-title"><span title={title}>{title}</span></td>
       <td><StatusBadge value={item.lifecycleStatus} /></td>
       <td><StatusBadge value={item.approvalStatus} /></td>
       <td>{item.executionAllowed ? '允许' : '关闭'}</td>
       <td>{formatDateTime(item.updatedAt)}</td>
       <td className="work-item-creator">{item.createdBy || '-'}</td>
-      <td className="table-action">{canAct && item.availableActions.includes('owner_approved') ? (
-        <button type="button" disabled={pending} onClick={onApprove}>批准</button>
-      ) : <Link className="action-link" state={navigationState} to={'/work-items/' + item.workItemId}>查看详情</Link>}</td>
+      <td className="table-action"><div className="row-actions compact-actions table-row-actions">
+        {canAct && item.availableActions.includes('owner_approved') ? (
+          <button type="button" disabled={approvalPending} onClick={onApprove}>批准</button>
+        ) : <Link className="action-link" state={navigationState} to={'/work-items/' + item.workItemId}>查看详情</Link>}
+        <button type="button" className="icon-button danger"
+          title={item.canDelete ? '删除工作项' : '只有创建人或系统 owner/admin 可以删除'}
+          aria-label={`删除工作项 ${item.workItemId}`} disabled={deletePending || !item.canDelete}
+          onClick={onDelete}><Trash2 size={16} /></button>
+      </div></td>
     </tr>
   );
 }

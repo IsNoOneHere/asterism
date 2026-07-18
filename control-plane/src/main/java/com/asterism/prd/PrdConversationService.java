@@ -145,6 +145,16 @@ public class PrdConversationService {
     }
 
     @Transactional
+    public void deleteDraft(String prdId, Authentication actor) {
+        var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
+        access.requireMember(current.systemId(), actor);
+        if (!actor.getName().equals(current.createdBy())) access.requireOwnerOrAdmin(current.systemId(), actor);
+        // 草稿删除只隐藏业务入口，保留对话和关联工作项用于历史审计。
+        sessions.markDeleted(prdId, Instant.now());
+        log.info("PRD 草稿已删除 prdId={} actor={}", prdId, actor.getName());
+    }
+
+    @Transactional
     public DraftUpdateResponse updateDraft(String prdId, String title, String goal, List<String> acceptanceCriteria,
                                            Authentication actor) {
         var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));

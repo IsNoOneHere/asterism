@@ -3,6 +3,7 @@ package com.asterism.prd;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -54,6 +55,12 @@ public class PrdController {
             @RequestBody DraftUpdateRequest request,
             Authentication actor) {
         return conversations.updateDraft(prdId, request.title(), request.goal(), request.acceptanceCriteria(), actor);
+    }
+
+    @DeleteMapping("/prd-sessions/{prdId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void deleteDraft(@PathVariable String prdId, Authentication actor) {
+        conversations.deleteDraft(prdId, actor);
     }
 
     public record TargetConfirmationRequest(List<String> entryIds, Boolean accepted) {

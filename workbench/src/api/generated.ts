@@ -14,7 +14,7 @@ export interface paths {
         get?: never;
         put: operations["update"];
         post?: never;
-        delete: operations["delete_1"];
+        delete: operations["delete_2"];
         options?: never;
         head?: never;
         patch?: never;
@@ -574,7 +574,7 @@ export interface paths {
         get: operations["detail"];
         put?: never;
         post?: never;
-        delete?: never;
+        delete: operations["delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -686,7 +686,7 @@ export interface paths {
         get: operations["detail_1"];
         put?: never;
         post?: never;
-        delete?: never;
+        delete: operations["deleteDraft"];
         options?: never;
         head?: never;
         patch?: never;
@@ -814,7 +814,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["delete"];
+        delete: operations["delete_1"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1229,6 +1229,7 @@ export interface components {
             createdAt?: string;
             /** Format: date-time */
             updatedAt?: string;
+            canDelete?: boolean;
             canControl?: boolean;
             availableActions?: string[];
             /** Format: int64 */
@@ -1283,6 +1284,7 @@ export interface components {
             status?: string;
             createdBy?: string;
             creatorDisplayName?: string;
+            canDelete?: boolean;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -1352,7 +1354,7 @@ export interface operations {
             };
         };
     };
-    delete_1: {
+    delete_2: {
         parameters: {
             query?: never;
             header?: never;
@@ -2384,6 +2386,26 @@ export interface operations {
             };
         };
     };
+    delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workItemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     events: {
         parameters: {
             query?: never;
@@ -2540,6 +2562,26 @@ export interface operations {
                 content: {
                     "*/*": components["schemas"]["PrdSessionView"];
                 };
+            };
+        };
+    };
+    deleteDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                prdId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -2701,7 +2743,7 @@ export interface operations {
             };
         };
     };
-    delete: {
+    delete_1: {
         parameters: {
             query?: never;
             header?: never;

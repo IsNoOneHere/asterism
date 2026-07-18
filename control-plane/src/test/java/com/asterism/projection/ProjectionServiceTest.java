@@ -208,6 +208,23 @@ class ProjectionServiceTest {
         verify(sessions, never()).updateLifecycleStatus(eq("wi-1"), eq("allocated"), any(Instant.class));
     }
 
+    @Test
+    void laterEventDoesNotRestoreDeletedWorkItem() {
+        var store = new InMemoryStore();
+        var service = service(store);
+        service.apply(event(1, "OwnerApprovalRequested"));
+        var current = store.findById("wi-1").orElseThrow();
+        store.save(new WorkItemProjection(current.workItemId(), current.displayWorkItemId(), current.systemId(),
+                current.prdId(), current.caseId(), current.title(), current.lifecycleStatus(), current.approvalStatus(),
+                current.executionAllowed(), current.currentStage(), current.waitingFor(), current.ownerUserId(), true,
+                current.lastAppliedSequence(), current.activatedAt(), current.completedAt(), current.createdBy(),
+                current.createdAt(), current.updatedAt()));
+
+        service.apply(event(2, "WorkItemActivated"));
+
+        assertThat(store.findById("wi-1").orElseThrow().deleted()).isTrue();
+    }
+
     private ProjectionService service(InMemoryStore store) {
         return new ProjectionService(store, mock(PrdSessionRepository.class));
     }

@@ -41,7 +41,7 @@ public class PrdHistoryController {
         access.requireMember(systemId, actor);
         var displayNames = displayNames();
         return sessions.findBySystemIdOrderByUpdatedAtDesc(systemId).stream()
-                .map(session -> view(session, displayNames.get(session.createdBy())))
+                .map(session -> view(session, displayNames.get(session.createdBy()), canDelete(session, actor)))
                 .toList();
     }
 
@@ -49,13 +49,17 @@ public class PrdHistoryController {
     PrdSessionView detail(@PathVariable String prdId, Authentication actor) {
         var session = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
         access.requireMember(session.systemId(), actor);
-        return view(session, displayNames().get(session.createdBy()));
+        return view(session, displayNames().get(session.createdBy()), canDelete(session, actor));
     }
 
-    private PrdSessionView view(PrdSession session, String creatorDisplayName) {
+    private PrdSessionView view(PrdSession session, String creatorDisplayName, boolean canDelete) {
         return new PrdSessionView(session.prdId(), session.systemId(), session.conversationId(), displayWorkItemId(session.workItemId()),
                 session.caseId(), session.title(), session.goal(), readMap(session.draftJson()), readList(session.missingFields()),
-                session.status(), session.createdBy(), creatorDisplayName, session.createdAt(), session.updatedAt());
+                session.status(), session.createdBy(), creatorDisplayName, canDelete, session.createdAt(), session.updatedAt());
+    }
+
+    private boolean canDelete(PrdSession session, Authentication actor) {
+        return actor.getName().equals(session.createdBy()) || access.canControl(session.systemId(), actor);
     }
 
     private String displayWorkItemId(String workItemId) {
@@ -88,6 +92,6 @@ public class PrdHistoryController {
     public record PrdSessionView(String prdId, String systemId, String conversationId, String workItemId,
                                  String caseId, String title, String goal, Map<String, Object> draft,
                                  List<String> missingFields, String status, String createdBy,
-                                 String creatorDisplayName, Instant createdAt, Instant updatedAt) {
+                                 String creatorDisplayName, boolean canDelete, Instant createdAt, Instant updatedAt) {
     }
 }

@@ -78,7 +78,7 @@ public class ProjectionService {
                 stage(target),
                 waitingFor(target),
                 first ? event.actorId() : current.ownerUserId(),
-                target == LifecycleStatus.cancelled,
+                (current != null && current.deleted()) || target == LifecycleStatus.cancelled,
                 event.sequence(),
                 target == LifecycleStatus.activated ? now : first ? null : current.activatedAt(),
                 target == LifecycleStatus.completed ? now : first ? null : current.completedAt(),

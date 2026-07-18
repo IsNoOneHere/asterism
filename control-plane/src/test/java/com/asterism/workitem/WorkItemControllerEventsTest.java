@@ -37,7 +37,29 @@ class WorkItemControllerEventsTest {
 
         verify(access, times(2)).requireMember("sys-1", actor);
         assertThat(detail.workItemId()).isEqualTo("WI20260706001");
+        assertThat(detail.canDelete()).isTrue();
         assertThat(timeline).containsExactly(event);
+    }
+
+    @Test
+    void deletesActiveWorkItemWithoutChangingLifecycle() {
+        var workItems = mock(WorkItemProjectionRepository.class);
+        var events = mock(DomainEventService.class);
+        var access = mock(SystemAccessService.class);
+        var actor = new UsernamePasswordAuthenticationToken("requester", "n/a");
+        when(workItems.findByDisplayWorkItemId("WI20260706001")).thenReturn(Optional.of(item()));
+        var controller = new WorkItemController(workItems, events, mock(WorkItemActionService.class), access,
+                mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper(),
+                mock(com.asterism.git.GitIntegrationService.class), mock(com.asterism.git.GitLabClient.class));
+
+        controller.delete("WI20260706001", actor);
+
+        var deleted = org.mockito.ArgumentCaptor.forClass(WorkItemProjection.class);
+        verify(workItems).save(deleted.capture());
+        assertThat(deleted.getValue().deleted()).isTrue();
+        assertThat(deleted.getValue().lifecycleStatus()).isEqualTo("activated");
+        verify(access).requireMember("sys-1", actor);
+        verify(access, never()).requireOwnerOrAdmin(anyString(), any());
     }
 
     private WorkItemProjection item() {

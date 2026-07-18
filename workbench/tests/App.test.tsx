@@ -258,7 +258,7 @@ test('work item page loads selected system from systems api', async () => {
 test('work item table separates id and title and shows creator', async () => {
   setWorkItems([{
     workItemId: 'WI202607114827', title: '优化工作项列表', lifecycleStatus: 'activated', approvalStatus: 'approved',
-    executionAllowed: true, updatedAt: '2026-07-11T03:00:00Z', createdBy: 'admin', canControl: false, availableActions: [],
+    executionAllowed: true, updatedAt: '2026-07-11T03:00:00Z', createdBy: 'admin', canDelete: true, canControl: false, availableActions: [],
   }]);
 
   renderApp('/work-items');
@@ -268,8 +268,26 @@ test('work item table separates id and title and shows creator', async () => {
   expect(screen.getByRole('columnheader', { name: '创建人' })).toBeInTheDocument();
   expect(await screen.findByRole('link', { name: 'WI202607114827' })).toHaveAttribute('href', '/work-items/WI202607114827');
   expect(await screen.findByText('优化工作项列表')).toBeInTheDocument();
-  expect(screen.getByRole('cell', { name: '优化工作项列表' })).toHaveAttribute('data-full-title', '优化工作项列表');
+  expect(screen.getByText('优化工作项列表')).toHaveAttribute('title', '优化工作项列表');
   expect(screen.getByRole('cell', { name: 'admin' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '删除工作项 WI202607114827' })).toBeEnabled();
+});
+
+test('work item deletion is available regardless of lifecycle status', async () => {
+  setWorkItems([
+    { workItemId: 'WI-ACTIVE', title: '执行中工作项', lifecycleStatus: 'activated', approvalStatus: 'approved',
+      executionAllowed: true, createdBy: 'admin', canDelete: true, canControl: false, availableActions: [] },
+    { workItemId: 'WI-DONE', title: '已完成工作项', lifecycleStatus: 'completed', approvalStatus: 'approved',
+      executionAllowed: false, createdBy: 'admin', canDelete: true, canControl: false, availableActions: [] },
+  ]);
+  renderApp('/work-items');
+
+  expect(await screen.findByRole('button', { name: '删除工作项 WI-ACTIVE' })).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: '删除工作项 WI-DONE' }));
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '删除工作项' }));
+
+  await waitFor(() => expect(screen.queryByText('已完成工作项')).not.toBeInTheDocument());
+  expect(screen.getByText('执行中工作项')).toBeInTheDocument();
 });
 
 test('work item filters and second page survive detail return', async () => {

@@ -37,6 +37,7 @@ class PrdHistoryControllerTest {
         assertThat(result).singleElement().satisfies(view -> {
             assertThat(view.createdBy()).isEqualTo("admin");
             assertThat(view.creatorDisplayName()).isEqualTo("Admin");
+            assertThat(view.canDelete()).isTrue();
         });
     }
 

@@ -48,6 +48,7 @@ export type WorkItem = Schemas['WorkItemView'] & {
   executionAllowed: boolean;
   currentStage: string;
   waitingFor: string;
+  canDelete: boolean;
   canControl: boolean;
   availableActions: string[];
   lastAppliedSequence: number;
@@ -198,6 +199,7 @@ export type PrdSession = {
   status: string;
   createdBy: string;
   creatorDisplayName?: string;
+  canDelete: boolean;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -351,6 +353,7 @@ export const api = {
     request<Conversation>('/api/v5/conversations/' + encodeURIComponent(conversationId)),
   prdSessions: (systemId: string) => request<PrdSession[]>('/api/v5/prd-sessions?systemId=' + encodeURIComponent(systemId)),
   prdSession: (prdId: string) => request<PrdSession>('/api/v5/prd-sessions/' + encodeURIComponent(prdId)),
+  deletePrdDraft: (prdId: string) => requestVoid('/api/v5/prd-sessions/' + encodeURIComponent(prdId), { method: 'DELETE' }),
   workItems: (options: { systemId?: string; scope?: string; status?: string; q?: string; sort?: string } | string) => {
     const value = typeof options === 'string' ? { systemId: options, scope: 'system' } : options;
     const params = new URLSearchParams();
@@ -358,6 +361,7 @@ export const api = {
     return request<WorkItem[]>('/api/v5/work-items?' + params.toString());
   },
   workItem: (workItemId: string) => request<WorkItem>('/api/v5/work-items/' + encodeURIComponent(workItemId)),
+  deleteWorkItem: (workItemId: string) => requestVoid('/api/v5/work-items/' + encodeURIComponent(workItemId), { method: 'DELETE' }),
   // 后端主线程会补该接口；前端先固定预期契约。
   workItemEvents: (workItemId: string) => request<WorkItemEvent[]>('/api/v5/work-items/' + encodeURIComponent(workItemId) + '/events'),
   approveOwner: (workItemId: string, body: WorkItemActionRequest) =>

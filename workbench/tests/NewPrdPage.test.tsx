@@ -133,8 +133,8 @@ test('prd draft list defaults to resumable sessions and can show all records', a
     const path = String(input);
     if (path.startsWith('/api/v5/prd-sessions?')) {
       return jsonResponse([
-        { prdId: 'prd-pending', systemId: 'alpha-system', conversationId: 'conv-pending', title: '待完善需求', status: 'need_clarification', createdBy: 'admin', draft: {}, missingFields: [] },
-        { prdId: 'prd-finished', systemId: 'alpha-system', conversationId: 'conv-finished', workItemId: 'wi-finished', title: '已生成需求', status: 'confirmed', createdBy: 'admin', draft: {}, missingFields: [] },
+        { prdId: 'prd-pending', systemId: 'alpha-system', conversationId: 'conv-pending', title: '待完善需求', status: 'need_clarification', createdBy: 'admin', canDelete: true, draft: {}, missingFields: [] },
+        { prdId: 'prd-finished', systemId: 'alpha-system', conversationId: 'conv-finished', workItemId: 'wi-finished', title: '已生成需求', status: 'confirmed', createdBy: 'admin', canDelete: true, draft: {}, missingFields: [] },
       ]);
     }
     return fallback(input, init);
@@ -144,10 +144,37 @@ test('prd draft list defaults to resumable sessions and can show all records', a
 
   expect(await screen.findByText('待完善需求')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '继续完善' })).toHaveAttribute('href', '/work-items/new/prd-pending');
+  expect(screen.getByRole('button', { name: '删除草稿 待完善需求' })).toBeEnabled();
   expect(screen.queryByText('已生成需求')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '全部记录' }));
   expect(await screen.findByText('已生成需求')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '查看工作项' })).toHaveAttribute('href', '/work-items/wi-finished');
+  expect(screen.getByRole('button', { name: '删除草稿 已生成需求' })).toBeEnabled();
+});
+
+test('draft deletion requires confirmation and sends DELETE', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  let deleted = false;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-delete' && init?.method === 'DELETE') {
+      deleted = true;
+      return jsonResponse(undefined);
+    }
+    if (path.startsWith('/api/v5/prd-sessions?')) return jsonResponse(deleted ? [] : [{
+      prdId: 'prd-delete', systemId: 'alpha-system', conversationId: 'conv-delete', title: '待删除草稿',
+      status: 'need_clarification', createdBy: 'admin', canDelete: true, draft: {}, missingFields: [],
+    }]);
+    return fallback(input, init);
+  });
+  renderApp('/work-items/drafts');
+
+  fireEvent.click(await screen.findByRole('button', { name: '删除草稿 待删除草稿' }));
+  expect(fetch).not.toHaveBeenCalledWith('/api/v5/prd-sessions/prd-delete', expect.objectContaining({ method: 'DELETE' }));
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '删除草稿' }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/prd-sessions/prd-delete', expect.objectContaining({ method: 'DELETE' })));
+  expect(await screen.findByText('暂无待完善草稿。')).toBeInTheDocument();
 });
 
 test('draft editor restores session in the independent creation workspace', async () => {

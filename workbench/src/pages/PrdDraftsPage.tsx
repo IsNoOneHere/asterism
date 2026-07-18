@@ -1,21 +1,29 @@
-import { useQuery } from '@tanstack/react-query';
-import { Clock3, FileText, UserRound } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Clock3, FileText, Trash2, UserRound } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, PrdSession } from '../api/client';
-import { ErrorState, formatDateTime, StatusBadge } from '../components/Display';
+import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
+import { errorMessage, ErrorState, formatDateTime, StatusBadge } from '../components/Display';
 import { Pagination, usePagination } from '../components/Pagination';
 import { isResumablePrd } from '../prd';
 import { useCurrentSystem } from '../SystemContext';
 
 export function PrdDraftsPage() {
+  const queryClient = useQueryClient();
   const { systemId } = useCurrentSystem();
   const [scope, setScope] = useState<'pending' | 'all'>('pending');
+  const [deleteTarget, setDeleteTarget] = useState<PrdSession | null>(null);
   const history = useQuery({
     queryKey: ['prd-sessions', systemId],
     queryFn: () => api.prdSessions(systemId),
     enabled: Boolean(systemId),
     retry: false,
+  });
+  const remove = useMutation({
+    mutationFn: (prdId: string) => api.deletePrdDraft(prdId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['prd-sessions', systemId] }),
+    onSettled: () => setDeleteTarget(null),
   });
   const sessions = history.data ?? [];
   const values = scope === 'pending' ? sessions.filter(isResumablePrd) : sessions;
@@ -35,17 +43,24 @@ export function PrdDraftsPage() {
         </div>
       </div>
       <div className="draft-list" aria-label="需求草稿列表">
-        {pagination.pageItems.map((session) => <PrdRow key={session.prdId} session={session} />)}
+        {pagination.pageItems.map((session) => <PrdRow key={session.prdId} session={session} pending={remove.isPending} onDelete={() => { remove.reset(); setDeleteTarget(session); }} />)}
         {history.isLoading && <div className="draft-list-empty" role="status">需求草稿加载中…</div>}
         {history.isError && <ErrorState title="需求草稿加载失败" error={history.error} onRetry={() => history.refetch()} />}
         {history.isSuccess && values.length === 0 && <div className="draft-list-empty">{scope === 'pending' ? '暂无待完善草稿。' : '暂无需求记录。'}</div>}
         <Pagination total={values.length} page={pagination.page} totalPages={pagination.totalPages} onPageChange={pagination.setPage} />
       </div>
+      <ActionConfirmDialog open={Boolean(deleteTarget)} title="删除需求草稿？"
+        description={`“${deleteTarget?.title || deleteTarget?.prdId || ''}”将从草稿列表移除，历史对话和关联工作项仍会保留。`}
+        confirmLabel="删除草稿" pending={remove.isPending} tone="danger"
+        onClose={() => setDeleteTarget(null)} onConfirm={() => deleteTarget && remove.mutate(deleteTarget.prdId)} />
+      <ActionConfirmDialog open={Boolean(remove.error)} title="删除失败"
+        description={errorMessage(remove.error, '需求草稿删除失败')} confirmLabel="知道了" alert showCancel={false}
+        onClose={() => remove.reset()} onConfirm={() => remove.reset()} />
     </div>
   );
 }
 
-function PrdRow({ session }: { session: PrdSession }) {
+function PrdRow({ session, pending, onDelete }: { session: PrdSession; pending: boolean; onDelete: () => void }) {
   return (
     <article className="draft-list-item">
       <div className="draft-list-icon"><FileText size={19} aria-hidden="true" /></div>
@@ -60,11 +75,17 @@ function PrdRow({ session }: { session: PrdSession }) {
           <span><Clock3 size={14} aria-hidden="true" />{formatDateTime(session.updatedAt)}</span>
         </div>
       </div>
-      <div className="draft-list-action">{isResumablePrd(session)
-        ? <Link className="action-link" to={'/work-items/new/' + session.prdId}>继续完善</Link>
-        : session.workItemId
-          ? <Link className="action-link" to={'/work-items/' + session.workItemId}>查看工作项</Link>
-          : '-'}</div>
+      <div className="draft-list-action">
+        {isResumablePrd(session)
+          ? <Link className="action-link" to={'/work-items/new/' + session.prdId}>继续完善</Link>
+          : session.workItemId
+            ? <Link className="action-link" to={'/work-items/' + session.workItemId}>查看工作项</Link>
+            : '-'}
+        <button type="button" className="icon-button danger"
+          title={session.canDelete ? '删除草稿' : '只有创建人或系统 owner/admin 可以删除'}
+          aria-label={`删除草稿 ${session.title || session.prdId}`} disabled={pending || !session.canDelete}
+          onClick={onDelete}><Trash2 size={16} /></button>
+      </div>
     </article>
   );
 }
