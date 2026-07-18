@@ -117,6 +117,8 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
       <span className="config-count">{modelSection ? `${value?.modelProfiles.length ?? 0} 个模型` : `${value?.agents.length ?? 0} 个 Agent`}</span>
     </header>
     {!systemAccessLoading && !systemAccessError && !canManageCurrentSystem && <div className="notice">当前账号在此系统中为只读成员，配置操作已禁用。</div>}
+    {/* 保存反馈固定在列表前，避免被长列表推到页面底部。 */}
+    {message && <div className="success-text" role="status">{message}</div>}
 
     {config.isLoading ? <div className="panel empty" role="status">配置加载中…</div> : config.isError ?
     <ErrorState title="Agent 配置加载失败" error={config.error} onRetry={() => config.refetch()} /> : modelSection ? <div className="panel business-model-panel">
@@ -161,8 +163,6 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
           </tr>)}
         </tbody></table></div>
       </div>}
-
-    {message && <div className="success-text">{message}</div>}
 
     {modelSection && <dialog ref={profileDialogRef} className="confirm-dialog config-dialog" aria-labelledby="profile-dialog-title" onClose={() => { setProfileId(''); setProfile(emptyProfile); }}>
       <form onSubmit={(event) => { event.preventDefault(); saveProfile.mutate(); }}>

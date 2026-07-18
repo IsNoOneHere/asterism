@@ -2513,7 +2513,8 @@ button.row-action-menu-item:disabled {
 }
 
 .management-page > .error-text,
-.management-page > .success-text {
+.management-page > .success-text,
+.agent-config-page > .success-text {
   margin-top: 0;
 }
 

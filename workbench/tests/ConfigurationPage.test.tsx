@@ -36,6 +36,11 @@ test('model profile can be added without ever rendering its key', async () => {
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'new-secret' } });
   fireEvent.click(screen.getByRole('button', { name: '保存 Profile' }));
   expect((await screen.findAllByText('OpenAI 兼容模型')).length).toBeGreaterThan(0);
+  const status = screen.getByText('模型 Profile 保存成功');
+  expect(status).toHaveAttribute('role', 'status');
+  const panel = screen.getByRole('heading', { name: '模型列表' }).closest('.panel');
+  const pageChildren = Array.from(status.closest('section')!.children);
+  expect(pageChildren.indexOf(status)).toBeLessThan(pageChildren.indexOf(panel!));
   expect(screen.queryByText('new-secret')).not.toBeInTheDocument();
   expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/model-profiles', expect.objectContaining({ method: 'POST' }));
 });
