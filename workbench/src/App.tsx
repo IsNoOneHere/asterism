@@ -1,4 +1,4 @@
-import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { Bot, BrainCircuit, ClipboardList, Cpu, LogOut, Map, Settings2, Users } from 'lucide-react';
@@ -16,6 +16,7 @@ import { SystemsPage } from './pages/SystemsPage';
 import { MemoryPage } from './pages/MemoryPage';
 import { UsersPage } from './pages/UsersPage';
 import { KnowledgePage } from './pages/KnowledgePage';
+import { HomePage } from './pages/HomePage';
 import { SystemProvider, useCurrentSystem } from './SystemContext';
 import { SystemSelect } from './components/SystemSelect';
 import { ErrorState } from './components/Display';
@@ -99,7 +100,7 @@ function AuthenticatedShell({ user, visibleGroups, onLogout }: { user: CurrentUs
   return (
     <div className="shell">
       <aside className="sidebar">
-        <BrandMark compact />
+        <Link className="brand-home-link" to="/" aria-label="返回首页"><BrandMark compact /></Link>
         <div className="sidebar-navigation">
           {visibleGroups.map((group) => (
             <section className="nav-group" key={group.label}>
@@ -139,7 +140,7 @@ function AuthenticatedShell({ user, visibleGroups, onLogout }: { user: CurrentUs
         <main className="main">
           {Boolean(systemAccessError) && <ErrorState title="系统权限加载失败" error={systemAccessError} onRetry={retrySystemAccess} />}
           <Routes>
-          <Route path="/" element={<Navigate to="/work-items" replace />} />
+          <Route path="/" element={<HomePage />} />
           <Route element={<WorkItemCenterLayout />}>
             <Route path="/work-items" element={<WorkItemsPage />} />
             <Route path="/work-items/drafts" element={<PrdDraftsPage />} />
@@ -165,11 +166,13 @@ function AuthenticatedShell({ user, visibleGroups, onLogout }: { user: CurrentUs
 
 function shouldShowSystemContext(pathname: string) {
   // 创建和详情页由业务对象自身决定所属系统。
+  if (pathname === '/') return false;
   if (pathname === '/work-items' || pathname === '/work-items/drafts') return true;
   return !pathname.startsWith('/work-items/');
 }
 
 function pageContext(pathname: string) {
+  if (pathname === '/') return { group: 'Asterism', title: '首页' };
   if (pathname.startsWith('/work-items')) return { group: '工作空间', title: pathname.includes('/new') ? '创建工作项' : '工作项' };
   if (pathname === '/memory') return { group: '知识与上下文', title: '系统记忆' };
   if (pathname === '/knowledge') return { group: '知识与上下文', title: '系统知识库' };
