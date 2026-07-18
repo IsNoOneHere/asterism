@@ -40,6 +40,8 @@ export function NewPrdPage() {
   const [draftEditor, setDraftEditor] = useState<DraftEditorValue>({ title: '', goal: '', acceptanceCriteria: [] });
   const [savedDraftEditor, setSavedDraftEditor] = useState<DraftEditorValue>({ title: '', goal: '', acceptanceCriteria: [] });
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string>();
+  const previewDialogRef = useRef<HTMLDialogElement>(null);
   const completedAssistant = useRef<string>();
   const loadedPrdId = useRef<string>();
   const allowNavigation = useRef(false);
@@ -194,6 +196,12 @@ export function NewPrdPage() {
     setFiles((current) => [...current, ...Array.from(values).filter((file) => file.type.startsWith('image/'))].slice(0, 3));
   }
 
+  // 原生 dialog 已提供遮罩、焦点约束和 Esc 关闭，不引入额外图片预览依赖。
+  function openImagePreview(attachmentId: string) {
+    setPreviewImage(api.attachmentUrl(attachmentId));
+    if (!previewDialogRef.current?.open) previewDialogRef.current?.showModal();
+  }
+
   const suspectedTargets = targetList(result.draft?.suspectedTargets);
   const confirmedTargets = targetList(result.draft?.targets);
   const unconfirmedTargets = suspectedTargets.filter((target) =>
@@ -228,7 +236,8 @@ export function NewPrdPage() {
           {conversationMessages.map((message) => (
             <div className={'bubble ' + (message.senderType === 'user' ? 'user' : 'assistant')} key={message.messageId}>
               {message.content && <div>{message.content}</div>}
-              {message.attachmentIds?.length > 0 && <div className="message-images">{message.attachmentIds.map((id) => <img key={id} src={api.attachmentUrl(id)} alt="需求截图" />)}</div>}
+              {message.attachmentIds?.length > 0 && <div className="message-images">{message.attachmentIds.map((id) => <img key={id} src={api.attachmentUrl(id)} alt="需求截图" role="button" tabIndex={0} title="双击预览"
+                onDoubleClick={() => openImagePreview(id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openImagePreview(id); } }} />)}</div>}
               {message.observations?.map((observation, index) => <small className="observation-summary" key={index}>{observationSummary(observation)}</small>)}
               {message.messageId === latestAssistantId && unconfirmedTargets.length > 0 && (
                 <div className="target-confirmation-cards">
@@ -351,6 +360,10 @@ export function NewPrdPage() {
         </>}
       </div>
       </div>}
+      <dialog ref={previewDialogRef} className="confirm-dialog image-preview-dialog" aria-label="图片预览" onClose={() => setPreviewImage(undefined)}>
+        {previewImage && <img src={previewImage} alt="需求截图预览" />}
+        <button type="button" className="secondary" onClick={() => previewDialogRef.current?.close()}>关闭预览</button>
+      </dialog>
       <ActionConfirmDialog
         open={confirmOpen}
         title="确认并生成工作项？"

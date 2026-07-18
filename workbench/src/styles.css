@@ -3849,7 +3849,12 @@ button.row-action-menu-item:disabled {
   }
 }
 .message-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.message-images img { width: 140px; height: 96px; object-fit: cover; border-radius: var(--radius-control); border: 1px solid var(--border); }
+.message-images img { width: 140px; height: 96px; object-fit: cover; border-radius: var(--radius-control); border: 1px solid var(--border); cursor: zoom-in; }
+.message-images img:focus-visible { outline: 3px solid rgba(91, 110, 225, 0.2); outline-offset: 2px; }
+/* 已发送图片复用全局原生弹窗样式，只补大图尺寸。 */
+.image-preview-dialog { max-width: calc(100vw - 32px); padding: 12px; width: min(960px, calc(100vw - 32px)); }
+.image-preview-dialog img { border-radius: var(--radius-control); display: block; margin: 0 auto; max-height: calc(100vh - 112px); max-width: 100%; object-fit: contain; }
+.image-preview-dialog button { display: block; margin: 12px 0 0 auto; }
 .observation-summary { display: block; margin-top: 8px; opacity: .8; }
 .pending-files { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .file-picker { display: inline-flex; width: auto; cursor: pointer; margin-right: 8px; }

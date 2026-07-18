@@ -40,6 +40,29 @@ test('new prd page renders two chat turns as four bubbles', async () => {
   expect(await screen.findByText('助手第二轮')).toBeInTheDocument();
 });
 
+test('sent image opens a preview on double click', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-image') return jsonResponse({
+      prdId: 'prd-image', systemId: 'alpha-system', conversationId: 'conv-image', status: 'need_clarification', createdBy: 'admin', draft: {}, missingFields: [],
+    });
+    if (path === '/api/v5/conversations/conv-image') return jsonResponse({
+      messages: [{ messageId: 'image-message', conversationId: 'conv-image', senderType: 'user', content: '', attachmentIds: ['attachment-1'] }], pendingAssistant: false,
+    });
+    return fallback(input, init);
+  });
+  renderApp('/work-items/new/prd-image');
+
+  fireEvent.doubleClick(await screen.findByRole('button', { name: '需求截图' }));
+
+  const dialog = screen.getByRole('dialog', { name: '图片预览' });
+  expect(dialog).toHaveAttribute('open');
+  expect(within(dialog).getByRole('img', { name: '需求截图预览' })).toHaveAttribute('src', '/api/v5/attachments/attachment-1');
+  fireEvent.click(within(dialog).getByRole('button', { name: '关闭预览' }));
+  expect(dialog).not.toHaveAttribute('open');
+});
+
 test('warns before leaving an unsaved work item description', async () => {
   renderApp('/work-items/new');
 
