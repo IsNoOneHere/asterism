@@ -3356,13 +3356,14 @@ button.row-action-menu-item:disabled {
 
 .pagination {
   align-items: center;
-  background: transparent;
-  border-top: 0;
+  /* 分页作为独立底栏，与上方列表内容保持清晰分隔。 */
+  background: var(--surface-subtle);
+  border-top: 1px solid var(--border);
   color: var(--muted);
   display: flex;
   justify-content: space-between;
-  min-height: 48px;
-  padding: 12px 2px 0;
+  min-height: 52px;
+  padding: 10px 16px;
 }
 
 .pagination-actions {
