@@ -405,8 +405,29 @@ pre {
   color: #888f9f;
 }
 
+.brand-mark.compact {
+  gap: 9px;
+}
+
+.brand-mark.compact > svg {
+  color: #303747;
+  height: 24px;
+  width: 24px;
+}
+
+.brand-mark.compact path {
+  opacity: 0.5;
+}
+
+.brand-mark.compact .brand-copy strong {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  text-transform: none;
+}
+
 .sidebar > .brand-mark {
-  margin: 0 7px 30px;
+  margin: 2px 8px 30px;
 }
 
 .sidebar-navigation {

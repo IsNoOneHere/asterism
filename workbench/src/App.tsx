@@ -99,7 +99,7 @@ function AuthenticatedShell({ user, visibleGroups, onLogout }: { user: CurrentUs
   return (
     <div className="shell">
       <aside className="sidebar">
-        <BrandMark />
+        <BrandMark compact />
         <div className="sidebar-navigation">
           {visibleGroups.map((group) => (
             <section className="nav-group" key={group.label}>
