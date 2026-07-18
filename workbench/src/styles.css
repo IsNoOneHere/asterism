@@ -2582,6 +2582,7 @@ button.row-action-menu-item:disabled {
   color: white;
 }
 
+/* 徽标重置通用 warning 提示框间距，保持列表垂直居中。 */
 .status-badge {
   border: 1px solid transparent;
   border-radius: 999px;
@@ -2589,6 +2590,7 @@ button.row-action-menu-item:disabled {
   font-size: 12px;
   font-weight: 600;
   line-height: 1.5;
+  margin: 0;
   padding: 2px 7px;
   white-space: nowrap;
 }
