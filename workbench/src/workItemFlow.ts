@@ -104,6 +104,7 @@ const FAILURE_EVENTS = new Set(['WorkerBlocked', 'PatchApplyBlocked', 'PatchReje
 const FAILURE_REASON_LABELS: Record<string, string> = {
   context_fetch_failed: '获取执行上下文失败',
   planner_failed: '执行计划生成失败',
+  coding_attempt_failed: 'Claude SDK Coding Attempt 执行失败',
   execution_failed: 'Agent 执行失败',
   role_scope_violation: 'Agent 修改超出允许范围',
   handoff_conflict: 'Agent 交接存在文件冲突',
@@ -116,7 +117,7 @@ const FAILURE_REASON_LABELS: Record<string, string> = {
   release_failed: '发布失败',
 };
 const ATTEMPT_EVENTS = new Set([
-  'WorkItemActivated', 'ReworkStarted', 'ExecutionPlanDrafted', 'AgentStageCompleted', 'ModificationCompleted',
+  'WorkItemActivated', 'ReworkStarted', 'CodingAttemptStarted', 'ExecutionPlanDrafted', 'AgentStageCompleted', 'ModificationCompleted',
   'WorkerBlocked', 'PatchApplied', 'PatchApplyBlocked', 'PatchRejected', 'ValidationPassed', 'ValidationFailed',
   'RepositoryReleasePrepared', 'MergeRequestCreated', 'MergeRequestMerged', 'MergeRequestClosed', 'ReleaseCompleted', 'CaseCancelled',
 ]);
@@ -229,6 +230,26 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
       case 'WorkItemRejected':
         stageById.get('approval')!.failureReason = failureReason(event) || '负责人已拒绝';
         break;
+      case 'CodingAttemptStarted': {
+        const supervisor = recordValue(payload?.supervisor);
+        plan = null;
+        agents = [{
+          index: 0,
+          role: `${stringValue(supervisor?.role) || 'developer'} · Supervisor`,
+          repo: '',
+          engine: stringValue(supervisor?.engine) || 'claude_sdk',
+          status: 'running',
+          summary: '正在理解需求并调度仓库子 Agent',
+          changedPaths: [],
+          tokenUsage: {},
+        }];
+        repositories.clear();
+        modification = null;
+        checks = [];
+        latestMrRoot = '';
+        validationSkipped = false;
+        break;
+      }
       case 'ExecutionPlanDrafted': {
         plan = parsePlan(payload);
         agents = (plan?.assignments ?? []).map((assignment, index) => ({
@@ -320,7 +341,7 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
   if (attemptState.active?.events.length) attempts.push(attemptState.active);
 
   const currentStageId = stageForLifecycle(workItem.lifecycleStatus, lastFailureStage, lastOperationalStage);
-  applyStageStatuses(stages, workItem, currentStageId, lastOperationalStage, validationSkipped, Boolean(plan));
+  applyStageStatuses(stages, workItem, currentStageId, lastOperationalStage, validationSkipped, Boolean(plan || agents.length));
   applyAgentStatuses(agents, stages, currentStageId);
   const repositoryViews = [...repositories.values()];
   stageById.get('execution')!.agents = agents;
@@ -335,6 +356,7 @@ export function eventName(eventType: string) {
   return ({
     OwnerApprovalRequested: '已请求负责人审批', OwnerApprovalSignalSubmitted: '负责人已提交审批',
     WorkItemActivated: '工作项已激活', WorkItemRejected: '负责人已拒绝', ReworkStarted: '已开始重新执行',
+    CodingAttemptStarted: 'Claude SDK Coding Attempt 已启动',
     ExecutionPlanDrafted: '执行计划已生成', AgentStageCompleted: 'Agent 阶段已完成', ModificationCompleted: '修改已完成',
     WorkerBlocked: '执行已阻塞', PatchApplied: 'Patch 已应用', PatchApplyBlocked: 'Patch 应用被阻塞', PatchRejected: 'Patch 已打回',
     ValidationPassed: '验证已通过', ValidationFailed: '验证未通过', MergeRequestCreated: '合并请求已创建',
@@ -387,6 +409,7 @@ function stagesForEvent(event: WorkItemEvent, fallback: FlowStageId): FlowStageI
     case 'WorkItemActivated':
     case 'WorkItemRejected': return ['approval'];
     case 'ReworkStarted':
+    case 'CodingAttemptStarted':
     case 'ExecutionPlanDrafted':
     case 'AgentStageCompleted': return ['execution'];
     case 'ModificationCompleted': return ['execution', 'patch'];
@@ -408,7 +431,7 @@ function stagesForEvent(event: WorkItemEvent, fallback: FlowStageId): FlowStageI
 
 function blockedStage(payload: Record<string, unknown> | null, fallback: FlowStageId): FlowStageId {
   const reason = stringValue(payload?.reason).toLowerCase();
-  if (/planner|execution|agent|role|handoff|context/.test(reason)) return 'execution';
+  if (/planner|coding|execution|agent|role|handoff|context/.test(reason)) return 'execution';
   if (/patch|diff/.test(reason)) return 'patch';
   if (/validation|test/.test(reason)) return 'validation';
   if (/release|git|mr|merge|push/.test(reason)) return 'release';
@@ -418,7 +441,7 @@ function blockedStage(payload: Record<string, unknown> | null, fallback: FlowSta
 function openedStage(eventType: string): FlowStageId | null {
   return ({
     OwnerApprovalRequested: 'approval', WorkItemActivated: 'execution', ReworkStarted: 'execution',
-    ExecutionPlanDrafted: 'execution', AgentStageCompleted: 'execution', ModificationCompleted: 'patch',
+    CodingAttemptStarted: 'execution', ExecutionPlanDrafted: 'execution', AgentStageCompleted: 'execution', ModificationCompleted: 'patch',
     PatchApplied: 'validation', ValidationPassed: 'release', RepositoryReleasePrepared: 'release', MergeRequestCreated: 'release',
     MergeRequestMerged: 'release', MergeRequestClosed: 'release',
   } as Partial<Record<string, FlowStageId>>)[eventType] ?? null;

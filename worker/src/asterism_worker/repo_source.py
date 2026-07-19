@@ -23,6 +23,12 @@ class RepoSourcePort(Protocol):
         """准备隔离工作区并返回仓库目录。"""
 
 
+@dataclass(slots=True)
+class TeamWorkspace:
+    root: Path
+    repos: dict[str, Path]
+
+
 class LocalRepoSource:
     def prepare(self, repo: RepoSnapshot, workspace_root: str) -> Path:
         workspace = _workspace(workspace_root, repo.repo_id)
@@ -69,6 +75,31 @@ async def prepare_repo_workspace(repo: RepoSnapshot, system_id: str, settings: S
         return LocalRepoSource().prepare(repo, settings.workspace_root)
     base_url, token = await fetch_git_connection(system_id, settings)
     return GitlabRepoSource(base_url, token).prepare(repo, settings.workspace_root)
+
+
+async def prepare_team_workspace(
+    repos: list[RepoSnapshot], system_id: str, settings: Settings,
+) -> TeamWorkspace:
+    """把多个隔离克隆收拢到同一个 Claude SDK 团队工作区。"""
+
+    root = Path(settings.workspace_root)
+    root.mkdir(parents=True, exist_ok=True)
+    team_root = Path(tempfile.mkdtemp(prefix="case-team-", dir=root))
+    prepared: dict[str, Path] = {}
+    try:
+        for index, repo in enumerate(repos):
+            workspace = await prepare_repo_workspace(repo, system_id, settings)
+            directory = re.sub(r"[^a-zA-Z0-9_.-]", "-", repo.repo_id) or f"repo-{index + 1}"
+            target = team_root / directory
+            shutil.move(str(workspace), target)
+            if workspace.name == "repo":
+                shutil.rmtree(workspace.parent, ignore_errors=True)
+            prepared[repo.repo_id] = target
+        log.info("Claude SDK 团队工作区已准备 repo_count=%s", len(prepared))
+        return TeamWorkspace(team_root, prepared)
+    except Exception:
+        shutil.rmtree(team_root, ignore_errors=True)
+        raise
 
 
 async def fetch_git_connection(system_id: str, settings: Settings) -> tuple[str, str]:

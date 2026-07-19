@@ -77,6 +77,7 @@ class CaseInput(BaseModel):
     mr_target_branch: str = ""
     mr_labels: list[str] = Field(default_factory=list)
     agent_config_snapshot: AgentConfigSnapshot | None = None
+    execution_architecture: str = "legacy_planner_v1"
 
     def effective_repos(self) -> list[RepoSnapshot]:
         # 旧 workflow history 没有 repos，继续使用原单仓字段。
@@ -189,10 +190,50 @@ class ExecutionResult(BaseModel):
     changed_paths: list[str] = Field(default_factory=list)
     blocked_reason: str = ""
     blocked_detail: str = ""
+    session_id: str = ""
+    subagent_runs: list["SubagentRun"] = Field(default_factory=list)
 
     @property
     def passes_diff_gate(self) -> bool:
         return bool(self.diff_patch.strip()) and "diff --git" in self.diff_patch
+
+
+class RepoChangeResult(BaseModel):
+    repo: str
+    diff_patch: str = ""
+    changed_paths: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
+class SubagentRun(BaseModel):
+    agent_id: str
+    agent_type: str
+    repo: str = ""
+    status: str = "completed"
+
+
+class CodingAttemptRequest(BaseModel):
+    case_id: str
+    work_item_id: str
+    system_id: str
+    repos: list[RepoSnapshot]
+    goal: str
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    feedback: str = ""
+    memories: list[dict[str, Any]] = Field(default_factory=list)
+    context_manifest_id: str = ""
+    agent_config_snapshot: AgentConfigSnapshot | None = None
+    previous_candidate: list[RepoChangeResult] = Field(default_factory=list)
+
+
+class CodingAttemptResult(BaseModel):
+    summary: str
+    repo_changes: list[RepoChangeResult] = Field(default_factory=list)
+    subagent_runs: list[SubagentRun] = Field(default_factory=list)
+    token_usage: dict[str, Any] = Field(default_factory=dict)
+    session_id: str = ""
+    turns: int | None = None
+    execution_provider: str = "claude_sdk_supervisor"
 
 
 class ReleaseResult(BaseModel):

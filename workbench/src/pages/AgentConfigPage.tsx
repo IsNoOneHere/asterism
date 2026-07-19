@@ -11,7 +11,7 @@ type AgentDraft = { name: string; engine: string; modelProfileRef: string; pathS
 
 const emptyProfile: ProfileDraft = { name: '', provider: 'openai-compat', model: '', baseUrl: '', apiKey: '', supportsVision: false };
 const emptyAgent: AgentDraft = { name: '', engine: 'http', modelProfileRef: '', pathScope: '', prompt: '', maxTurns: 50, timeoutSeconds: 600 };
-const builtinPurpose: Record<string, string> = { product: 'PRD 对话', planner: '执行规划', developer: '默认执行' };
+const builtinPurpose: Record<string, string> = { product: 'PRD 对话', planner: '执行规划', developer: 'Claude SDK 团队执行' };
 
 export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const { systemId, canManageCurrentSystem, systemAccessLoading, systemAccessError } = useCurrentSystem();
@@ -86,6 +86,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const value = config.data;
   const modelSection = section === 'models';
   const modelOnly = agentName === 'product' || agentName === 'planner';
+  const legacyClaudeAgent = !modelOnly && agentName !== 'developer' && agent.engine === 'claude_sdk';
   const openProfile = (item?: ModelProfile) => {
     saveProfile.reset();
     setProfileId(item?.id ?? '');
@@ -148,13 +149,14 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
         </tbody></table></div>
       </div> : <div className="panel execution-agent-panel">
         <div className="config-section-head">
-          <div><h2>Agent 列表</h2><p>内置 Agent 固定置顶，自定义 Agent 供 Planner 按名称分配。</p></div>
+          <div><h2>Agent 列表</h2><p>developer 统一提供 Claude SDK Profile；仓库子 Agent 在执行时自动生成。</p></div>
           <button type="button" className="icon-text-button" disabled={!canManageCurrentSystem} onClick={() => openAgent()}><Plus size={16} />新增 Agent</button>
         </div>
+        <div className="notice">Claude SDK 使用单一团队凭证并自主调度原生 Agent。自定义 Agent 仅用于 DeepAgents、HTTP 等独立执行内核。</div>
         <div className="table-frame"><table className="data-table agent-role-table"><thead><tr><th>Agent</th><th>Engine / Profile</th><th>范围</th><th>操作</th></tr></thead><tbody>
           {(value?.agents ?? []).map((item) => <tr key={item.name}>
             <td title={item.name}><strong>{item.name}</strong>{item.kind === 'builtin' && <span className="default-badge">内置 · {builtinPurpose[item.name]}</span>}</td>
-            <td title={`${item.engine ? `${item.engine} · ` : ''}${profileName(value?.modelProfiles ?? [], item.modelProfileRef)}`}>{item.engine ? `${item.engine} · ` : ''}{profileName(value?.modelProfiles ?? [], item.modelProfileRef)}</td>
+            <td title={agentRuntimeLabel(item, value?.modelProfiles ?? [])}>{agentRuntimeLabel(item, value?.modelProfiles ?? [])}</td>
             <td title={item.pathScope.join(', ') || (item.name === 'product' || item.name === 'planner' ? '不执行代码' : '跟随系统')}>{item.pathScope.join(', ') || (item.name === 'product' || item.name === 'planner' ? '不执行代码' : '跟随系统')}</td>
             <td className="config-action-cell"><div className="button-row compact-actions">
               <button type="button" className="icon-button" title="编辑 Agent" aria-label={`编辑 ${item.name}`} disabled={!canManageCurrentSystem} onClick={() => openAgent(item)}><Pencil size={16} /></button>
@@ -183,14 +185,15 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
     {!modelSection && <dialog ref={agentDialogRef} className="confirm-dialog config-dialog agent-dialog" aria-labelledby="agent-dialog-title" onClose={resetAgent}>
       <form onSubmit={(event) => { event.preventDefault(); saveAgent.mutate(); }}>
         <div className="config-section-head compact"><div><h2 id="agent-dialog-title">{agentName ? `编辑 ${agentName}` : '新增 Agent'}</h2><p>{modelOnly ? '内置沟通 Agent 只选择 Model Profile。' : '执行参数在 Case 启动时固定。'}</p></div></div>
+        {legacyClaudeAgent && <div className="notice">该旧配置已由 Claude SDK 自动仓库 Agent 替代。可删除，或切换到其他执行内核继续使用。</div>}
         <div className="agent-role-fields">
           <label>Agent 名称<input required disabled={Boolean(agentName)} value={agent.name} onChange={(event) => setAgent({ ...agent, name: event.target.value })} /></label>
-          {!modelOnly && <label>执行内核<select value={agent.engine} onChange={(event) => setAgent({ ...agent, engine: event.target.value })}>{(value?.engines ?? ['claude_sdk', 'deepagents', 'http', 'fake']).map((engine) => <option key={engine} value={engine}>{engine}</option>)}</select></label>}
-          <label>Model Profile<select value={agent.modelProfileRef} onChange={(event) => setAgent({ ...agent, modelProfileRef: event.target.value })}><option value="">回落部署默认</option>{profileOptions(value?.modelProfiles)}</select></label>
-          {!modelOnly && <><label>Path Scope（每行一条）<textarea value={agent.pathScope} onChange={(event) => setAgent({ ...agent, pathScope: event.target.value })} /></label>
-            <label className="wide-field">Agent 提示词<textarea value={agent.prompt} onChange={(event) => setAgent({ ...agent, prompt: event.target.value })} /></label>
-            <label>最大轮次<input type="number" min="1" value={agent.maxTurns} onChange={(event) => setAgent({ ...agent, maxTurns: Number(event.target.value) })} /></label>
-            <label>超时（秒）<input type="number" min="1" value={agent.timeoutSeconds} onChange={(event) => setAgent({ ...agent, timeoutSeconds: Number(event.target.value) })} /></label></>}
+          {!modelOnly && <label>执行内核<select value={agent.engine} onChange={(event) => setAgent({ ...agent, engine: event.target.value })}>{agentEngineOptions(value?.engines, Boolean(agentName)).map((engine) => <option key={engine} value={engine}>{engine}</option>)}</select></label>}
+          <label>Model Profile<select disabled={legacyClaudeAgent} value={agent.modelProfileRef} onChange={(event) => setAgent({ ...agent, modelProfileRef: event.target.value })}><option value="">回落部署默认</option>{profileOptions(value?.modelProfiles)}</select></label>
+          {!modelOnly && <><label>Path Scope（每行一条）<textarea disabled={legacyClaudeAgent} value={agent.pathScope} onChange={(event) => setAgent({ ...agent, pathScope: event.target.value })} /></label>
+            <label className="wide-field">Agent 提示词<textarea disabled={legacyClaudeAgent} value={agent.prompt} onChange={(event) => setAgent({ ...agent, prompt: event.target.value })} /></label>
+            <label>最大轮次<input disabled={legacyClaudeAgent} type="number" min="1" value={agent.maxTurns} onChange={(event) => setAgent({ ...agent, maxTurns: Number(event.target.value) })} /></label>
+            <label>超时（秒）<input disabled={legacyClaudeAgent} type="number" min="1" value={agent.timeoutSeconds} onChange={(event) => setAgent({ ...agent, timeoutSeconds: Number(event.target.value) })} /></label></>}
         </div>
         {saveAgent.error && <div className="error-text">{errorMessage(saveAgent.error)}</div>}
         <div className="button-row"><button type="button" className="secondary" onClick={() => agentDialogRef.current?.close()}>取消</button><button type="submit" disabled={!canManageCurrentSystem || saveAgent.isPending}>{agentName ? '保存 Agent' : '添加 Agent'}</button></div>
@@ -227,6 +230,16 @@ function profileOptions(profiles: ModelProfile[] | undefined) {
 
 function profileName(profiles: ModelProfile[], id: string) {
   return profiles.find((item) => item.id === id)?.name || (id || '部署默认');
+}
+
+function agentRuntimeLabel(agent: Agent, profiles: ModelProfile[]) {
+  if (agent.kind === 'custom' && agent.engine === 'claude_sdk') return 'claude_sdk · 已由团队模式替代';
+  return `${agent.engine ? `${agent.engine} · ` : ''}${profileName(profiles, agent.modelProfileRef)}`;
+}
+
+function agentEngineOptions(engines: string[] | undefined, editing: boolean) {
+  const values = engines ?? ['claude_sdk', 'deepagents', 'http', 'fake'];
+  return editing ? values : values.filter((engine) => engine !== 'claude_sdk');
 }
 
 function providerName(provider: string) {

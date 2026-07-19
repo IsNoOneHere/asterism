@@ -43,6 +43,7 @@ class ClaudeSdkExecutionProvider(ExecutionProvider):
         if engine_options.effort_level:
             self.model_env["CLAUDE_CODE_EFFORT_LEVEL"] = engine_options.effort_level
         self.max_turns = engine_options.max_turns
+        self.max_buffer_size = engine_options.max_buffer_size
         self.artifacts_root = Path(artifacts_root)
         self.event_callback = callbacks.get("event")
         self.query = callbacks.get("query") or query
@@ -80,6 +81,8 @@ class ClaudeSdkExecutionProvider(ExecutionProvider):
                 disallowed_tools=CLAUDE_DISALLOWED_TOOLS,
                 permission_mode="bypassPermissions",
                 max_turns=self.max_turns,
+                # 使用 SDK 官方传输选项承接大型仓库的工具结果，避免 1 MiB 默认值中断会话。
+                max_buffer_size=self.max_buffer_size,
                 cwd=workspace,
                 settings=str(settings_path),
                 setting_sources=["project"],
@@ -245,6 +248,7 @@ class ClaudeSdkExecutionProvider(ExecutionProvider):
             f"本阶段步骤引用: {request.step_refs or ['全部']}\n"
             f"允许路径: {self._paths(request.allowed_paths)}\n"
             f"禁止路径: {self._paths(request.forbidden_paths)}\n"
+            f"Planner 建议关注路径（仅定位提示，不是权限边界）: {self._paths(request.role_scope)}\n"
             f"角色补充约束: {request.role_prompt or '无'}\n"
             f"前序结构化交接: {handoff}\n"
         )

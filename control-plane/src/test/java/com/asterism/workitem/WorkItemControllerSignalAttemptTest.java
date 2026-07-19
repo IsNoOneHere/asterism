@@ -6,9 +6,11 @@ import com.asterism.event.DomainEventService;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.projection.WorkItemProjection;
 import com.asterism.projection.WorkItemProjectionRepository;
+import com.asterism.system.AgentConfigurationService;
 import com.asterism.temporal.TemporalCasePort;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionOperations;
@@ -121,17 +123,83 @@ class WorkItemControllerSignalAttemptTest {
                 .containsExactly("validation_passed", "validation_rejected");
     }
 
+    @Test
+    void latestConfigurationReworkSendsFreshSnapshotWithoutApiKey() {
+        var fixture = fixture(item("worker_blocked", 10));
+        when(fixture.events.findByWorkItemId("wi-1")).thenReturn(List.of(event(
+                10, "WorkerBlocked", "{\"reason\":\"execution_failed\",\"failed_stage\":{\"index\":0}}")));
+        when(fixture.access.canControl("sys-1", fixture.actor)).thenReturn(true);
+        when(fixture.configurations.internal("sys-1")).thenReturn(
+                new AgentConfigurationService.InternalAgentConfiguration(
+                        List.of(new AgentConfigurationService.ModelProfile(
+                                "mp-latest", "deepseek-worker", "anthropic", "https://api.deepseek.com/anthropic",
+                                "secret", "deepseek-v4-pro", false)),
+                        List.of(new AgentConfigurationService.Agent(
+                                "backend-dev", "custom", "claude_sdk", "mp-latest", List.of(), "后端", 50, 600))));
+        var request = new WorkItemActionService.ActionRequest(
+                "request-003", "worker_blocked", 10L, "刷新配置", null);
+
+        assertThat(fixture.service.availability(item("worker_blocked", 10), fixture.actor).actions())
+                .containsExactly("retry_current_phase", "rework", "rework_with_latest_config", "cancel_case");
+        fixture.service.submit("wi-1", "rework_with_latest_config", request, fixture.actor);
+
+        var captor = ArgumentCaptor.forClass(TemporalCasePort.SignalCaseCommand.class);
+        verify(fixture.temporal).signalCase(captor.capture());
+        var command = captor.getValue();
+        assertThat(command.signalName()).isEqualTo("rework_with_latest_config");
+        assertThat(command.context().get("resume_failed_stage")).isEqualTo(true);
+        assertThat(command.context().get("agent_config_snapshot").toString())
+                .contains("model_profiles", "mp-latest", "claude_sdk")
+                .doesNotContain("secret", "api_key");
+    }
+
+    @Test
+    void workerBlockedActionsFollowFailedPhase() {
+        var coding = fixture(item("worker_blocked", 10));
+        when(coding.access.canControl("sys-1", coding.actor)).thenReturn(true);
+        when(coding.events.findByWorkItemId("wi-1")).thenReturn(List.of(event(
+                10, "WorkerBlocked", "{\"reason\":\"coding_attempt_failed\",\"failedPhase\":\"coding\"}")));
+
+        var patch = fixture(item("worker_blocked", 11));
+        when(patch.access.canControl("sys-1", patch.actor)).thenReturn(true);
+        when(patch.events.findByWorkItemId("wi-1")).thenReturn(List.of(event(
+                11, "WorkerBlocked", "{\"reason\":\"patch_apply_failed\",\"failedPhase\":\"patch\"}")));
+
+        assertThat(coding.service.availability(item("worker_blocked", 10), coding.actor).actions())
+                .containsExactly("retry_current_phase", "rework", "rework_with_latest_config", "cancel_case");
+        assertThat(patch.service.availability(item("worker_blocked", 11), patch.actor).actions())
+                .containsExactly("retry_current_phase", "rework", "cancel_case");
+    }
+
+    @Test
+    void retryCurrentPhaseSendsDedicatedSignalWithoutRefreshingConfiguration() {
+        var fixture = fixture(item("worker_blocked", 10));
+        when(fixture.events.findByWorkItemId("wi-1")).thenReturn(List.of(event(
+                10, "WorkerBlocked", "{\"reason\":\"release_failed\",\"failedPhase\":\"release\"}")));
+        var request = new WorkItemActionService.ActionRequest(
+                "request-004", "worker_blocked", 10L, null, null);
+
+        fixture.service.submit("wi-1", "retry_current_phase", request, fixture.actor);
+
+        verify(fixture.temporal).signalCase(argThat(command ->
+                "retry_current_phase".equals(command.signalName())
+                        && "retry_current_phase-request-004".equals(command.signalId())
+                        && !command.context().containsKey("agent_config_snapshot")));
+        verifyNoInteractions(fixture.configurations);
+    }
+
     private Fixture fixture(WorkItemProjection item) {
         var workItems = mock(WorkItemProjectionRepository.class);
         var temporal = mock(TemporalCasePort.class);
         var events = mock(DomainEventService.class);
         var access = mock(SystemAccessService.class);
+        var configurations = mock(AgentConfigurationService.class);
         when(workItems.findById("wi-1")).thenReturn(Optional.of(item));
         when(workItems.lockById("wi-1")).thenReturn(Optional.of(item));
         when(events.findByWorkItemId("wi-1")).thenReturn(List.of());
         var service = new WorkItemActionService(workItems, temporal, events, access,
-                new ObjectMapper(), directTransactions());
-        return new Fixture(service, temporal, events, access,
+                configurations, new ObjectMapper(), directTransactions());
+        return new Fixture(service, temporal, events, access, configurations,
                 new UsernamePasswordAuthenticationToken("requester", "n/a"));
     }
 
@@ -158,6 +226,7 @@ class WorkItemControllerSignalAttemptTest {
     }
 
     private record Fixture(WorkItemActionService service, TemporalCasePort temporal, DomainEventService events,
-                           SystemAccessService access, UsernamePasswordAuthenticationToken actor) {
+                           SystemAccessService access, AgentConfigurationService configurations,
+                           UsernamePasswordAuthenticationToken actor) {
     }
 }

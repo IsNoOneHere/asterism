@@ -342,6 +342,8 @@ def test_plan_prompt_contains_only_available_agent_metadata():
     assert "frontend" in llm.prompts[0]
     assert "claude_sdk" in llm.prompts[0]
     assert "Every multi-repository change must set repo" in llm.prompts[0]
+    assert "scope_paths are non-authoritative focus hints" in llm.prompts[0]
+    assert "Never select generated build outputs" in llm.prompts[0]
     assert '"repo_id": "web"' in llm.prompts[0]
     assert "api_key" not in llm.prompts[0]
 

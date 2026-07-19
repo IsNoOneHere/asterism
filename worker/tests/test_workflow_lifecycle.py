@@ -172,6 +172,80 @@ def test_workflow_blocks_when_planner_fails():
     assert blocked["payload"]["reason"] == "planner_failed"
 
 
+def test_new_case_uses_single_coding_attempt_without_planner_activities():
+    counts: dict[str, int] = {}
+    requests: list[dict] = []
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], repos=_gitlab_repos(), agent_config_snapshot=_agent_snapshot(),
+       execution_architecture="claude_supervisor_v1", activity_counts=counts,
+       observed_coding_requests=requests))
+
+    assert result == "cancelled"
+    assert counts["fetch_context"] == counts["run_coding_attempt"] == 1
+    assert counts.get("summarize_repo", 0) == counts.get("plan_execution", 0) == 0
+    assert counts.get("validate_plan_targets", 0) == 0
+    assert len(requests) == 1
+    assert "plan" not in requests[0] and "target_files" not in requests[0]
+    business = _business_types(events)
+    assert business[:5] == [
+        "WorkItemActivated", "CodingAttemptStarted", "AgentStageCompleted", "AgentStageCompleted", "ModificationCompleted",
+    ]
+    modification = next(event for event in events if event["eventType"] == "ModificationCompleted")
+    assert {item["repo"] for item in modification["payload"]["repoDiffs"]} == {"frontend", "backend"}
+    assert modification["payload"]["sessionId"] == "session-team"
+
+
+def test_supervisor_refreshes_config_and_retries_whole_attempt_without_planner():
+    counts: dict[str, int] = {}
+    requests: list[dict] = []
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("rework_with_latest_config", {
+            "signal_id": "rework-latest-wi-1",
+            "agent_config_snapshot": _agent_snapshot(),
+            "resume_failed_stage": True,
+        }),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], repos=_gitlab_repos(), agent_config_snapshot=_agent_snapshot(),
+       execution_architecture="claude_supervisor_v1", activity_counts=counts,
+       observed_coding_requests=requests, coding_attempt_failures=1))
+
+    assert result == "cancelled"
+    assert counts["run_coding_attempt"] == 2
+    assert counts.get("plan_execution", 0) == 0
+    assert [event["eventType"] for event in events].count("CodingAttemptStarted") == 2
+    assert any(event["eventType"] == "WorkerBlocked" and event["payload"]["reason"] == "coding_attempt_failed"
+               for event in events)
+    rework = next(event for event in events if event["eventType"] == "ReworkStarted")
+    assert rework["payload"]["configurationRefreshed"] is True
+
+
+def test_supervisor_rework_receives_feedback_and_complete_previous_candidate():
+    requests: list[dict] = []
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_rejected", {"signal_id": "reject-patch-wi-1", "note": "部门应读取 deptName"}),
+        ("rework", {"signal_id": "rework-wi-1", "note": "不要使用 record.depts"}),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], repos=_gitlab_repos(), agent_config_snapshot=_agent_snapshot(),
+       execution_architecture="claude_supervisor_v1", observed_coding_requests=requests))
+
+    assert result == "cancelled"
+    assert len(requests) == 2
+    assert "部门应读取 deptName" in requests[1]["feedback"]
+    assert "不要使用 record.depts" in requests[1]["feedback"]
+    assert {item["repo"] for item in requests[1]["previous_candidate"]} == {"frontend", "backend"}
+    assert all("diff --git" in item["diff_patch"] for item in requests[1]["previous_candidate"])
+    coding_events = [event for event in events if event["eventType"] == "CodingAttemptStarted"]
+    assert [event["payload"]["candidateReused"] for event in coding_events] == [False, True]
+    assert [event["eventType"] for event in events].count("ModificationCompleted") == 2
+
+
 def test_workflow_blocks_when_context_fetch_keeps_failing():
     events, result = asyncio.run(_run_workflow([
         ("owner_approved", "owner-approved-wi-1"),
@@ -225,6 +299,78 @@ def test_workflow_blocks_when_release_fails():
     blocked = next(event for event in events if event["eventType"] == "WorkerBlocked")
     assert blocked["payload"]["reason"] == "release_failed"
     assert "release exploded" in blocked["payload"]["detail"]
+
+
+def test_patch_phase_retry_reuses_coding_candidate():
+    counts: dict[str, int] = {}
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+        ("retry_current_phase", "retry-patch-wi-1"),
+        ("release_approved", "release-approved-wi-1"),
+    ], repos=_local_repos(), agent_config_snapshot=_agent_snapshot(),
+       execution_architecture="claude_supervisor_v1", activity_counts=counts,
+       patch_failures=3))
+
+    assert result == "completed"
+    assert counts["fetch_context"] == counts["run_coding_attempt"] == 1
+    assert counts.get("plan_execution", 0) == 0
+    assert counts["apply_patch_to_repo"] == 5
+    blocked = next(event for event in events if event["eventType"] == "WorkerBlocked")
+    assert blocked["payload"]["failedPhase"] == "patch"
+    rework = next(event for event in events if event["eventType"] == "ReworkStarted")
+    assert rework["payload"] == {
+        "configurationRefreshed": False,
+        "retryPhase": "patch",
+        "retryScope": "phase",
+    }
+
+
+def test_validation_phase_retry_skips_patch_and_coding():
+    counts: dict[str, int] = {}
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+        ("retry_current_phase", "retry-validation-wi-1"),
+        ("release_approved", "release-approved-wi-1"),
+    ], repos=_local_repos(), agent_config_snapshot=_agent_snapshot(),
+       execution_architecture="claude_supervisor_v1", activity_counts=counts,
+       validation_activity_failures=1))
+
+    assert result == "completed"
+    assert counts["run_coding_attempt"] == 1
+    assert counts["apply_patch_to_repo"] == 2
+    assert counts["run_validation"] == 3
+    blocked = next(event for event in events if event["eventType"] == "WorkerBlocked")
+    assert blocked["payload"]["failedPhase"] == "validation"
+    reused_patch = next(event for event in events
+                        if event["eventType"] == "PatchApplied" and event["payload"].get("reused"))
+    assert reused_patch["payload"]["recoveryPhase"] == "validation"
+
+
+def test_release_phase_retry_skips_coding_patch_and_validation():
+    counts: dict[str, int] = {}
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("patch_apply_approved", "patch-apply-approved-wi-1"),
+        ("release_approved", "release-approved-wi-1"),
+        ("retry_current_phase", "retry-release-wi-1"),
+    ], repos=_local_repos(), agent_config_snapshot=_agent_snapshot(),
+       execution_architecture="claude_supervisor_v1", activity_counts=counts,
+       release_failures=2))
+
+    assert result == "completed"
+    assert counts["run_coding_attempt"] == 1
+    assert counts["apply_patch_to_repo"] == 2
+    assert counts["run_validation"] == 2
+    assert counts["run_release"] == 4
+    blocked = next(event for event in events if event["eventType"] == "WorkerBlocked")
+    assert blocked["payload"]["failedPhase"] == "release"
+    reused = [event["eventType"] for event in events if event["payload"].get("reused")]
+    assert reused == ["PatchApplied", "ValidationPassed"]
 
 
 def test_workflow_can_rework_after_context_fetch_failure():
@@ -282,7 +428,7 @@ def test_handoff_diff_keeps_32kb_and_condenses_one_byte_over_limit():
     assert len(condensed.encode()) <= HANDOFF_DIFF_LIMIT_BYTES
 
 
-def test_stage_failure_rework_resumes_failed_stage_without_replanning():
+def test_stage_failure_retry_resumes_failed_stage_without_replanning():
     requests: list[dict] = []
     counts: dict[str, int] = {}
     assignments = [
@@ -292,7 +438,7 @@ def test_stage_failure_rework_resumes_failed_stage_without_replanning():
     events, result = asyncio.run(_run_workflow([
         ("owner_approved", "owner-approved-wi-1"),
         ("start_modification", "start-modification-wi-1"),
-        ("rework", "rework-wi-1"),
+        ("retry_current_phase", "retry-current-phase-wi-1"),
         ("cancel_case", "cancel-case-wi-1"),
     ], assignments=assignments, observed_requests=requests, agent_config_snapshot=_agent_snapshot(),
        fail_role="backend", fail_role_attempts=2, activity_counts=counts))
@@ -310,6 +456,43 @@ def test_stage_failure_rework_resumes_failed_stage_without_replanning():
     assert [event["eventType"] for event in events].count("ExecutionPlanDrafted") == 1
     assert "ReworkStarted" in [event["eventType"] for event in events]
     assert "ModificationCompleted" in [event["eventType"] for event in events]
+
+
+def test_stage_failure_can_refresh_config_and_resume_without_replanning():
+    requests: list[dict] = []
+    counts: dict[str, int] = {}
+    assignments = [
+        {"role": "frontend", "scope_paths": ["web"], "step_refs": ["step-web"]},
+        {"role": "backend", "scope_paths": ["api"], "step_refs": ["step-api"]},
+    ]
+    latest = _agent_snapshot()
+    latest["model_profiles"].append({"id": "mp-latest", "provider": "anthropic", "model": "latest-model"})
+    backend = next(agent for agent in latest["agents"] if agent["name"] == "backend")
+    backend.update(engine="claude_sdk", model_profile_ref="mp-latest")
+    events, result = asyncio.run(_run_workflow([
+        ("owner_approved", "owner-approved-wi-1"),
+        ("start_modification", "start-modification-wi-1"),
+        ("rework_with_latest_config", {
+            "signal_id": "rework-latest-wi-1",
+            "agent_config_snapshot": latest,
+            "resume_failed_stage": True,
+        }),
+        ("cancel_case", "cancel-case-wi-1"),
+    ], assignments=assignments, observed_requests=requests, agent_config_snapshot=_agent_snapshot(),
+       fail_role="backend", fail_role_attempts=2, activity_counts=counts))
+
+    assert result == "cancelled"
+    assert counts["fetch_context"] == counts["plan_execution"] == 1
+    assert [request["role_id"] for request in requests].count("frontend") == 1
+    assert [request["role_id"] for request in requests].count("backend") == 3
+    assert requests[-1]["agent_config_snapshot"]["agents"][-1]["model_profile_ref"] == "mp-latest"
+    assert [event["eventType"] for event in events].count("ExecutionPlanDrafted") == 1
+    rework = next(event for event in events if event["eventType"] == "ReworkStarted")
+    assert rework["payload"]["configurationRefreshed"] is True
+    completed = next(event for event in events
+                     if event["eventType"] == "TemporalActionCompleted"
+                     and event["payload"]["action"] == "rework_with_latest_config")
+    assert "agent_config_snapshot" not in completed["payload"]
 
 
 def test_workflow_handoff_blocks_same_file_conflict():
@@ -560,7 +743,7 @@ def test_snapshot_replaces_legacy_execution_fields_in_activity_request():
 
 
 async def _run_workflow(
-    signals: list[tuple[str, str]],
+    signals: list[tuple[str, str | dict]],
     planner_failure: bool = False,
     failure_mode: str | None = None,
     fetch_failures: int = 0,
@@ -583,11 +766,21 @@ async def _run_workflow(
     merge_states: list[str] | None = None,
     publish_failure_repo: str = "",
     validation_failure_repo: str = "",
+    execution_architecture: str = "legacy_planner_v1",
+    observed_coding_requests: list[dict] | None = None,
+    coding_attempt_failures: int = 0,
+    patch_failures: int = 0,
+    validation_activity_failures: int = 0,
+    release_failures: int = 0,
 ) -> tuple[list[dict], str]:
     events: list[dict] = []
     execution_requests: list[dict] = []
     fetch_attempts = 0
     remaining_role_failures = fail_role_attempts
+    remaining_coding_failures = coding_attempt_failures
+    remaining_patch_failures = patch_failures
+    remaining_validation_activity_failures = validation_activity_failures
+    remaining_release_failures = release_failures
 
     @activity.defn(name="fetch_context")
     async def fake_fetch_context(request: dict) -> dict:
@@ -621,6 +814,47 @@ async def _run_workflow(
             risks=[],
             assignments=assignments or [],
         ).model_dump()
+
+    @activity.defn(name="run_coding_attempt")
+    async def fake_run_coding_attempt(request: dict) -> dict:
+        nonlocal remaining_coding_failures
+        if activity_counts is not None:
+            activity_counts["run_coding_attempt"] = activity_counts.get("run_coding_attempt", 0) + 1
+        if observed_coding_requests is not None:
+            observed_coding_requests.append(request)
+        if remaining_coding_failures > 0:
+            remaining_coding_failures -= 1
+            raise RuntimeError("coding supervisor down")
+        repo_items = request["repos"]
+        changes = []
+        runs = []
+        for index, repo in enumerate(repo_items):
+            repo_id = repo["repo_id"]
+            path = "web/app.ts" if repo_id == "frontend" else "api/app.py"
+            changes.append({
+                "repo": repo_id,
+                "diff_patch": (
+                    f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+                    f"@@ -1 +1 @@\n-old-{repo_id}\n+new-{repo_id}\n"
+                ),
+                "changed_paths": [path],
+                "summary": f"{repo_id} 完成",
+            })
+            runs.append({
+                "agent_id": f"agent-{index}",
+                "agent_type": f"{repo_id}-dev",
+                "repo": repo_id,
+                "status": "completed",
+            })
+        return {
+            "summary": "Supervisor 完成",
+            "repo_changes": changes,
+            "subagent_runs": runs,
+            "token_usage": {"input_tokens": 200, "output_tokens": 50},
+            "session_id": "session-team",
+            "turns": 5,
+            "execution_provider": "claude_sdk_supervisor",
+        }
 
     @activity.defn(name="run_execution")
     async def fake_run_execution(request: dict) -> dict:
@@ -670,15 +904,21 @@ async def _run_workflow(
 
     @activity.defn(name="validate_plan_targets_activity")
     async def fake_validate_plan_targets(request: dict) -> None:
+        if activity_counts is not None:
+            activity_counts["validate_plan_targets"] = activity_counts.get("validate_plan_targets", 0) + 1
         assert request["repo_path"] == repo_path
         assert request["target_files"] == ["src/login.tsx"]
 
     @activity.defn(name="apply_patch_to_repo")
     async def fake_apply_patch_to_repo(request: dict) -> dict:
+        nonlocal remaining_patch_failures
         # patch 应用活动在 workflow 测试中不碰真实仓库。
+        if activity_counts is not None:
+            activity_counts["apply_patch_to_repo"] = activity_counts.get("apply_patch_to_repo", 0) + 1
         if observed_apply_requests is not None:
             observed_apply_requests.append(request)
-        if failure_mode == "apply_patch":
+        if failure_mode == "apply_patch" or remaining_patch_failures > 0:
+            remaining_patch_failures = max(0, remaining_patch_failures - 1)
             raise RuntimeError("git apply exploded")
         if verify_combined_diff:
             gate = validate_patch_paths(request["diff_patch"], ["web", "api"], [])
@@ -689,7 +929,11 @@ async def _run_workflow(
 
     @activity.defn(name="run_release")
     async def fake_run_release(request: dict) -> dict:
-        if failure_mode == "release":
+        nonlocal remaining_release_failures
+        if activity_counts is not None:
+            activity_counts["run_release"] = activity_counts.get("run_release", 0) + 1
+        if failure_mode == "release" or remaining_release_failures > 0:
+            remaining_release_failures = max(0, remaining_release_failures - 1)
             raise RuntimeError("release exploded")
         if observed_release_requests is not None:
             observed_release_requests.append(request)
@@ -697,7 +941,7 @@ async def _run_workflow(
         assert request["work_item_id"] == "wi-1"
         if verify_combined_diff:
             assert "web/app.ts" in request["diff_patch"] and "api/app.py" in request["diff_patch"]
-        elif assignments:
+        elif assignments or repos:
             assert "diff --git" in request["diff_patch"]
         else:
             assert request["diff_patch"] == "diff --git a/src/app.py b/src/app.py\n"
@@ -710,14 +954,23 @@ async def _run_workflow(
 
     @activity.defn(name="summarize_repo")
     async def fake_summarize_repo(request: dict) -> str:
+        if activity_counts is not None:
+            activity_counts["summarize_repo"] = activity_counts.get("summarize_repo", 0) + 1
         assert request["repo_path"] == repo_path
         return "repo summary"
 
     @activity.defn(name="run_validation")
     async def fake_run_validation(request: dict) -> dict:
+        nonlocal remaining_validation_activity_failures
+        if activity_counts is not None:
+            activity_counts["run_validation"] = activity_counts.get("run_validation", 0) + 1
+        if remaining_validation_activity_failures > 0:
+            remaining_validation_activity_failures -= 1
+            raise RuntimeError("validation unavailable")
         if not request["test_commands"]:
             raise AssertionError("empty test_commands should not trigger validation")
-        assert request["repo_path"] == repo_path
+        expected_paths = {item["local_path"] for item in repos} if repos else {repo_path}
+        assert request["repo_path"] in expected_paths
         return validation_result or {"passed": True, "commands": []}
 
     @activity.defn(name="publish_merge_request")
@@ -761,6 +1014,7 @@ async def _run_workflow(
                 fake_fetch_context,
                 fake_summarize_repo,
                 fake_plan_execution,
+                fake_run_coding_attempt,
                 fake_validate_plan_targets,
                 fake_run_execution,
                 fake_apply_patch_to_repo,
@@ -775,7 +1029,8 @@ async def _run_workflow(
         ):
             handle = await env.client.start_workflow(
                 AsterismCaseWorkflow.run,
-                _case_input(test_commands, repo_path, agent_config_snapshot, repos, release_mode, validation_mode),
+                _case_input(test_commands, repo_path, agent_config_snapshot, repos, release_mode, validation_mode,
+                            execution_architecture),
                 id=f"case-{uuid4()}",
                 task_queue=TASK_QUEUE,
             )
@@ -787,7 +1042,8 @@ async def _run_workflow(
 
 def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/repo",
                 agent_config_snapshot: dict | None = None, repos: list[dict] | None = None,
-                release_mode: str = "local", validation_mode: str = "auto") -> CaseInput:
+                release_mode: str = "local", validation_mode: str = "auto",
+                execution_architecture: str = "legacy_planner_v1") -> CaseInput:
     payload = dict(
         case_id="case-1",
         work_item_id="wi-1",
@@ -807,6 +1063,7 @@ def _case_input(test_commands: list[str] | None = None, repo_path: str = "/tmp/r
         release_mode=release_mode,
         validation_mode=validation_mode,
         mr_target_branch="main",
+        execution_architecture=execution_architecture,
     )
     if agent_config_snapshot is None:
         payload.update(execution_provider="claude_sdk", claude_max_turns=25, execution_timeout_seconds=900)
@@ -846,6 +1103,19 @@ def _gitlab_repos() -> list[dict]:
         {"repo_id": "backend", "name": "API", "kind": "backend", "clone_mode": "gitlab",
          "gitlab_project": "group/api", "default_branch": "main", "allowed_paths": ["api"],
          "forbidden_paths": [], "test_commands": ["test-api"]},
+    ]
+
+
+def _local_repos() -> list[dict]:
+    """阶段恢复测试使用稳定本地路径，GitLab 临时克隆不会写入 Workflow 状态。"""
+
+    return [
+        {"repo_id": "frontend", "name": "Web", "kind": "frontend", "clone_mode": "local",
+         "local_path": "/repos/web", "allowed_paths": ["web"], "forbidden_paths": [],
+         "test_commands": ["test-web"]},
+        {"repo_id": "backend", "name": "API", "kind": "backend", "clone_mode": "local",
+         "local_path": "/repos/api", "allowed_paths": ["api"], "forbidden_paths": [],
+         "test_commands": ["test-api"]},
     ]
 
 

@@ -44,8 +44,43 @@ test('projects out-of-order multi-agent and multi-repository events into one sev
   expect(flow.stages.flatMap((stage) => stage.events).some((item) => item.eventType === 'FutureEvent')).toBe(false);
 });
 
+test('projects Claude SDK Supervisor and native subagents without a Planner node', () => {
+  const flow = buildWorkItemFlow(workItem('modification_completed', { waitingFor: 'owner' }), [
+    event(1, 'WorkItemActivated'),
+    event(2, 'CodingAttemptStarted', {
+      architecture: 'claude_supervisor_v1', supervisor: { role: 'developer', engine: 'claude_sdk' },
+      repositories: ['backend', 'frontend'],
+    }),
+    event(3, 'AgentStageCompleted', {
+      stageIndex: 1, role: 'backend-dev', repo: 'backend', engine: 'claude_sdk',
+      summary: '后端完成', changedPaths: ['src/Api.java'], agentId: 'agent-back',
+    }),
+    event(4, 'AgentStageCompleted', {
+      stageIndex: 2, role: 'frontend-dev', repo: 'frontend', engine: 'claude_sdk',
+      summary: '前端完成', changedPaths: ['src/App.tsx'], agentId: 'agent-front',
+    }),
+    event(5, 'ModificationCompleted', {
+      executionProvider: 'claude_sdk_supervisor', sessionId: 'session-team',
+      repoDiffs: [
+        { repo: 'backend', diffPatch: 'diff --git a/src/Api.java b/src/Api.java\n+x' },
+        { repo: 'frontend', diffPatch: 'diff --git a/src/App.tsx b/src/App.tsx\n+y' },
+      ],
+    }),
+  ]);
+
+  expect(flow.plan).toBeNull();
+  expect(flow.currentStageId).toBe('patch');
+  expect(flow.stages.find((stage) => stage.id === 'execution')?.agents).toEqual([
+    expect.objectContaining({ role: 'developer · Supervisor', engine: 'claude_sdk', status: 'completed' }),
+    expect.objectContaining({ role: 'backend-dev', repo: 'backend', status: 'completed' }),
+    expect.objectContaining({ role: 'frontend-dev', repo: 'frontend', status: 'completed' }),
+  ]);
+  expect(flow.repositories.map((repo) => repo.repo)).toEqual(['backend', 'frontend']);
+});
+
 test.each([
   ['planner_failed', 'execution', '执行计划生成失败'],
+  ['coding_attempt_failed', 'execution', 'Claude SDK Coding Attempt 执行失败'],
   ['patch_apply_failed', 'patch', 'Patch 应用失败'],
   ['test_failed', 'validation', '自动检查失败'],
   ['mr_create_failed', 'release', 'Git 提交或 MR 创建失败'],

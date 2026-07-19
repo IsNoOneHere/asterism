@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     default_model_api_key: str = Field(default="", validation_alias=AliasChoices("V5_MODEL_API_KEY", "V5_ANTHROPIC_API_KEY", "V5_AGENT_API_KEY"))  # gitleaks:allow 这里只包含环境变量名
     engine_max_turns: int = Field(default=50, validation_alias=AliasChoices("V5_ENGINE_MAX_TURNS", "V5_CLAUDE_MAX_TURNS"))
     engine_timeout_seconds: int = Field(default=600, validation_alias=AliasChoices("V5_ENGINE_TIMEOUT_SECONDS", "V5_EXECUTION_TIMEOUT_SECONDS"))
+    # Claude SDK 的默认 1 MiB 仅适合小仓库；团队探索结果可能通过单条协议消息返回。
+    claude_sdk_max_buffer_size: int = Field(default=16 * 1024 * 1024, validation_alias="V5_CLAUDE_SDK_MAX_BUFFER_SIZE")
     engine_effort_level: str = Field(default="", validation_alias=AliasChoices("V5_ENGINE_EFFORT_LEVEL", "V5_CLAUDE_CODE_EFFORT_LEVEL"))
     planner_provider: str = Field(default="fake")
     planner_http_endpoint: str = Field(default="http://127.0.0.1:8090/plan")

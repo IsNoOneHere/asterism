@@ -1,15 +1,72 @@
 import asyncio
+from dataclasses import dataclass
 from datetime import timedelta
+from enum import StrEnum
 
 from temporalio.common import RetryPolicy
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, ApplicationError
 
-from asterism_worker.contracts import AgentAssignment, CaseInput, ContextSnapshot, ExecutionPlan, ExecutionResult, GitlabPublishResult, HandoffContext, LifecycleStatus, MergeRequestRef, PatchApplyResult, ProjectionEvent, RepoSnapshot, ValidationResult
+from asterism_worker.contracts import AgentAssignment, AgentConfigSnapshot, CaseInput, CodingAttemptResult, ContextSnapshot, ExecutionPlan, ExecutionResult, GitlabPublishResult, HandoffContext, LifecycleStatus, MergeRequestRef, PatchApplyResult, ProjectionEvent, RepoSnapshot, ValidationResult
 from asterism_worker.workflows.state_machine import CaseState, TERMINAL_STATUSES
 
 HANDOFF_DIFF_LIMIT_BYTES = 32 * 1024
 MERGE_POLL_INTERVAL = timedelta(seconds=60)
+CLAUDE_SUPERVISOR_ARCHITECTURE = "claude_supervisor_v1"
+
+
+class ExecutionPhase(StrEnum):
+    """可独立重试的固定执行阶段。"""
+
+    planning = "planning"
+    coding = "coding"
+    patch = "patch"
+    validation = "validation"
+    release = "release"
+
+
+@dataclass(frozen=True, slots=True)
+class PhaseRecovery:
+    """阶段恢复策略；新增阶段只注册策略，不扩充分支链。"""
+
+    runner: str
+    restore_modification: bool = False
+    checkpoints: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryAction:
+    use_failed_phase: bool
+    refresh_configuration: bool = False
+
+
+PHASE_RECOVERIES = {
+    ExecutionPhase.planning: PhaseRecovery("_start_modification"),
+    ExecutionPhase.coding: PhaseRecovery("_retry_coding_phase"),
+    ExecutionPhase.patch: PhaseRecovery("_apply_patch", restore_modification=True),
+    ExecutionPhase.validation: PhaseRecovery(
+        "_run_validation", restore_modification=True, checkpoints=("patch_apply_approved",),
+    ),
+    ExecutionPhase.release: PhaseRecovery(
+        "_release", restore_modification=True,
+        checkpoints=("patch_apply_approved", "validation_passed"),
+    ),
+}
+RECOVERY_ACTIONS = {
+    "rework": RecoveryAction(use_failed_phase=False),
+    "retry_current_phase": RecoveryAction(use_failed_phase=True),
+    "rework_with_latest_config": RecoveryAction(use_failed_phase=True, refresh_configuration=True),
+}
+CONFIG_REFRESH_PHASES = frozenset({ExecutionPhase.planning, ExecutionPhase.coding})
+FEEDBACK_POLICIES = {
+    "patch_apply_rejected": ("replace", "人工审核反馈"),
+    "validation_rejected": ("replace", "人工验证反馈"),
+    **{action: ("append", "重试补充") for action in RECOVERY_ACTIONS},
+}
+LEGACY_RECOVERY_HANDLERS = {
+    "rework": "_legacy_rework_action",
+    "rework_with_latest_config": "_legacy_refresh_rework_action",
+}
 ACTION_STATUSES = {
     "owner_approved": {"waiting_owner_approval"},
     "owner_rejected": {"waiting_owner_approval"},
@@ -20,6 +77,8 @@ ACTION_STATUSES = {
     "validation_rejected": {"patch_applied"},
     "release_approved": {"validation_passed"},
     "rework": {"worker_blocked", "patch_rejected", "validation_failed", "waiting_merge"},
+    "retry_current_phase": {"worker_blocked"},
+    "rework_with_latest_config": {"worker_blocked"},
     "check_merge_status": {"waiting_merge"},
     "cancel_case": {"waiting_owner_approval", "activated", "worker_blocked", "modification_completed",
                     "patch_rejected", "validation_failed", "validation_passed", "waiting_merge"},
@@ -34,6 +93,7 @@ class AsterismCaseWorkflow:
         self.pending_actions: list[tuple[str, str, dict]] = []
         self.processed_signal_ids: set[str] = set()
         self.signal_dedup_enabled = False
+        self.phase_recovery_enabled = False
         self.execution_plan: ExecutionPlan | None = None
         self.context_snapshot: ContextSnapshot | None = None
         self.completed_stage_results: list[ExecutionResult] = []
@@ -48,6 +108,7 @@ class AsterismCaseWorkflow:
         self.expected_remote_commits: dict[str, str] = {}
         self.validation_commands: list[dict] = []
         self.resume_phase = ""
+        self.failed_phase = ""
         self.rework_feedback = ""
 
     @workflow.run
@@ -60,6 +121,8 @@ class AsterismCaseWorkflow:
         self.gitlab_release_enabled = workflow.patched("gitlab-release-v1")
         # 新 signal 带请求上下文并在 workflow 内去重；旧 history 的字符串 signal 仍可 replay。
         self.signal_dedup_enabled = workflow.patched("manual-action-context-v1")
+        # 新 Case 使用通用阶段恢复；旧 history 保持原重做命令序列。
+        self.phase_recovery_enabled = workflow.patched("phase-recovery-v1")
         while self.state.status not in TERMINAL_STATUSES:
             if self._is_gitlab() and self.state.status.value == "waiting_merge":
                 try:
@@ -115,6 +178,14 @@ class AsterismCaseWorkflow:
         self._enqueue("rework", signal)
 
     @workflow.signal
+    async def retry_current_phase(self, signal: str | dict) -> None:
+        self._enqueue("retry_current_phase", signal)
+
+    @workflow.signal
+    async def rework_with_latest_config(self, signal: str | dict) -> None:
+        self._enqueue("rework_with_latest_config", signal)
+
+    @workflow.signal
     async def release_approved(self, signal: str | dict) -> None:
         self._enqueue("release_approved", signal)
 
@@ -140,8 +211,8 @@ class AsterismCaseWorkflow:
             return False
         feedback = "\n".join(str(context.get(key, "")).strip() for key in ("note", "evidence")
                              if str(context.get(key, "")).strip())
-        if feedback and action in {"patch_apply_rejected", "validation_rejected", "rework"}:
-            self.rework_feedback = feedback
+        if feedback and action in FEEDBACK_POLICIES:
+            self._capture_feedback(action, feedback)
         if action == "owner_approved":
             await self._emit(self.state.owner_approved(), signal_id, {})
             return True
@@ -154,9 +225,9 @@ class AsterismCaseWorkflow:
         if action == "release_approved":
             await self._release(signal_id)
             return True
-        if action == "rework":
-            await self._rework(signal_id)
-            return True
+        recovery = RECOVERY_ACTIONS.get(action)
+        if recovery is not None:
+            return await self._handle_recovery_action(action, recovery, signal_id, context)
         if action == "check_merge_status":
             await self._poll_merge_requests(signal_id)
             return True
@@ -175,6 +246,142 @@ class AsterismCaseWorkflow:
         await self._emit(events[action](), signal_id, context)
         return True
 
+    def _capture_feedback(self, action: str, feedback: str) -> None:
+        """审核意见建立修订基线，后续重试备注只追加上下文。"""
+
+        if not workflow.patched("feedback-accumulation-v1"):
+            self.rework_feedback = feedback
+            return
+        mode, label = FEEDBACK_POLICIES[action]
+        previous = self.rework_feedback if mode == "append" else ""
+        self.rework_feedback = "\n".join(item for item in (previous, f"{label}：{feedback}") if item)
+
+    async def _handle_recovery_action(self, action: str, recovery: RecoveryAction,
+                                      signal_id: str, context: dict) -> bool:
+        if not self.phase_recovery_enabled:
+            handler_name = LEGACY_RECOVERY_HANDLERS.get(action)
+            if handler_name is None:
+                workflow.logger.warning("旧 Workflow 不支持阶段重试", extra={"action": action})
+                return False
+            return await getattr(self, handler_name)(signal_id, context)
+
+        phase = self._failed_execution_phase() if recovery.use_failed_phase else ExecutionPhase.planning
+        if phase is None:
+            workflow.logger.warning("缺少可恢复阶段", extra={"action": action})
+            return False
+        if recovery.refresh_configuration and phase not in CONFIG_REFRESH_PHASES:
+            workflow.logger.warning("当前阶段不消费 Agent 配置", extra={"phase": phase.value})
+            return False
+
+        configuration_refreshed = False
+        if recovery.refresh_configuration:
+            snapshot = self._agent_config_snapshot(context)
+            if snapshot is None:
+                return False
+            # 配置生成新执行版本，但计划、上下文和已完成 Agent 结果保持不变。
+            self.case_input = self._case_input().model_copy(update={"agent_config_snapshot": snapshot})
+            configuration_refreshed = True
+        context.pop("resume_failed_stage", None)
+
+        previous_status = self.state.status.value
+        event = self.state.rework()
+        await self._emit(event, signal_id, {
+            "configurationRefreshed": configuration_refreshed,
+            "retryPhase": phase.value,
+            "retryScope": "phase" if recovery.use_failed_phase else "full",
+        })
+        if event is None:
+            return False
+
+        preparer = {"waiting_merge": self._prepare_merge_rework}.get(previous_status)
+        if preparer is not None:
+            preparer()
+        self.failed_phase = ""
+        if not recovery.use_failed_phase:
+            await self._start_modification(signal_id)
+            return True
+        return await self._retry_phase(signal_id, phase)
+
+    async def _retry_phase(self, signal_id: str, phase: ExecutionPhase) -> bool:
+        recovery = PHASE_RECOVERIES[phase]
+        workflow.logger.info("重试失败阶段", extra={"phase": phase.value, "runner": recovery.runner})
+        if recovery.restore_modification and not await self._restore_modification_checkpoint(signal_id, phase):
+            return False
+        for checkpoint in recovery.checkpoints:
+            event_type = getattr(self.state, checkpoint)()
+            if event_type is None:
+                return False
+            await self._emit(event_type, signal_id, {
+                "reused": True,
+                "recoveryPhase": phase.value,
+            }, suffix=f"checkpoint:{checkpoint}")
+        await getattr(self, recovery.runner)(signal_id)
+        return True
+
+    async def _restore_modification_checkpoint(self, signal_id: str, phase: ExecutionPhase) -> bool:
+        if self.context_snapshot is None or not self.state.diff_patch.strip():
+            await self._block_worker(
+                signal_id, "recovery_artifact_missing", RuntimeError("缺少候选代码或上下文快照"),
+            )
+            return False
+        result = ExecutionResult(
+            summary=f"复用候选代码并恢复 {phase.value} 阶段",
+            diff_patch=self.state.diff_patch,
+            execution_provider="workflow-checkpoint",
+        )
+        await self._finish_modification(signal_id, result, self.context_snapshot)
+        return self.state.status == LifecycleStatus.modification_completed
+
+    async def _retry_coding_phase(self, signal_id: str) -> None:
+        if self._uses_coding_supervisor():
+            await self._start_supervised_modification(signal_id, reuse_context=True)
+            return
+        if self._can_resume():
+            workflow.logger.info("从失败 Agent stage 续跑", extra={"stage_index": self.failed_stage_index})
+            result = await self._run_execution_plan(
+                signal_id, self.execution_plan, self.context_snapshot, self.failed_stage_index,
+            )
+            if result is not None:
+                await self._finish_modification(signal_id, result, self.context_snapshot)
+            return
+        await self._start_legacy_modification(signal_id)
+
+    def _failed_execution_phase(self) -> ExecutionPhase | None:
+        try:
+            return ExecutionPhase(self.failed_phase)
+        except ValueError:
+            return None
+
+    def _agent_config_snapshot(self, context: dict) -> AgentConfigSnapshot | None:
+        raw_snapshot = context.pop("agent_config_snapshot", None)
+        try:
+            return AgentConfigSnapshot.model_validate(raw_snapshot)
+        except Exception as error:
+            workflow.logger.warning("最新 Agent 配置快照无效", extra={"type": type(error).__name__})
+            return None
+
+    def _prepare_merge_rework(self) -> None:
+        self.expected_remote_commits = {item["repo"]: item["commitHash"] for item in self.gitlab_releases}
+        self.gitlab_releases = []
+        self.merge_requests = []
+        self.merged_repos = set()
+
+    async def _legacy_rework_action(self, signal_id: str, _context: dict) -> bool:
+        await self._legacy_rework(signal_id)
+        return True
+
+    async def _legacy_refresh_rework_action(self, signal_id: str, context: dict) -> bool:
+        snapshot = self._agent_config_snapshot(context)
+        resume_failed_stage = bool(context.pop("resume_failed_stage", False))
+        if snapshot is None or (not self._uses_coding_supervisor() and not self._can_resume()):
+            workflow.logger.warning("当前阻塞不支持使用最新配置重做")
+            return False
+        if self._uses_coding_supervisor() or resume_failed_stage:
+            await self._legacy_rework(signal_id, snapshot)
+        else:
+            await self._rework_with_latest_config(signal_id, snapshot)
+        return True
+
     def _enqueue(self, action: str, signal: str | dict) -> None:
         context = dict(signal) if isinstance(signal, dict) else {}
         signal_id = str(context.pop("signal_id", "") if context else signal)
@@ -188,6 +395,12 @@ class AsterismCaseWorkflow:
         self.pending_actions.append((action, signal_id, context))
 
     async def _start_modification(self, signal_id: str) -> None:
+        if self._uses_coding_supervisor():
+            await self._start_supervised_modification(signal_id)
+            return
+        await self._start_legacy_modification(signal_id)
+
+    async def _start_legacy_modification(self, signal_id: str) -> None:
         case_input = self._case_input()
         if self.state.status.value != "activated":
             workflow.logger.warning("非法 start_modification，已忽略", extra={"status": self.state.status.value})
@@ -203,7 +416,7 @@ class AsterismCaseWorkflow:
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
         except (ActivityError, ApplicationError) as error:
-            await self._block_worker(signal_id, "context_fetch_failed", error)
+            await self._block_worker(signal_id, "context_fetch_failed", error, phase=ExecutionPhase.planning)
             return
         snapshot = ContextSnapshot.model_validate(result_payload)
         invalid_repo = ""
@@ -262,7 +475,7 @@ class AsterismCaseWorkflow:
                     retry_policy=RetryPolicy(maximum_attempts=1),
                 )
         except Exception as error:
-            await self._block_worker(signal_id, "planner_failed", error)
+            await self._block_worker(signal_id, "planner_failed", error, phase=ExecutionPhase.planning)
             return
         await self._emit("ExecutionPlanDrafted", signal_id, {
             "plan": self._plan_payload(plan),
@@ -270,10 +483,12 @@ class AsterismCaseWorkflow:
         })
         unknown_role = self._unknown_role(plan)
         if unknown_role:
-            await self._block_worker(signal_id, "unknown_role", RuntimeError(unknown_role))
+            await self._block_worker(signal_id, "unknown_role", RuntimeError(unknown_role),
+                                     phase=ExecutionPhase.planning)
             return
         if invalid_repo:
-            await self._block_worker(signal_id, "unknown_repo", RuntimeError(invalid_repo))
+            await self._block_worker(signal_id, "unknown_repo", RuntimeError(invalid_repo),
+                                     phase=ExecutionPhase.planning)
             return
         self.execution_plan = plan
         self.context_snapshot = snapshot
@@ -289,9 +504,124 @@ class AsterismCaseWorkflow:
             return
         await self._finish_modification(signal_id, result, snapshot)
 
+    async def _start_supervised_modification(self, signal_id: str, reuse_context: bool = False) -> None:
+        """新 Case 只启动一个 Claude SDK Coding Attempt，仓库分工留在 SDK 会话内部。"""
+
+        case_input = self._case_input()
+        if self.state.status.value != "activated":
+            workflow.logger.warning("非法 start_modification，已忽略", extra={"status": self.state.status.value})
+            return
+        snapshot = self.context_snapshot if reuse_context else None
+        if snapshot is None:
+            try:
+                result_payload = await workflow.execute_activity(
+                    "fetch_context",
+                    {"system_id": case_input.system_id, "work_item_id": case_input.work_item_id},
+                    start_to_close_timeout=timedelta(seconds=20),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+            except (ActivityError, ApplicationError) as error:
+                await self._block_worker(signal_id, "context_fetch_failed", error,
+                                         phase=ExecutionPhase.planning)
+                return
+            snapshot = ContextSnapshot.model_validate(result_payload)
+        self.context_snapshot = snapshot
+        previous_candidate = self._previous_candidate()
+        repos = case_input.effective_repos()
+        await self._emit("CodingAttemptStarted", signal_id, {
+            "architecture": CLAUDE_SUPERVISOR_ARCHITECTURE,
+            "supervisor": {"role": "developer", "engine": "claude_sdk"},
+            "repositories": [repo.repo_id for repo in repos],
+            "contextManifestId": snapshot.manifest_id,
+            "candidateReused": bool(previous_candidate),
+        })
+        request = {
+            "case_id": case_input.case_id,
+            "work_item_id": case_input.work_item_id,
+            "system_id": case_input.system_id,
+            "repos": [repo.model_dump() for repo in repos],
+            "goal": case_input.prd.goal,
+            "acceptance_criteria": case_input.prd.acceptance_criteria,
+            "feedback": self.rework_feedback,
+            "memories": snapshot.approved_memories,
+            "context_manifest_id": snapshot.manifest_id,
+            "previous_candidate": previous_candidate,
+        }
+        if case_input.agent_config_snapshot is not None:
+            request["agent_config_snapshot"] = case_input.agent_config_snapshot.model_dump()
+        try:
+            payload = await workflow.execute_activity(
+                "run_coding_attempt",
+                request,
+                start_to_close_timeout=timedelta(seconds=self._coding_timeout()),
+                heartbeat_timeout=timedelta(minutes=2),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+            attempt = CodingAttemptResult.model_validate(payload)
+        except (ActivityError, ApplicationError) as error:
+            await self._block_worker(signal_id, "coding_attempt_failed", error, {
+                "failed_stage": {"index": 0, "role": "developer"},
+                "executionArchitecture": CLAUDE_SUPERVISOR_ARCHITECTURE,
+            }, phase=ExecutionPhase.coding)
+            return
+        changes = [change for change in attempt.repo_changes if change.diff_patch.strip()]
+        if not changes:
+            await self._block_worker(signal_id, "coding_attempt_failed", RuntimeError("Coding Attempt 未生成代码变更"), {
+                "failed_stage": {"index": 0, "role": "developer"},
+                "executionArchitecture": CLAUDE_SUPERVISOR_ARCHITECTURE,
+            }, phase=ExecutionPhase.coding)
+            return
+
+        self.execution_plan = None
+        self.context_snapshot = snapshot
+        self.completed_stage_results = [
+            ExecutionResult(
+                summary=change.summary or attempt.summary,
+                diff_patch=change.diff_patch,
+                execution_provider=attempt.execution_provider,
+                engine="claude_sdk",
+                role_id=next((run.agent_type for run in attempt.subagent_runs if run.repo == change.repo), ""),
+                repo=change.repo,
+                changed_paths=change.changed_paths,
+                token_usage={},
+            )
+            for change in changes
+        ]
+        self.failed_stage_index = None
+        self.local_releases = []
+        self.gitlab_releases = []
+        self.merge_requests = []
+        self.validation_commands = []
+        self.resume_phase = ""
+        changed_by_repo = {change.repo: change.changed_paths for change in changes}
+        for index, run in enumerate(attempt.subagent_runs, start=1):
+            await self._emit("AgentStageCompleted", signal_id, {
+                "stageIndex": index,
+                "role": run.agent_type,
+                "repo": run.repo,
+                "engine": "claude_sdk",
+                "summary": f"{run.agent_type} {run.status}",
+                "changedPaths": changed_by_repo.get(run.repo, []),
+                "tokenUsage": {},
+                "agentId": run.agent_id,
+            }, suffix=f"subagent:{index}:{run.agent_id}")
+        combined = ExecutionResult(
+            summary=attempt.summary,
+            diff_patch="\n".join(change.diff_patch.rstrip() for change in changes) + "\n",
+            execution_provider=attempt.execution_provider,
+            engine="claude_sdk",
+            turns=attempt.turns,
+            token_usage=attempt.token_usage,
+            changed_paths=sorted({path for change in changes for path in change.changed_paths}),
+            session_id=attempt.session_id,
+            subagent_runs=attempt.subagent_runs,
+        )
+        await self._finish_modification(signal_id, combined, snapshot)
+
     async def _finish_modification(self, signal_id: str, result: ExecutionResult,
                                    snapshot: ContextSnapshot) -> None:
         self.failed_stage_index = None
+        self.failed_phase = ""
         case_input = self._case_input()
         payload = {
             "summary": result.summary,
@@ -302,6 +632,10 @@ class AsterismCaseWorkflow:
             "turns": result.turns,
             "tokenUsage": result.token_usage,
         }
+        if result.session_id:
+            payload["sessionId"] = result.session_id
+        if result.subagent_runs:
+            payload["subagentRuns"] = [run.model_dump() for run in result.subagent_runs]
         if self.multi_repo_enabled:
             payload["repoDiffs"] = [
                 {"repo": repo.repo_id, "diffPatch": diff}
@@ -422,19 +756,27 @@ class AsterismCaseWorkflow:
             request["claude_max_turns"] = legacy.get("claude_max_turns")
         return request
 
-    async def _rework(self, signal_id: str) -> None:
+    async def _legacy_rework(self, signal_id: str, snapshot: AgentConfigSnapshot | None = None) -> None:
+        """仅用于已启动 Workflow 的确定性回放，新 Case 使用阶段注册表。"""
+
         waiting_merge = self.state.status.value == "waiting_merge"
         resume_phase = self.resume_phase
         event = self.state.rework()
-        await self._emit(event, signal_id, {})
+        await self._emit(event, signal_id, {"configurationRefreshed": True} if snapshot else {})
         if event is None:
+            return
+        if snapshot is not None:
+            # 只替换有效配置，保留原计划、上下文和已完成阶段。
+            self.case_input = self._case_input().model_copy(update={"agent_config_snapshot": snapshot})
+        if self._uses_coding_supervisor():
+            if waiting_merge:
+                self._prepare_merge_rework()
+            # Supervisor 重做以完整 Coding Attempt 为边界，保留上一版候选和人工反馈。
+            await self._start_modification(signal_id)
             return
         if waiting_merge:
             # MR 阶段重做直接生成新 diff，仍需人工审核后才更新远端分支。
-            self.expected_remote_commits = {item["repo"]: item["commitHash"] for item in self.gitlab_releases}
-            self.gitlab_releases = []
-            self.merge_requests = []
-            self.merged_repos = set()
+            self._prepare_merge_rework()
             await self._start_modification(signal_id)
             return
         if resume_phase and self.context_snapshot is not None:
@@ -469,11 +811,24 @@ class AsterismCaseWorkflow:
         if result is not None:
             await self._finish_modification(signal_id, result, self.context_snapshot)
 
+    async def _rework_with_latest_config(self, signal_id: str, snapshot: AgentConfigSnapshot) -> None:
+        event = self.state.rework()
+        await self._emit(event, signal_id, {"configurationRefreshed": True})
+        if event is None:
+            return
+        # 仅供旧 Temporal history 回放；新请求统一复用 _rework 断点续跑。
+        self.case_input = self._case_input().model_copy(update={"agent_config_snapshot": snapshot})
+        self.execution_plan = None
+        self.context_snapshot = None
+        self.completed_stage_results = []
+        self.failed_stage_index = None
+        await self._start_modification(signal_id)
+
     async def _block_execution_stage(self, signal_id: str, reason: str, error: BaseException,
                                      index: int, assignments: list[AgentAssignment],
                                      results: list[ExecutionResult]) -> None:
         if not self._resumable(self.execution_plan):
-            await self._block_worker(signal_id, reason, error)
+            await self._block_worker(signal_id, reason, error, phase=ExecutionPhase.coding)
             return
         self.completed_stage_results = list(results)
         self.failed_stage_index = index
@@ -494,7 +849,7 @@ class AsterismCaseWorkflow:
                 **({"repo": self._repo_for_assignment(assignments[index]).repo_id}
                    if self.multi_repo_enabled else {}),
             },
-        })
+        }, phase=ExecutionPhase.coding)
 
     def _can_resume(self) -> bool:
         return (
@@ -568,6 +923,38 @@ class AsterismCaseWorkflow:
                 assignment.pop("repo", None)
         return payload
 
+    def _previous_candidate(self) -> list[dict]:
+        if self.completed_stage_results:
+            return [
+                {
+                    "repo": result.repo or self._case_input().effective_repos()[0].repo_id,
+                    "diff_patch": result.diff_patch,
+                    "changed_paths": result.changed_paths or self._diff_paths(result.diff_patch),
+                    "summary": result.summary,
+                }
+                for result in self.completed_stage_results
+                if result.diff_patch.strip()
+            ]
+        if self.state.diff_patch.strip():
+            repo = self._case_input().effective_repos()[0]
+            return [{
+                "repo": repo.repo_id,
+                "diff_patch": self.state.diff_patch,
+                "changed_paths": self._diff_paths(self.state.diff_patch),
+                "summary": "上一版候选",
+            }]
+        return []
+
+    def _uses_coding_supervisor(self) -> bool:
+        return self._case_input().execution_architecture == CLAUDE_SUPERVISOR_ARCHITECTURE
+
+    def _coding_timeout(self) -> int:
+        snapshot = self._case_input().agent_config_snapshot
+        if snapshot is None:
+            return 3600
+        developer = next((agent for agent in snapshot.agents if agent.name == "developer"), None)
+        return (developer.timeout_seconds if developer and developer.timeout_seconds else 3600) + 30
+
     def _repo_diffs(self) -> list[tuple[RepoSnapshot, str]]:
         repos = self._case_input().effective_repos()
         if not self.multi_repo_enabled or not self.completed_stage_results:
@@ -618,7 +1005,8 @@ class AsterismCaseWorkflow:
                 failed = await self._revert_changes(applied, signal_id)
                 await self._block_worker(signal_id, "patch_revert_failed" if failed else "patch_apply_failed",
                                          RuntimeError(failed) if failed else error,
-                                         {"repo": repo.repo_id} if self.multi_repo_enabled else None)
+                                         {"repo": repo.repo_id} if self.multi_repo_enabled else None,
+                                         phase=None if failed else ExecutionPhase.patch)
                 return
             result = PatchApplyResult.model_validate(result_payload)
             if result.blocked:
@@ -635,6 +1023,7 @@ class AsterismCaseWorkflow:
             applied.append((repo, diff_patch))
         await self._emit(self.state.patch_apply_approved(), signal_id,
                          {"repositories": [repo.repo_id for repo, _ in changes]} if self.multi_repo_enabled else {})
+        self.failed_phase = ""
         if case_input.validation_mode == "auto" and any(repo.test_commands for repo, _ in changes):
             await self._run_validation(signal_id)
         elif case_input.validation_mode != "manual":
@@ -673,7 +1062,8 @@ class AsterismCaseWorkflow:
                 )
             except (ActivityError, ApplicationError) as error:
                 self.resume_phase = "gitlab_publish"
-                await self._block_worker(signal_id, "mr_create_failed", error, {"repo": repo.repo_id})
+                await self._block_worker(signal_id, "mr_create_failed", error, {"repo": repo.repo_id},
+                                         phase=ExecutionPhase.patch)
                 return
             result = GitlabPublishResult.model_validate(payload)
             if not result.validation.passed:
@@ -688,7 +1078,7 @@ class AsterismCaseWorkflow:
             if result.merge_request is None:
                 self.resume_phase = "gitlab_publish"
                 await self._block_worker(signal_id, "mr_create_failed", RuntimeError("MR response missing"),
-                                         {"repo": repo.repo_id})
+                                         {"repo": repo.repo_id}, phase=ExecutionPhase.patch)
                 return
             self.validation_commands.extend(
                 {**command.model_dump(), "repo": repo.repo_id} for command in result.validation.commands
@@ -804,7 +1194,9 @@ class AsterismCaseWorkflow:
                 await self._activate_gitlab_mrs(signal_id, ready=case_input.validation_mode == "manual")
             except (ActivityError, ApplicationError) as error:
                 self.resume_phase = "gitlab_ready"
-                await self._block_worker(signal_id, "mr_ready_failed", error)
+                await self._block_worker(signal_id, "mr_ready_failed", error, phase=ExecutionPhase.release)
+            else:
+                self.failed_phase = ""
             return
         self.local_releases = [item for item in self.local_releases if not item.get("pushFailed")]
         prepared_repos = {item["repo"] for item in self.local_releases}
@@ -826,7 +1218,8 @@ class AsterismCaseWorkflow:
             except (ActivityError, ApplicationError) as error:
                 self.resume_phase = "local_release"
                 await self._block_worker(signal_id, "release_failed", error,
-                                         {"repo": repo.repo_id} if self.multi_repo_enabled else None)
+                                         {"repo": repo.repo_id} if self.multi_repo_enabled else None,
+                                         phase=ExecutionPhase.release)
                 return
             release = {
                 "repo": repo.repo_id,
@@ -841,7 +1234,8 @@ class AsterismCaseWorkflow:
             if release["pushFailed"]:
                 self.resume_phase = "local_release"
                 await self._block_worker(signal_id, "push_failed", RuntimeError(release["pushFailed"]),
-                                         {"repo": repo.repo_id} if self.multi_repo_enabled else None)
+                                         {"repo": repo.repo_id} if self.multi_repo_enabled else None,
+                                         phase=ExecutionPhase.release)
                 return
         releases = self.local_releases
         self.resume_phase = ""
@@ -855,6 +1249,7 @@ class AsterismCaseWorkflow:
         }
         if self.multi_repo_enabled:
             payload["repositories"] = releases
+        self.failed_phase = ""
         await self._emit(self.state.release_approved(), signal_id, payload)
 
     async def _revert_if_needed(self, signal_id: str) -> str:
@@ -867,18 +1262,28 @@ class AsterismCaseWorkflow:
         for repo, _ in self._repo_diffs():
             if not repo.test_commands:
                 continue
-            result_payload = await workflow.execute_activity(
-                "run_validation",
-                {"repo_path": repo.local_path, "test_commands": repo.test_commands},
-                start_to_close_timeout=timedelta(minutes=10),
-                retry_policy=RetryPolicy(maximum_attempts=1),
-            )
+            try:
+                result_payload = await workflow.execute_activity(
+                    "run_validation",
+                    {"repo_path": repo.local_path, "test_commands": repo.test_commands},
+                    start_to_close_timeout=timedelta(minutes=10),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                )
+            except (ActivityError, ApplicationError) as error:
+                self.validation_commands = commands
+                await self._block_worker(
+                    signal_id, "validation_activity_failed", error,
+                    {"repo": repo.repo_id} if self.multi_repo_enabled else None,
+                    phase=ExecutionPhase.validation,
+                )
+                return
             result = ValidationResult.model_validate(result_payload)
             commands.extend([
                 {**command.model_dump(), **({"repo": repo.repo_id} if self.multi_repo_enabled else {})}
                 for command in result.commands
             ])
             if not result.passed:
+                self.failed_phase = ""
                 self.validation_commands = commands
                 failed = await self._revert_if_needed(signal_id)
                 if failed:
@@ -893,6 +1298,7 @@ class AsterismCaseWorkflow:
                 })
                 return
         self.validation_commands = commands
+        self.failed_phase = ""
         await self._emit(self.state.validation_passed(), signal_id, {
             "commands": commands,
             "failedCommand": "",
@@ -945,10 +1351,14 @@ class AsterismCaseWorkflow:
         )
 
     async def _block_worker(self, signal_id: str, reason: str, error: BaseException,
-                            extra: dict | None = None) -> None:
+                            extra: dict | None = None, phase: ExecutionPhase | None = None) -> None:
+        self.failed_phase = phase.value if phase is not None else ""
+        phase_payload = ({"failedPhase": self.failed_phase}
+                         if self.phase_recovery_enabled and self.failed_phase else {})
         await self._emit(self.state.worker_blocked_on(reason), signal_id, {
             "reason": reason,
             "detail": self._error_detail(error),
+            **phase_payload,
             **(extra or {}),
         })
 

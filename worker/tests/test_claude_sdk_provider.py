@@ -70,12 +70,14 @@ def test_claude_sdk_collects_diff_and_writes_transcript(tmp_path, monkeypatch):
         assert options.allowed_tools == CLAUDE_TOOLS
         assert options.disallowed_tools == CLAUDE_DISALLOWED_TOOLS
         assert options.permission_mode == "bypassPermissions"
+        assert options.max_buffer_size == 16 * 1024 * 1024
         assert options.user is None
         assert options.setting_sources == ["project"]
         assert options.env["ANTHROPIC_API_KEY"] == "test-key"
         assert "ANTHROPIC_AUTH_TOKEN" not in options.env
         assert "ANTHROPIC_BASE_URL" not in options.env
         assert "更新 README" in prompt
+        assert "Planner 建议关注路径（仅定位提示，不是权限边界）" in prompt
         assert '"interface_notes": "新增登录参数。"' in prompt
         assert "保留现有入口" in (repo / "CLAUDE.md").read_text()
         assert not (repo / ".claude").exists()

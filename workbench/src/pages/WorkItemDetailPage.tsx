@@ -331,7 +331,7 @@ function StageDetail({ stage, flow, workItem, actions, pending, pendingAction, o
 }
 
 function ExecutionDetail({ plan, agents }: { plan: PlanView | null; agents: AgentStageView[] }) {
-  if (!plan && agents.length === 0) return <div className="empty stage-empty">等待生成执行计划。</div>;
+  if (!plan && agents.length === 0) return <div className="empty stage-empty">等待 Coding Supervisor 启动。</div>;
   return (
     <div className="execution-detail">
       {plan && <div className="plan-view">
@@ -467,7 +467,9 @@ function stageAction(code: string, currentStageId: FlowStageId, workItem: WorkIt
     owner_rejected: { label: '拒绝', stageId: 'approval', signalName: code, danger: true },
     cancel_case: { label: '取消', stageId: currentStageId, signalName: code, danger: true },
     start_modification: { label: '开始执行', stageId: 'execution', signalName: code },
-    rework: { label: '重新执行', stageId: currentStageId, signalName: code },
+    retry_current_phase: { label: '重试失败阶段', stageId: currentStageId, signalName: code },
+    rework: { label: '完整重做', stageId: currentStageId, signalName: code },
+    rework_with_latest_config: { label: '刷新配置并重试失败阶段', stageId: currentStageId, signalName: code },
     patch_apply_approved: { label: workItem.releaseMode === 'gitlab' ? (workItem.validationMode === 'manual' ? '创建候选 MR' : '发布 MR') : '应用 Patch', stageId: 'patch', signalName: code },
     patch_apply_rejected: { label: '打回重做', stageId: 'patch', signalName: code },
     validation_passed: { label: workItem.validationMode === 'manual' ? '人工验证通过' : '验证通过', stageId: 'validation', signalName: code },
@@ -480,13 +482,14 @@ function stageAction(code: string, currentStageId: FlowStageId, workItem: WorkIt
 
 function actionContextKind(code: string): 'none' | 'note' | 'evidence' {
   if (['validation_passed', 'validation_rejected'].includes(code)) return 'evidence';
-  if (['owner_rejected', 'cancel_case', 'rework', 'patch_apply_rejected'].includes(code)) return 'note';
+  if (['owner_rejected', 'cancel_case', 'rework', 'rework_with_latest_config', 'patch_apply_rejected'].includes(code)) return 'note';
   return 'none';
 }
 
 function actionLabel(code: string) {
   return ({ owner_approved: '批准执行', owner_rejected: '拒绝', cancel_case: '取消', start_modification: '开始执行',
-    rework: '重新执行', patch_apply_approved: '代码确认', patch_apply_rejected: '打回重做',
+    retry_current_phase: '重试失败阶段', rework: '完整重做', rework_with_latest_config: '刷新配置并重试失败阶段',
+    patch_apply_approved: '代码确认', patch_apply_rejected: '打回重做',
     validation_passed: '验证通过', validation_rejected: '验证不通过', release_approved: '发布',
     check_merge_status: '检查合并状态' } as Record<string, string>)[code] || code;
 }
@@ -495,7 +498,10 @@ function confirmText(action: StageAction) {
   return ({
     owner_approved: '批准后工作项将进入可执行状态，是否继续？', owner_rejected: '拒绝后工作项将结束，是否继续？',
     cancel_case: '取消后工作项将结束，是否继续？', patch_apply_approved: '该操作会修改真实仓库，是否继续？',
-    start_modification: '确认后 Agent 将开始修改真实仓库，是否继续？', rework: '确认后将重新执行当前工作项，是否继续？',
+    start_modification: '确认后 Agent 将开始修改真实仓库，是否继续？',
+    retry_current_phase: '将复用已完成成果，只重试失败阶段，是否继续？',
+    rework: '将放弃当前执行断点并完整重做，是否继续？',
+    rework_with_latest_config: '将刷新 Agent 与模型配置，保留已有计划并重试失败阶段，是否继续？',
     patch_apply_rejected: '确认后将退回修改阶段重新处理，是否继续？', validation_passed: '确认验证已通过并进入下一阶段，是否继续？',
     validation_rejected: '确认后将退回修改阶段重新处理，是否继续？', release_approved: '该操作会创建发布分支和提交，是否继续？',
     check_merge_status: '后端将实时核验所有 GitLab MR，只有确实合并后才会完成工作项，是否继续？',
@@ -506,7 +512,11 @@ function stageSummary(stage: FlowStage, workItem: WorkItem, flow: WorkItemFlow) 
   if (stage.failureReason) return stage.failureReason;
   if (stage.id === 'created') return `${workItem.createdBy || '系统'} 创建了“${workItem.title}”。`;
   if (stage.id === 'approval') return stage.status === 'waiting' ? '等待系统负责人确认是否进入执行。' : '负责人审批结果已记录。';
-  if (stage.id === 'execution') return flow.plan ? `${flow.plan.steps.length} 个步骤，${flow.plan.assignments.length || 1} 个执行角色。` : '等待 Planner 生成执行计划。';
+  if (stage.id === 'execution') {
+    if (flow.plan) return `${flow.plan.steps.length} 个步骤，${flow.plan.assignments.length || 1} 个执行角色。`;
+    if (stage.agents?.length) return `Claude SDK Supervisor 正在调度 ${Math.max(0, stage.agents.length - 1)} 个仓库子 Agent。`;
+    return '等待 Coding Supervisor 启动。';
+  }
   if (stage.id === 'patch') return flow.modification ? flow.modification.summary || '代码修改已生成，等待确认。' : '等待 Agent 生成代码修改。';
   if (stage.id === 'validation') return stage.status === 'skipped' ? '本次没有自动检查命令。' : flow.checks.length ? `${flow.checks.filter((check) => check.passed).length} / ${flow.checks.length} 项自动检查通过。` : '等待自动检查或人工验证。';
   if (stage.id === 'release') return flow.repositories.length ? `${flow.repositories.filter((repo) => ['merged', 'released'].includes(repo.status)).length} / ${flow.repositories.length} 个仓库已完成。` : '等待创建提交或合并请求。';
@@ -516,7 +526,7 @@ function stageSummary(stage: FlowStage, workItem: WorkItem, flow: WorkItemFlow) 
 function stageParticipants(stage: FlowStage, workItem: WorkItem) {
   if (stage.id === 'created') return workItem.createdBy || '系统';
   if (stage.id === 'approval' || stage.id === 'patch') return '系统负责人';
-  if (stage.id === 'execution') return stage.agents?.map((agent) => agent.role).filter(Boolean).join('、') || 'Planner / Agent';
+  if (stage.id === 'execution') return stage.agents?.map((agent) => agent.role).filter(Boolean).join('、') || 'Coding Supervisor / Agent';
   if (stage.id === 'validation') return 'Agent / 验证人员';
   if (stage.id === 'release') return 'GitLab / 发布流程';
   return '系统';

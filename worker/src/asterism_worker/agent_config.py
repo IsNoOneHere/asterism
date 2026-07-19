@@ -23,6 +23,7 @@ class EngineConfig:
     name: str
     max_turns: int = 50
     timeout_seconds: int = 600
+    max_buffer_size: int = 16 * 1024 * 1024
     endpoint: str = ""
     effort_level: str = ""
 
@@ -203,6 +204,7 @@ def _engine(settings: Settings, name: str, max_turns: Any, timeout_seconds: Any)
         name=name,
         max_turns=int(max_turns or settings.engine_max_turns),
         timeout_seconds=int(timeout_seconds or settings.engine_timeout_seconds),
+        max_buffer_size=settings.claude_sdk_max_buffer_size,
         endpoint=settings.execution_http_endpoint,
         effort_level=settings.engine_effort_level,
     )

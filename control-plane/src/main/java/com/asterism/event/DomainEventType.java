@@ -14,6 +14,7 @@ public enum DomainEventType {
     TemporalActionCompleted,
     WorkItemActivated,
     ReworkStarted,
+    CodingAttemptStarted,
     ExecutionPlanDrafted,
     AgentStageCompleted,
     WorkItemRejected,

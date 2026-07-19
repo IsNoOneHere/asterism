@@ -4,6 +4,7 @@ import com.asterism.event.DomainEventService;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.projection.WorkItemProjection;
 import com.asterism.projection.WorkItemProjectionRepository;
+import com.asterism.system.AgentConfigurationService;
 import com.asterism.temporal.TemporalCasePort;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,7 @@ class WorkItemControllerSystemAccessTest {
         doThrow(new AccessDeniedException("非系统 owner/admin 无权操作"))
                 .when(access).requireOwnerOrAdmin("system-b", actor);
         var service = new WorkItemActionService(workItems, temporal, events, access,
-                new ObjectMapper(), directTransactions());
+                mock(AgentConfigurationService.class), new ObjectMapper(), directTransactions());
 
         assertThatThrownBy(() -> service.submit("wi-b", "owner_approved", null, actor))
                 .isInstanceOf(AccessDeniedException.class);

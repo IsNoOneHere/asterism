@@ -65,8 +65,10 @@ test('custom agent can select deepagents profile and path scope', async () => {
   renderApp('/agents');
   await screen.findAllByText('frontend-dev');
   expect(screen.getByRole('heading', { name: 'Agent 列表' })).toBeInTheDocument();
+  expect(screen.getByText(/Claude SDK 使用单一团队凭证/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '新增 Agent' }));
   expect(screen.getByRole('dialog')).toHaveAttribute('open');
+  expect(within(screen.getByLabelText('执行内核')).queryByRole('option', { name: 'claude_sdk' })).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('Agent 名称'), { target: { value: 'backend-dev' } });
   fireEvent.change(screen.getByLabelText('执行内核'), { target: { value: 'deepagents' } });
   fireEvent.change(screen.getByLabelText('Model Profile'), { target: { value: 'mp-1' } });
@@ -76,6 +78,17 @@ test('custom agent can select deepagents profile and path scope', async () => {
   expect((await screen.findAllByText('backend-dev')).length).toBeGreaterThan(0);
   const call = vi.mocked(fetch).mock.calls.find(([path]) => path === '/api/v5/systems/alpha-system/agents');
   expect(JSON.parse(String(call?.[1]?.body)).pathScope).toEqual(['api', 'db']);
+});
+
+test('legacy Claude custom agent is marked as replaced by automatic repository agents', async () => {
+  renderApp('/agents');
+  expect(await screen.findByText('claude_sdk · 已由团队模式替代')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: '编辑 frontend-dev' }));
+
+  expect(screen.getByText(/该旧配置已由 Claude SDK 自动仓库 Agent 替代/)).toBeInTheDocument();
+  expect(screen.getByLabelText('Model Profile')).toBeDisabled();
+  expect(screen.getByLabelText(/Path Scope/)).toBeDisabled();
 });
 
 test('builtin product only edits its profile and cannot be deleted', async () => {

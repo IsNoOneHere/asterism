@@ -414,7 +414,8 @@ test('work item detail translates waiting role and merge request status', async 
 test('work item detail shows completed and failed agent stages', async () => {
   setApiResponse('/api/v5/work-items/wi-1', {
     workItemId: 'wi-1', systemId: 'alpha-system', title: '跨端修改', lifecycleStatus: 'worker_blocked',
-    currentStage: '执行被阻塞', canControl: true, availableActions: ['rework'],
+    currentStage: '执行被阻塞', canControl: true,
+    availableActions: ['retry_current_phase', 'rework', 'rework_with_latest_config'],
   });
   setApiResponse('/api/v5/work-items/wi-1/events', [
     {
@@ -437,6 +438,9 @@ test('work item detail shows completed and failed agent stages', async () => {
   const progress = await screen.findByRole('list', { name: 'Agent 执行进度' });
   expect(within(progress).getByText('frontend').closest('li')).toHaveTextContent('已完成');
   expect(within(progress).getByText('backend').closest('li')).toHaveTextContent('失败');
+  expect(screen.getByRole('button', { name: '重试失败阶段' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '完整重做' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '刷新配置并重试失败阶段' })).toBeInTheDocument();
 });
 
 test('waiting merge shows each GitLab MR and verified merge action', async () => {

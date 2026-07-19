@@ -8,6 +8,7 @@ import com.asterism.identity.SystemAccessService;
 import com.asterism.prd.PrdSessionRepository;
 import com.asterism.projection.WorkItemProjection;
 import com.asterism.projection.WorkItemProjectionRepository;
+import com.asterism.system.AgentConfigurationService;
 import com.asterism.temporal.TemporalCasePort;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -79,7 +80,7 @@ class WorkItemMergeStatusTest {
         when(gitLab.mergeRequest("https://gitlab", "secret", "frozen/api", 9))
                 .thenReturn(new GitLabClient.MergeRequestStatus(9, mrState, "https://gitlab/mr/9"));
         var actionService = new WorkItemActionService(workItems, temporal, events, access,
-                new ObjectMapper(), directTransactions());
+                mock(AgentConfigurationService.class), new ObjectMapper(), directTransactions());
         var controller = new WorkItemController(workItems, events, actionService, access,
                 mock(PrdSessionRepository.class), new ObjectMapper(), git, gitLab);
         return new Fixture(controller, temporal, gitLab, actor);

@@ -10,8 +10,10 @@ from asterism_worker.agent_config import AgentConstraints, EngineConfig, ModelPr
 from asterism_worker.activities.execution import (
     collect_file_context,
     git_apply_check,
+    hard_allowed_paths,
     plan_execution,
     release_repo,
+    run_coding_attempt,
     run_execution,
     run_validation,
     summarize_repo,
@@ -20,12 +22,13 @@ from asterism_worker.activities.execution import (
     validate_patch_paths,
 )
 from asterism_worker.config.settings import Settings
-from asterism_worker.contracts import AgentAssignment, ExecutionPlan, ExecutionResult, PlanRequest, PrdSpec
+from asterism_worker.contracts import AgentAssignment, CodingAttemptResult, ExecutionPlan, ExecutionResult, PlanRequest, PrdSpec, RepoChangeResult
 from asterism_worker.providers.factory import build_execution_provider, build_planner_provider
 from asterism_worker.providers.claude_sdk import ClaudeSdkExecutionProvider
 from asterism_worker.providers.fake import FakeExecutionProvider
 from asterism_worker.providers.http import HttpExecutionProvider, HttpPlannerProvider
 from asterism_worker.providers.planner import FakePlannerProvider
+from asterism_worker.repo_source import TeamWorkspace
 
 
 def test_execution_provider_comes_from_settings():
@@ -46,6 +49,186 @@ def test_execution_provider_comes_from_settings():
     assert claude.model_env["ANTHROPIC_MODEL"] == "deepseek-v4-pro[1m]"
     assert claude.model_env["CLAUDE_CODE_SUBAGENT_MODEL"] == "deepseek-v4-pro[1m]"
     assert claude.model_env["CLAUDE_CODE_EFFORT_LEVEL"] == "max"
+
+
+def test_run_coding_attempt_resolves_developer_and_gates_each_repo_diff(tmp_path, monkeypatch):
+    team_root = tmp_path / "team"
+    backend = team_root / "backend"
+    frontend = team_root / "frontend"
+    for repo in (backend, frontend):
+        (repo / "src").mkdir(parents=True)
+        (repo / "src" / "app.txt").write_text("old\n")
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"],
+                       cwd=repo, check=True, capture_output=True)
+    workspace = TeamWorkspace(team_root, {"backend": backend, "frontend": frontend})
+    observed = []
+
+    async def prepare(*args, **kwargs):
+        return workspace
+
+    async def resolve(*args, **kwargs):
+        assert kwargs["role_id"] == "developer"
+        return ResolvedAgentConfig(
+            EngineConfig("claude_sdk", timeout_seconds=30),
+            ModelProfile(provider="anthropic", api_key="key"),
+            AgentConstraints(role_id="developer"),
+        )
+
+    class Provider:
+        async def run(self, request, actual_workspace):
+            observed.append(request)
+            assert actual_workspace is workspace
+            return CodingAttemptResult(
+                summary="完成",
+                repo_changes=[
+                    RepoChangeResult(
+                        repo="backend",
+                        diff_patch=("diff --git a/src/app.txt b/src/app.txt\n--- a/src/app.txt\n+++ b/src/app.txt\n"
+                                    "@@ -1 +1 @@\n-old\n+new\n"),
+                        changed_paths=["src/app.txt"],
+                    ),
+                    RepoChangeResult(repo="frontend"),
+                ],
+                session_id="session-team",
+            )
+
+    monkeypatch.setattr(execution_activities, "prepare_team_workspace", prepare)
+    monkeypatch.setattr(execution_activities, "resolve_agent_config", resolve)
+    monkeypatch.setattr(execution_activities, "build_coding_team_provider", lambda value: Provider())
+    result = asyncio.run(run_coding_attempt({
+        "case_id": "case-1", "work_item_id": "wi-1", "system_id": "system-1",
+        "goal": "更新代码", "acceptance_criteria": ["通过"],
+        "repos": [
+            {"repo_id": "backend", "allowed_paths": ["src"]},
+            {"repo_id": "frontend", "allowed_paths": ["src"]},
+        ],
+    }))
+
+    assert result["session_id"] == "session-team"
+    assert len(observed) == 1
+    assert not team_root.exists()
+
+
+def test_run_coding_attempt_restores_previous_candidate_for_revision(tmp_path, monkeypatch):
+    team_root = tmp_path / "team"
+    backend = team_root / "backend"
+    (backend / "src").mkdir(parents=True)
+    app = backend / "src" / "app.txt"
+    extra = backend / "src" / "extra.txt"
+    app.write_text("old\n")
+    subprocess.run(["git", "init"], cwd=backend, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=backend, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"],
+        cwd=backend, check=True, capture_output=True,
+    )
+    app.write_text("candidate\n")
+    extra.write_text("remove me\n")
+    subprocess.run(["git", "add", "-N", "."], cwd=backend, check=True, capture_output=True)
+    previous_patch = subprocess.run(
+        ["git", "diff", "--binary"], cwd=backend, check=True, text=True, capture_output=True,
+    ).stdout
+    subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=backend, check=True, capture_output=True)
+    subprocess.run(["git", "clean", "-fd"], cwd=backend, check=True, capture_output=True)
+    workspace = TeamWorkspace(team_root, {"backend": backend})
+
+    async def prepare(*args, **kwargs):
+        return workspace
+
+    async def resolve(*args, **kwargs):
+        return ResolvedAgentConfig(
+            EngineConfig("claude_sdk", timeout_seconds=30),
+            ModelProfile(provider="anthropic", api_key="key"),
+            AgentConstraints(role_id="developer"),
+        )
+
+    class Provider:
+        async def run(self, request, actual_workspace):
+            # 重做从完整候选开始，Agent 可以删除多余修改并保留正确部分。
+            assert app.read_text() == "candidate\n"
+            assert extra.read_text() == "remove me\n"
+            app.write_text("revised\n")
+            extra.unlink()
+            subprocess.run(["git", "add", "-N", "."], cwd=backend, check=True, capture_output=True)
+            diff_patch = subprocess.run(
+                ["git", "diff", "--binary"], cwd=backend, check=True, text=True, capture_output=True,
+            ).stdout
+            subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=backend, check=True, capture_output=True)
+            subprocess.run(["git", "clean", "-fd"], cwd=backend, check=True, capture_output=True)
+            return CodingAttemptResult(
+                summary="已按反馈修订",
+                repo_changes=[RepoChangeResult(repo="backend", diff_patch=diff_patch)],
+            )
+
+    monkeypatch.setattr(execution_activities, "prepare_team_workspace", prepare)
+    monkeypatch.setattr(execution_activities, "resolve_agent_config", resolve)
+    monkeypatch.setattr(execution_activities, "build_coding_team_provider", lambda value: Provider())
+    result = asyncio.run(run_coding_attempt({
+        "case_id": "case-1", "work_item_id": "wi-1", "system_id": "system-1",
+        "goal": "修订上一版", "repos": [{"repo_id": "backend", "allowed_paths": ["src"]}],
+        "previous_candidate": [{"repo": "backend", "diff_patch": previous_patch}],
+    }))
+
+    final_patch = result["repo_changes"][0]["diff_patch"]
+    assert "+revised" in final_patch
+    assert "extra.txt" not in final_patch
+    assert not team_root.exists()
+
+
+def test_run_coding_attempt_keeps_restored_candidate_when_agent_makes_no_more_changes(tmp_path, monkeypatch):
+    team_root = tmp_path / "team"
+    backend = team_root / "backend"
+    (backend / "src").mkdir(parents=True)
+    app = backend / "src" / "app.txt"
+    app.write_text("old\n")
+    subprocess.run(["git", "init"], cwd=backend, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=backend, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"],
+        cwd=backend, check=True, capture_output=True,
+    )
+    app.write_text("candidate\n")
+    previous_patch = subprocess.run(
+        ["git", "diff", "--binary"], cwd=backend, check=True, text=True, capture_output=True,
+    ).stdout
+    subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=backend, check=True, capture_output=True)
+    workspace = TeamWorkspace(team_root, {"backend": backend})
+
+    async def prepare(*args, **kwargs):
+        return workspace
+
+    async def resolve(*args, **kwargs):
+        return ResolvedAgentConfig(
+            EngineConfig("claude_sdk", timeout_seconds=30),
+            ModelProfile(provider="anthropic", api_key="key"),
+            AgentConstraints(role_id="developer"),
+        )
+
+    class Provider:
+        async def run(self, request, actual_workspace):
+            assert app.read_text() == "candidate\n"
+            diff_patch = subprocess.run(
+                ["git", "diff", "--binary"], cwd=backend, check=True, text=True, capture_output=True,
+            ).stdout
+            subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=backend, check=True, capture_output=True)
+            return CodingAttemptResult(
+                summary="上一版已满足反馈",
+                repo_changes=[RepoChangeResult(repo="backend", diff_patch=diff_patch)],
+            )
+
+    monkeypatch.setattr(execution_activities, "prepare_team_workspace", prepare)
+    monkeypatch.setattr(execution_activities, "resolve_agent_config", resolve)
+    monkeypatch.setattr(execution_activities, "build_coding_team_provider", lambda value: Provider())
+    result = asyncio.run(run_coding_attempt({
+        "case_id": "case-1", "work_item_id": "wi-1", "system_id": "system-1",
+        "goal": "复核上一版", "repos": [{"repo_id": "backend", "allowed_paths": ["src"]}],
+        "previous_candidate": [{"repo": "backend", "diff_patch": previous_patch}],
+    }))
+
+    assert result["repo_changes"][0]["diff_patch"] == previous_patch
+    assert not team_root.exists()
 
 
 def test_claude_provider_prefers_system_model_config():
@@ -247,6 +430,41 @@ def test_validate_plan_targets_allows_existing_anchor_with_new_file(tmp_path):
     validate_plan_targets(str(repo), ["README.md", "src/new.py"])
 
 
+def test_validate_plan_targets_accepts_tracked_directory_anchor(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "app.py").write_text("print('ok')\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", "src/app.py"], cwd=repo, check=True, capture_output=True)
+
+    validate_plan_targets(str(repo), ["src", "src/new.py"])
+
+
+def test_validate_plan_targets_blocks_ignored_or_untracked_existing_path(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "dist").mkdir(parents=True)
+    (repo / ".gitignore").write_text("/dist\n")
+    (repo / "README.md").write_text("tracked\n")
+    (repo / "dist" / "bundle.js").write_text("ignored\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", ".gitignore", "README.md"], cwd=repo, check=True, capture_output=True)
+
+    with pytest.raises(RuntimeError, match="ignored or untracked: dist/bundle.js"):
+        validate_plan_targets(str(repo), ["README.md", "dist/bundle.js"])
+
+
+def test_validate_plan_targets_blocks_missing_file_under_ignored_directory(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".gitignore").write_text("/dist\n")
+    (repo / "README.md").write_text("tracked\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", ".gitignore", "README.md"], cwd=repo, check=True, capture_output=True)
+
+    with pytest.raises(RuntimeError, match="ignored or untracked: dist/new.js"):
+        validate_plan_targets(str(repo), ["README.md", "dist/new.js"])
+
+
 def test_validate_plan_targets_blocks_unsafe_paths(tmp_path):
     with pytest.raises(RuntimeError, match="unsafe path"):
         validate_plan_targets(str(tmp_path), ["../secrets.txt"])
@@ -267,6 +485,51 @@ def test_multi_repo_target_validation_accepts_anchor_from_any_repository(tmp_pat
         "assignments": [{"repo": "frontend"}, {"repo": "backend"}],
         "target_files": ["src/App.tsx"],
     }))
+
+
+def test_target_validation_uses_tracked_assignment_scope_as_fallback(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "app.ts").write_text("export default {}\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", "src/app.ts"], cwd=repo, check=True, capture_output=True)
+
+    asyncio.run(execution_activities.validate_plan_targets_activity({
+        "repos": [{"repo_id": "frontend", "local_path": str(repo)}],
+        "assignments": [{"repo": "frontend", "scope_paths": ["src"]}],
+        "target_files": ["frontend/src/missing.jsx"],
+    }))
+
+
+def test_target_validation_blocks_missing_targets_without_trusted_assignment_scope(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "app.ts").write_text("export default {}\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", "src/app.ts"], cwd=repo, check=True, capture_output=True)
+
+    with pytest.raises(RuntimeError, match="do not exist"):
+        asyncio.run(execution_activities.validate_plan_targets_activity({
+            "repos": [{"repo_id": "frontend", "local_path": str(repo)}],
+            "assignments": [{"repo": "frontend", "scope_paths": ["missing"]}],
+            "target_files": ["frontend/src/missing.jsx"],
+        }))
+
+
+def test_target_validation_still_blocks_ignored_target_with_valid_assignment_scope(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "app.ts").write_text("export default {}\n")
+    (repo / ".gitignore").write_text("/dist\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", ".gitignore", "src/app.ts"], cwd=repo, check=True, capture_output=True)
+
+    with pytest.raises(RuntimeError, match="ignored or untracked: dist/new.js"):
+        asyncio.run(execution_activities.validate_plan_targets_activity({
+            "repos": [{"repo_id": "frontend", "local_path": str(repo)}],
+            "assignments": [{"repo": "frontend", "scope_paths": ["src"]}],
+            "target_files": ["dist/new.js"],
+        }))
 
 
 def test_release_repo_commits_to_work_item_branch(tmp_path):
@@ -336,6 +599,56 @@ def test_patch_retry_and_reverse_keep_unrelated_same_file_edit(tmp_path):
     assert target.read_text() == "agent-old\n" + "stable\n" * 8 + "user-new\n"
 
 
+def test_patch_accepts_existing_superset_in_same_hunk(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "columns.ts"
+    baseline = "name\nellipsis\nsearch\nmobile\n"
+    target.write_text(baseline)
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", "columns.ts"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"],
+                   cwd=repo, check=True, capture_output=True)
+    target.write_text("name\ndepartment\nellipsis\nsearch\nmobile\n")
+    patch = subprocess.run(["git", "diff", "--", "columns.ts"], cwd=repo,
+                           check=True, capture_output=True, text=True).stdout
+    subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=repo, check=True, capture_output=True)
+    target.write_text("name\ndepartment\nellipsis\nwidth: 150\nsearch\nmobile\n")
+
+    result = asyncio.run(execution_activities.apply_patch_to_repo({
+        "repo_path": str(repo), "diff_patch": patch,
+    }))
+
+    assert result["blocked"] is False
+    assert result["already_applied"] is True
+    assert target.read_text() == "name\ndepartment\nellipsis\nwidth: 150\nsearch\nmobile\n"
+
+
+def test_patch_does_not_match_same_change_in_another_hunk(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    target = repo / "settings.txt"
+    baseline = "target\nold-context\n" + "stable\n" * 12 + "other\n"
+    target.write_text(baseline)
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", "settings.txt"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"],
+                   cwd=repo, check=True, capture_output=True)
+    target.write_text("target\nenabled=true\nold-context\n" + "stable\n" * 12 + "other\n")
+    patch = subprocess.run(["git", "diff", "--", "settings.txt"], cwd=repo,
+                           check=True, capture_output=True, text=True).stdout
+    subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=repo, check=True, capture_output=True)
+    target.write_text("target\nuser-context\n" + "stable\n" * 12 + "other\nenabled=true\n")
+
+    result = asyncio.run(execution_activities.apply_patch_to_repo({
+        "repo_path": str(repo), "diff_patch": patch,
+    }))
+
+    assert result["blocked"] is True
+    assert result["already_applied"] is False
+    assert target.read_text() == "target\nuser-context\n" + "stable\n" * 12 + "other\nenabled=true\n"
+
+
 def test_summarize_repo_includes_tree_and_manifest_heads(tmp_path):
     repo = tmp_path / "repo"
     (repo / "src").mkdir(parents=True)
@@ -352,6 +665,27 @@ def test_summarize_repo_includes_tree_and_manifest_heads(tmp_path):
     assert "node_modules" not in summary
     assert "README.md" in summary
     assert "asterism" in summary
+
+
+def test_summarize_repo_uses_tracked_tree_and_skips_gitignored_build_output(tmp_path):
+    repo = tmp_path / "repo"
+    source = repo / "src" / "pages" / "exam" / "ExamStatistics" / "index.tsx"
+    bundle = repo / "dist" / "p__exam__ExamStatistics.js"
+    source.parent.mkdir(parents=True)
+    bundle.parent.mkdir()
+    source.write_text("export default {}\n")
+    bundle.write_text("generated\n")
+    (repo / ".gitignore").write_text("/dist\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", ".gitignore", "src"], cwd=repo, check=True, capture_output=True)
+
+    summary = summarize_repo_path(str(repo))
+    context = collect_file_context(repo, ["src/pages/exam/ExamStatistics"])
+
+    assert "src/pages/exam/ExamStatistics/" in summary
+    assert "src/pages/exam/ExamStatistics/index.tsx" in summary
+    assert "dist/" not in summary
+    assert context.file_contents["src/pages/exam/ExamStatistics/index.tsx"].startswith("export default")
 
 
 def test_summarize_repo_truncates_large_output(tmp_path):
@@ -474,6 +808,47 @@ def test_run_execution_blocks_role_scope_violation(tmp_path, monkeypatch):
 
     assert result["blocked_reason"] == "role_scope_violation"
     assert result["blocked_detail"] == "api/app.py"
+
+
+def test_run_execution_treats_planner_scope_as_soft_hint(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "app.ts").write_text("old\n")
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-m", "init"],
+                   cwd=repo, check=True, capture_output=True)
+    requests = []
+
+    class SourceProvider:
+        async def run(self, request):
+            requests.append(request)
+            return ExecutionResult(summary="source", diff_patch=(
+                "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n"
+                "@@ -1 +1 @@\n-old\n+new\n"
+            ))
+
+    async def resolved(*args, **kwargs):
+        return ResolvedAgentConfig(EngineConfig("fake"), ModelProfile(), AgentConstraints(role_id="frontend"))
+
+    monkeypatch.setenv("V5_WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+    monkeypatch.setattr(execution_activities, "resolve_agent_config", resolved)
+    monkeypatch.setattr(execution_activities, "build_execution_provider", lambda value: SourceProvider())
+    result = asyncio.run(run_execution({
+        "case_id": "case", "work_item_id": "wi", "system_id": "sys", "repo_path": str(repo),
+        "goal": "改前端源码", "role_id": "frontend", "role_scope": ["dist"],
+        "plan": {"steps": ["改前端"], "target_files": ["src/app.ts"]},
+    }))
+
+    assert result["blocked_reason"] == ""
+    assert requests[0].allowed_paths == []
+    assert requests[0].role_scope == ["dist"]
+
+
+def test_hard_allowed_paths_intersects_system_and_agent_scopes():
+    assert hard_allowed_paths(["src"], ["src/pages", "src/services"]) == ["src/pages", "src/services"]
+    with pytest.raises(RuntimeError, match="do not overlap"):
+        hard_allowed_paths(["backend"], ["frontend"])
 
 
 def test_run_execution_resolves_distinct_profile_and_engine_per_role(tmp_path, monkeypatch):

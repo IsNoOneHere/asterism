@@ -34,8 +34,8 @@ make doctor
 
 1. 在“系统配置”创建系统并设置仓库、允许路径和测试命令。
 2. 在“Agent / 模型配置”的模型列表创建 Model Profile；API Key 只写入，页面只显示 `apiKeySet`。
-3. 为内置 `product/planner/developer` 选择 Profile，并按需创建自定义 Agent。
-4. 自定义 Agent 可选择 `claude_sdk`、`deepagents`、`http` 或 `fake`，Planner 按名称生成有序 assignments。
+3. 为内置 `product/planner/developer` 选择 Profile；`developer` 的 Profile 是整个 Claude SDK 团队唯一的模型凭证。
+4. Claude SDK 会按仓库自动生成子 Agent，无需手工创建 frontend/backend Agent；自定义 Agent 只用于 `deepagents`、`http`、`fake` 或旧 Planner。
 
 旧 `businessModels` 和单模型 JSON 由 Flyway 一次性迁入 Model Profile，运行期不再维护第二套模型池。
 

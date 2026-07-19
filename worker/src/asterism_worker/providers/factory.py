@@ -2,6 +2,7 @@ from asterism_worker.agent_config import ResolvedAgentConfig
 from asterism_worker.config.settings import Settings
 from asterism_worker.providers.base import ExecutionProvider
 from asterism_worker.providers.claude_sdk import ClaudeSdkExecutionProvider
+from asterism_worker.providers.claude_sdk_team import ClaudeSdkTeamProvider
 from asterism_worker.providers.deepagents import DeepAgentsExecutionProvider
 from asterism_worker.providers.fake import FakeExecutionProvider
 from asterism_worker.providers.http import HttpExecutionProvider, HttpPlannerProvider
@@ -21,6 +22,20 @@ def build_execution_provider(resolved: ResolvedAgentConfig) -> ExecutionProvider
     if selected == "fake":
         return FakeExecutionProvider()
     raise ValueError(f"unsupported execution provider: {selected}")
+
+
+def build_coding_team_provider(resolved: ResolvedAgentConfig) -> ClaudeSdkTeamProvider:
+    """新 Coding Attempt 固定使用 Claude SDK 原生 Supervisor。"""
+
+    if resolved.engine.name != "claude_sdk":
+        raise RuntimeError("developer Agent 必须配置为 claude_sdk 才能启动 Coding Supervisor")
+    return ClaudeSdkTeamProvider(
+        resolved.model_profile,
+        resolved.engine,
+        resolved.artifacts_root,
+        resolved.constraints,
+        resolved.callbacks,
+    )
 
 
 def build_planner_provider(settings: Settings) -> PlannerProvider:
