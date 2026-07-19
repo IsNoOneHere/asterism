@@ -143,7 +143,7 @@ class LifecycleHappyPathIntegrationTest {
                   "allowedPaths": ["src"],
                   "forbiddenPaths": ["secrets"],
                   "testCommands": ["mvn test"],
-                  "agentConfig": {"executionProvider": "http"},
+                  "agentConfig": {},
                   "modelProviderConfig": {"provider": "fake"}
                 }
                 """.formatted(systemId), "admin").andExpect(status().isOk());
@@ -151,10 +151,9 @@ class LifecycleHappyPathIntegrationTest {
 
     private void reportReadyWorker(String systemId) {
         var target = new ExecutionReadinessService.TargetReadiness(
-                systemId, true, true, true, "test-model", false, "", "",
-                true, "prd-model", true, "planning-model", true, "diff-model");
+                systemId, true, true, true, "prd-model", true, "claude-model", "system");
         readiness.report(new ExecutionReadinessService.WorkerReadinessReport(
-                "test-worker", "asterism", "http", List.of("http"), true, false,
+                "test-worker", "asterism", "claude_sdk_team", List.of("claude_sdk_team"), false,
                 Instant.now(), List.of(target), null));
     }
 

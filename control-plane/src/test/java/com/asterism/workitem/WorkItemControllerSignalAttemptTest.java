@@ -135,7 +135,7 @@ class WorkItemControllerSignalAttemptTest {
                                 "mp-latest", "deepseek-worker", "anthropic", "https://api.deepseek.com/anthropic",
                                 "secret", "deepseek-v4-pro", false)),
                         List.of(new AgentConfigurationService.Agent(
-                                "backend-dev", "custom", "claude_sdk", "mp-latest", List.of(), "后端", 50, 600))));
+                                "developer", "builtin", "claude_sdk_team", "mp-latest", List.of(), "", 50, 600))));
         var request = new WorkItemActionService.ActionRequest(
                 "request-003", "worker_blocked", 10L, "刷新配置", null);
 
@@ -149,7 +149,7 @@ class WorkItemControllerSignalAttemptTest {
         assertThat(command.signalName()).isEqualTo("rework_with_latest_config");
         assertThat(command.context().get("resume_failed_stage")).isEqualTo(true);
         assertThat(command.context().get("agent_config_snapshot").toString())
-                .contains("model_profiles", "mp-latest", "claude_sdk")
+                .contains("model_profiles", "mp-latest", "claude_sdk_team")
                 .doesNotContain("secret", "api_key");
     }
 

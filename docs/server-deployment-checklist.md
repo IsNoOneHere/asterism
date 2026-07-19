@@ -78,7 +78,7 @@
 
 - [ ] 从 `.env.example` 创建服务器 `.env`，权限设置为 `600`。
 - [ ] 生成随机 `V5_DB_PASSWORD`、`V5_WORKER_CALLBACK_TOKEN` 和 `V5_ADMIN_INITIAL_PASSWORD`。
-- [ ] 配置生产模型与 Agent Role；PRD/Planner 使用 OpenAI 兼容配置，Claude SDK 角色使用 Anthropic 兼容配置。
+- [ ] 配置 `product` 与 `developer`；PRD 对话使用 OpenAI 兼容 Profile，`developer` 使用 Anthropic 兼容 Profile 和 `claude_sdk_team`。
 - [ ] 保持 `V5_RELEASE_PUSH=false`，首期只在服务器本地生成提交。
 - [ ] 验证 DeepSeek OpenAI 兼容接口和 Anthropic 兼容接口均可从容器访问。
 
@@ -97,7 +97,7 @@
 - [ ] 执行 `make doctor`，确认数据库、Temporal、control-plane、agent-service 和 Worker poller 正常。
 - [ ] 验证 `http://10.96.230.211:8080` 可登录，模型配置和 Agent 配置可读取。
 - [ ] 发起一次真实需求沟通，确认 PRD 模型调用成功。
-- [ ] 发起一个最小工作项，确认 Planner、前后端 Agent handoff、Git 提交和结果回传完整。
+- [ ] 发起一个最小工作项，确认 Coding Supervisor、仓库子 Agent、Git 提交和结果回传完整。
 - [ ] 核对知识库分页每页 10 条，并确认 467 条知识可检索。
 
 ### 7. 备份与回滚

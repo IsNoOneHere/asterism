@@ -61,9 +61,7 @@ def team_request(root) -> tuple[CodingAttemptRequest, TeamWorkspace]:
                 {"id": "deepseek-worker", "provider": "anthropic", "base_url": "https://api.example/anthropic", "model": "deepseek"},
             ],
             "agents": [
-                {"name": "developer", "kind": "builtin", "engine": "claude_sdk", "model_profile_ref": "deepseek-worker"},
-                {"name": "backend-dev", "kind": "custom", "engine": "claude_sdk", "model_profile_ref": "deepseek-worker", "path_scope": ["src"]},
-                {"name": "frontend-dev", "kind": "custom", "engine": "claude_sdk", "model_profile_ref": "deepseek-worker", "path_scope": ["src"]},
+                {"name": "developer", "kind": "builtin", "engine": "claude_sdk_team", "model_profile_ref": "deepseek-worker"},
             ],
         },
         "previous_candidate": [{
@@ -185,7 +183,7 @@ def test_team_provider_uses_native_subagents_and_enforces_repo_write_policy(tmp_
 
     provider = ClaudeSdkTeamProvider(
         ModelProfile(provider="anthropic", base_url="https://api.example/anthropic", model="deepseek", api_key="key"),
-        EngineConfig(name="claude_sdk", max_turns=20),
+        EngineConfig(name="claude_sdk_team", max_turns=20),
         str(tmp_path / "artifacts"),
         AgentConstraints(role_id="developer", prompt="先核对真实语义"),
         {"query": fake_query},
@@ -218,7 +216,7 @@ def test_team_provider_allows_unchanged_repository(tmp_path, monkeypatch):
 
     provider = ClaudeSdkTeamProvider(
         ModelProfile(provider="anthropic", base_url="https://api.example/anthropic", model="deepseek", api_key="key"),
-        EngineConfig(name="claude_sdk"),
+        EngineConfig(name="claude_sdk_team"),
         str(tmp_path / "artifacts"),
         AgentConstraints(role_id="developer"),
         {"query": fake_query},
@@ -244,7 +242,7 @@ def test_team_provider_restores_worker_owner_before_collecting_diff(tmp_path, mo
 
     provider = ClaudeSdkTeamProvider(
         ModelProfile(provider="anthropic", base_url="https://api.example/anthropic", model="deepseek", api_key="key"),
-        EngineConfig(name="claude_sdk"),
+        EngineConfig(name="claude_sdk_team"),
         str(tmp_path / "artifacts"),
         AgentConstraints(role_id="developer"),
         {"query": fake_query},
@@ -277,7 +275,7 @@ def test_team_provider_only_allows_configured_validation_command(tmp_path, monke
     request.repos[0].test_commands = ["pytest -q"]
     provider = ClaudeSdkTeamProvider(
         ModelProfile(provider="anthropic", model="claude", api_key="key"),
-        EngineConfig(name="claude_sdk"),
+        EngineConfig(name="claude_sdk_team"),
         str(tmp_path / "artifacts"),
         AgentConstraints(role_id="developer"),
     )
@@ -315,7 +313,7 @@ def test_team_provider_waits_for_background_task_terminal_event(tmp_path, monkey
 
     provider = ClaudeSdkTeamProvider(
         ModelProfile(provider="anthropic", model="claude", api_key="key"),
-        EngineConfig(name="claude_sdk"),
+        EngineConfig(name="claude_sdk_team"),
         str(tmp_path / "artifacts"),
         AgentConstraints(role_id="developer"),
         {"query": completed_query},
@@ -361,7 +359,7 @@ def test_team_provider_closes_builtin_agent_from_task_terminal_event(tmp_path, m
 
     provider = ClaudeSdkTeamProvider(
         ModelProfile(provider="anthropic", model="claude", api_key="key"),
-        EngineConfig(name="claude_sdk"),
+        EngineConfig(name="claude_sdk_team"),
         str(tmp_path / "artifacts"),
         AgentConstraints(role_id="developer"),
         {"query": builtin_query},

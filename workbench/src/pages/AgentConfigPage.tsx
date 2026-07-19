@@ -10,8 +10,8 @@ type ProfileDraft = { name: string; provider: string; model: string; baseUrl: st
 type AgentDraft = { name: string; engine: string; modelProfileRef: string; pathScope: string; prompt: string; maxTurns: number; timeoutSeconds: number };
 
 const emptyProfile: ProfileDraft = { name: '', provider: 'openai-compat', model: '', baseUrl: '', apiKey: '', supportsVision: false };
-const emptyAgent: AgentDraft = { name: '', engine: 'http', modelProfileRef: '', pathScope: '', prompt: '', maxTurns: 50, timeoutSeconds: 600 };
-const builtinPurpose: Record<string, string> = { product: 'PRD 对话', planner: '执行规划', developer: 'Claude SDK 团队执行' };
+const emptyAgent: AgentDraft = { name: '', engine: 'claude_sdk_team', modelProfileRef: '', pathScope: '', prompt: '', maxTurns: 50, timeoutSeconds: 600 };
+const builtinPurpose: Record<string, string> = { product: 'PRD 对话', developer: 'Claude SDK 团队执行' };
 
 export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const { systemId, canManageCurrentSystem, systemAccessLoading, systemAccessError } = useCurrentSystem();
@@ -24,7 +24,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const [agent, setAgent] = useState<AgentDraft>(emptyAgent);
   const [message, setMessage] = useState('');
   const [connectionTests, setConnectionTests] = useState<Record<string, ModelConnectionTestResult>>({});
-  const [deleteTarget, setDeleteTarget] = useState<{ type: 'profile' | 'agent'; id: string; name: string } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const config = useQuery({
     queryKey: ['agent-config', systemId],
     queryFn: () => api.agentConfiguration(systemId),
@@ -59,8 +59,8 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   });
   const saveAgent = useMutation({
     mutationFn: () => {
-      const name = agentName || agent.name.trim();
-      const modelOnly = name === 'product' || name === 'planner';
+      const name = agentName;
+      const modelOnly = name === 'product';
       const body = {
         ...agent,
         name,
@@ -70,23 +70,16 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
         maxTurns: modelOnly ? undefined : agent.maxTurns,
         timeoutSeconds: modelOnly ? undefined : agent.timeoutSeconds,
       };
-      return agentName ? api.updateAgent(systemId, agentName, body) : api.createAgent(systemId, body);
+      return api.updateAgent(systemId, agentName, body);
     },
     onSuccess: (value) => {
       accept(value, 'Agent 保存成功');
       agentDialogRef.current?.close();
     },
   });
-  const deleteAgent = useMutation({
-    mutationFn: (name: string) => api.deleteAgent(systemId, name),
-    onSuccess: (value) => accept(value, 'Agent 已删除'),
-    onSettled: () => setDeleteTarget(null),
-  });
-
   const value = config.data;
   const modelSection = section === 'models';
-  const modelOnly = agentName === 'product' || agentName === 'planner';
-  const legacyClaudeAgent = !modelOnly && agentName !== 'developer' && agent.engine === 'claude_sdk';
+  const modelOnly = agentName === 'product';
   const openProfile = (item?: ModelProfile) => {
     saveProfile.reset();
     setProfileId(item?.id ?? '');
@@ -96,14 +89,13 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
     // 原生 dialog 负责焦点约束和遮罩，不引入额外弹窗库。
     profileDialogRef.current?.showModal();
   };
-  const openAgent = (item?: Agent) => {
+  const openAgent = (item: Agent) => {
     saveAgent.reset();
-    setAgentName(item?.name ?? '');
-    setAgent(item
-      ? { name: item.name, engine: item.engine || 'http', modelProfileRef: item.modelProfileRef,
+    setAgentName(item.name);
+    setAgent(
+      { name: item.name, engine: item.engine || 'claude_sdk_team', modelProfileRef: item.modelProfileRef,
         pathScope: item.pathScope.join('\n'), prompt: item.prompt, maxTurns: item.maxTurns ?? 50,
-        timeoutSeconds: item.timeoutSeconds ?? 600 }
-      : emptyAgent);
+        timeoutSeconds: item.timeoutSeconds ?? 600 });
     agentDialogRef.current?.showModal();
   };
   const resetAgent = () => {
@@ -142,25 +134,23 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
                 {pending ? '测试中…' : result ? result.connected ? '连接正常' : '连接失败' : '测试连接'}
               </button>
               <button type="button" className="icon-button" title="编辑 Profile" aria-label={`编辑 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => openProfile(item)}><Pencil size={16} /></button>
-              <button type="button" className="icon-button danger" title="删除 Profile" aria-label={`删除 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => { deleteProfile.reset(); setDeleteTarget({ type: 'profile', id: item.id, name: item.name || item.id }); }}><Trash2 size={16} /></button>
+              <button type="button" className="icon-button danger" title="删除 Profile" aria-label={`删除 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => { deleteProfile.reset(); setDeleteTarget({ id: item.id, name: item.name || item.id }); }}><Trash2 size={16} /></button>
             </div></td>
           </tr>})}
           {value?.modelProfiles.length === 0 && <tr><td className="empty-cell" colSpan={4}>还没有模型连接</td></tr>}
         </tbody></table></div>
       </div> : <div className="panel execution-agent-panel">
         <div className="config-section-head">
-          <div><h2>Agent 列表</h2><p>developer 统一提供 Claude SDK Profile；仓库子 Agent 在执行时自动生成。</p></div>
-          <button type="button" className="icon-text-button" disabled={!canManageCurrentSystem} onClick={() => openAgent()}><Plus size={16} />新增 Agent</button>
+          <div><h2>Agent 列表</h2><p>product 负责需求沟通；developer 通过 Claude SDK Supervisor 自动创建仓库子 Agent。</p></div>
         </div>
-        <div className="notice">Claude SDK 使用单一团队凭证并自主调度原生 Agent。自定义 Agent 仅用于 DeepAgents、HTTP 等独立执行内核。</div>
+        {value?.migration?.migrated && <div className="notice">旧执行内核 {value.migration.from.join('、')} 已迁移为 claude_sdk_team。</div>}
         <div className="table-frame"><table className="data-table agent-role-table"><thead><tr><th>Agent</th><th>Engine / Profile</th><th>范围</th><th>操作</th></tr></thead><tbody>
           {(value?.agents ?? []).map((item) => <tr key={item.name}>
             <td title={item.name}><strong>{item.name}</strong>{item.kind === 'builtin' && <span className="default-badge">内置 · {builtinPurpose[item.name]}</span>}</td>
             <td title={agentRuntimeLabel(item, value?.modelProfiles ?? [])}>{agentRuntimeLabel(item, value?.modelProfiles ?? [])}</td>
-            <td title={item.pathScope.join(', ') || (item.name === 'product' || item.name === 'planner' ? '不执行代码' : '跟随系统')}>{item.pathScope.join(', ') || (item.name === 'product' || item.name === 'planner' ? '不执行代码' : '跟随系统')}</td>
+            <td title={item.pathScope.join(', ') || (item.name === 'product' ? '不执行代码' : '跟随系统')}>{item.pathScope.join(', ') || (item.name === 'product' ? '不执行代码' : '跟随系统')}</td>
             <td className="config-action-cell"><div className="button-row compact-actions">
               <button type="button" className="icon-button" title="编辑 Agent" aria-label={`编辑 ${item.name}`} disabled={!canManageCurrentSystem} onClick={() => openAgent(item)}><Pencil size={16} /></button>
-              {item.kind === 'custom' && <button type="button" className="icon-button danger" title="删除 Agent" aria-label={`删除 ${item.name}`} disabled={!canManageCurrentSystem} onClick={() => { deleteAgent.reset(); setDeleteTarget({ type: 'agent', id: item.name, name: item.name }); }}><Trash2 size={16} /></button>}
             </div></td>
           </tr>)}
         </tbody></table></div>
@@ -184,42 +174,40 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
 
     {!modelSection && <dialog ref={agentDialogRef} className="confirm-dialog config-dialog agent-dialog" aria-labelledby="agent-dialog-title" onClose={resetAgent}>
       <form onSubmit={(event) => { event.preventDefault(); saveAgent.mutate(); }}>
-        <div className="config-section-head compact"><div><h2 id="agent-dialog-title">{agentName ? `编辑 ${agentName}` : '新增 Agent'}</h2><p>{modelOnly ? '内置沟通 Agent 只选择 Model Profile。' : '执行参数在 Case 启动时固定。'}</p></div></div>
-        {legacyClaudeAgent && <div className="notice">该旧配置已由 Claude SDK 自动仓库 Agent 替代。可删除，或切换到其他执行内核继续使用。</div>}
+        <div className="config-section-head compact"><div><h2 id="agent-dialog-title">编辑 {agentName}</h2><p>{modelOnly ? '内置沟通 Agent 只选择 Model Profile。' : '执行参数在 Case 启动时固定。'}</p></div></div>
         <div className="agent-role-fields">
-          <label>Agent 名称<input required disabled={Boolean(agentName)} value={agent.name} onChange={(event) => setAgent({ ...agent, name: event.target.value })} /></label>
-          {!modelOnly && <label>执行内核<select value={agent.engine} onChange={(event) => setAgent({ ...agent, engine: event.target.value })}>{agentEngineOptions(value?.engines, Boolean(agentName)).map((engine) => <option key={engine} value={engine}>{engine}</option>)}</select></label>}
-          <label>Model Profile<select disabled={legacyClaudeAgent} value={agent.modelProfileRef} onChange={(event) => setAgent({ ...agent, modelProfileRef: event.target.value })}><option value="">回落部署默认</option>{profileOptions(value?.modelProfiles)}</select></label>
-          {!modelOnly && <><label>Path Scope（每行一条）<textarea disabled={legacyClaudeAgent} value={agent.pathScope} onChange={(event) => setAgent({ ...agent, pathScope: event.target.value })} /></label>
-            <label className="wide-field">Agent 提示词<textarea disabled={legacyClaudeAgent} value={agent.prompt} onChange={(event) => setAgent({ ...agent, prompt: event.target.value })} /></label>
-            <label>最大轮次<input disabled={legacyClaudeAgent} type="number" min="1" value={agent.maxTurns} onChange={(event) => setAgent({ ...agent, maxTurns: Number(event.target.value) })} /></label>
-            <label>超时（秒）<input disabled={legacyClaudeAgent} type="number" min="1" value={agent.timeoutSeconds} onChange={(event) => setAgent({ ...agent, timeoutSeconds: Number(event.target.value) })} /></label></>}
+          <label>Agent 名称<input required disabled value={agent.name} /></label>
+          {!modelOnly && <label>执行内核<select value={agent.engine} onChange={(event) => setAgent({ ...agent, engine: event.target.value })}>{agentEngineOptions(value?.engines).map((engine) => <option key={engine} value={engine}>{engine}</option>)}</select></label>}
+          <label>Model Profile<select value={agent.modelProfileRef} onChange={(event) => setAgent({ ...agent, modelProfileRef: event.target.value })}><option value="">回落部署默认</option>{profileOptions(value?.modelProfiles)}</select></label>
+          {!modelOnly && <><label>Path Scope（每行一条）<textarea value={agent.pathScope} onChange={(event) => setAgent({ ...agent, pathScope: event.target.value })} /></label>
+            <label className="wide-field">Supervisor 提示词<textarea value={agent.prompt} onChange={(event) => setAgent({ ...agent, prompt: event.target.value })} /></label>
+            <label>最大轮次<input type="number" min="1" value={agent.maxTurns} onChange={(event) => setAgent({ ...agent, maxTurns: Number(event.target.value) })} /></label>
+            <label>超时（秒）<input type="number" min="1" value={agent.timeoutSeconds} onChange={(event) => setAgent({ ...agent, timeoutSeconds: Number(event.target.value) })} /></label></>}
         </div>
         {saveAgent.error && <div className="error-text">{errorMessage(saveAgent.error)}</div>}
-        <div className="button-row"><button type="button" className="secondary" onClick={() => agentDialogRef.current?.close()}>取消</button><button type="submit" disabled={!canManageCurrentSystem || saveAgent.isPending}>{agentName ? '保存 Agent' : '添加 Agent'}</button></div>
+        <div className="button-row"><button type="button" className="secondary" onClick={() => agentDialogRef.current?.close()}>取消</button><button type="submit" disabled={!canManageCurrentSystem || saveAgent.isPending}>保存 Agent</button></div>
       </form>
     </dialog>}
     <ActionConfirmDialog
       open={Boolean(deleteTarget)}
-      title={`删除${deleteTarget?.type === 'profile' ? '模型 Profile' : '自定义 Agent'}？`}
+      title="删除模型 Profile？"
       description={`“${deleteTarget?.name || ''}”删除后无法恢复。`}
       confirmLabel="确认删除"
-      pending={deleteProfile.isPending || deleteAgent.isPending}
+      pending={deleteProfile.isPending}
       onClose={() => setDeleteTarget(null)}
       onConfirm={() => {
-        if (deleteTarget?.type === 'profile') deleteProfile.mutate(deleteTarget.id);
-        if (deleteTarget?.type === 'agent') deleteAgent.mutate(deleteTarget.id);
+        if (deleteTarget) deleteProfile.mutate(deleteTarget.id);
       }}
     />
     <ActionConfirmDialog
-      open={Boolean(deleteProfile.error || deleteAgent.error)}
+      open={Boolean(deleteProfile.error)}
       title="删除失败"
-      description={errorMessage(deleteProfile.error || deleteAgent.error)}
+      description={errorMessage(deleteProfile.error)}
       confirmLabel="知道了"
       alert
       showCancel={false}
-      onClose={() => { deleteProfile.reset(); deleteAgent.reset(); }}
-      onConfirm={() => { deleteProfile.reset(); deleteAgent.reset(); }}
+      onClose={() => deleteProfile.reset()}
+      onConfirm={() => deleteProfile.reset()}
     />
   </section>;
 }
@@ -233,13 +221,11 @@ function profileName(profiles: ModelProfile[], id: string) {
 }
 
 function agentRuntimeLabel(agent: Agent, profiles: ModelProfile[]) {
-  if (agent.kind === 'custom' && agent.engine === 'claude_sdk') return 'claude_sdk · 已由团队模式替代';
   return `${agent.engine ? `${agent.engine} · ` : ''}${profileName(profiles, agent.modelProfileRef)}`;
 }
 
-function agentEngineOptions(engines: string[] | undefined, editing: boolean) {
-  const values = engines ?? ['claude_sdk', 'deepagents', 'http', 'fake'];
-  return editing ? values : values.filter((engine) => engine !== 'claude_sdk');
+function agentEngineOptions(engines: string[] | undefined) {
+  return engines ?? ['claude_sdk_team', 'fake'];
 }
 
 function providerName(provider: string) {

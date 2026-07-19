@@ -107,9 +107,6 @@ class CaseState:
         self.execution_allowed = True
         return "ReworkStarted"
 
-    def planner_failed(self) -> str | None:
-        return self.worker_blocked_on("planner_failed")
-
     def worker_blocked_on(self, reason: str) -> str | None:
         # 所有执行面失败统一收敛到 worker_blocked，具体 reason 留在事件 payload。
         if not self._move(LifecycleStatus.worker_blocked):

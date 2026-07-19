@@ -83,7 +83,7 @@ class ClaudeSdkTeamProvider:
         callbacks: dict[str, Any] | None = None,
     ) -> None:
         if not model_profile.api_key:
-            raise RuntimeError("claude_sdk Supervisor 缺少模型 Profile API key")
+            raise RuntimeError("claude_sdk_team 缺少模型 Profile API key")
         callbacks = callbacks or {}
         self.model_profile = model_profile
         self.engine_options = engine_options

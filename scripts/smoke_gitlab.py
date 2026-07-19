@@ -68,27 +68,7 @@ def configure_asterism(system_id: str, project_path: str) -> None:
         "forbiddenPaths": [],
         "testCommands": [],
     })
-    provider = os.getenv("V5_AGENT_PROVIDER", "openai-compat")
-    if provider == "openai":
-        provider = "openai-compat"
-    config = smoke.request("POST", f"/api/v5/systems/{system_id}/model-profiles", {
-        "name": "Smoke Model",
-        "provider": provider,
-        "model": os.getenv("V5_AGENT_MODEL", "gpt-4.1-mini"),
-        "baseUrl": os.getenv("V5_AGENT_BASE_URL", ""),
-        "apiKey": os.getenv("V5_AGENT_API_KEY", ""),
-        "supportsVision": False,
-    }) or {}
-    profile_id = config["modelProfiles"][-1]["id"]
-    for name in ("product", "planner"):
-        smoke.request("PATCH", f"/api/v5/systems/{system_id}/agents/{name}", {
-            "name": name, "engine": "", "modelProfileRef": profile_id,
-            "pathScope": [], "prompt": "", "maxTurns": 50, "timeoutSeconds": 600,
-        })
-    smoke.request("PATCH", f"/api/v5/systems/{system_id}/agents/developer", {
-        "name": "developer", "engine": smoke.EXECUTION_PROVIDER, "modelProfileRef": profile_id,
-        "pathScope": ["README.md", "app.py"], "prompt": "", "maxTurns": 50, "timeoutSeconds": 600,
-    })
+    smoke.configure_developer(system_id)
     smoke.request("PUT", f"/api/v5/systems/{system_id}/git-config", {
         "repos": [{
             "repoId": "app", "name": "Smoke App", "kind": "other",
@@ -119,7 +99,8 @@ def wait_status(work_item_id: str, target: str) -> dict:
 
 
 def main() -> int:
-    if not all((GITLAB_URL, GITLAB_TOKEN, smoke.ADMIN_PASSWORD, os.getenv("V5_AGENT_API_KEY"))):
+    if not all((GITLAB_URL, GITLAB_TOKEN, smoke.ADMIN_PASSWORD,
+                os.getenv("V5_AGENT_API_KEY"), os.getenv("V5_MODEL_API_KEY"))):
         print("SKIP: smoke-gitlab 缺少 GitLab、模型或管理员环境变量", file=sys.stderr)
         return 0
 

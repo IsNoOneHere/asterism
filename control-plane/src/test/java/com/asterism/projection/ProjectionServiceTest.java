@@ -160,20 +160,6 @@ class ProjectionServiceTest {
     }
 
     @Test
-    void executionPlanDraftedDoesNotChangeLifecycleProjection() {
-        var store = new InMemoryStore();
-        var service = service(store);
-
-        service.apply(event(1, "OwnerApprovalRequested"));
-        service.apply(event(2, "WorkItemActivated"));
-        service.apply(event(3, "ExecutionPlanDrafted"));
-
-        var item = store.findById("wi-1").orElseThrow();
-        assertThat(item.lifecycleStatus()).isEqualTo("activated");
-        assertThat(item.lastAppliedSequence()).isEqualTo(2);
-    }
-
-    @Test
     void reworkStartedReturnsToActivatedWithoutResettingApproval() {
         var store = new InMemoryStore();
         var service = service(store);

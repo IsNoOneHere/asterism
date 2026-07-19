@@ -18,6 +18,7 @@ missing=""
 [ -n "${ASTERISM_GITLAB_BASE_URL:-}" ] || missing="$missing ASTERISM_GITLAB_BASE_URL"
 [ -n "${ASTERISM_GITLAB_TOKEN:-}" ] || missing="$missing ASTERISM_GITLAB_TOKEN"
 [ -n "${V5_AGENT_API_KEY:-}" ] || missing="$missing V5_AGENT_API_KEY"
+[ -n "${V5_MODEL_API_KEY:-}" ] || missing="$missing V5_MODEL_API_KEY"
 [ -n "${V5_SMOKE_ADMIN_PASSWORD:-}" ] || missing="$missing V5_SMOKE_ADMIN_PASSWORD"
 if [ -n "$missing" ]; then
   echo "SKIP: smoke-gitlab 缺少环境变量:$missing"

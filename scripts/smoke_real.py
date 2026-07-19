@@ -24,9 +24,7 @@ HOST_REPO_ROOT = Path(os.getenv("V5_SMOKE_REPO_ROOT", os.getenv("V5_REPO_ROOT", 
 CONTAINER_REPO_ROOT = os.getenv("V5_SMOKE_CONTAINER_REPO_ROOT", "/repos").rstrip("/")
 TIMEOUT_SECONDS = int(os.getenv("V5_SMOKE_TIMEOUT_SECONDS", "240"))
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("V5_SMOKE_REQUEST_TIMEOUT_SECONDS", "60"))
-EXECUTION_PROVIDER = os.getenv("V5_SMOKE_EXECUTION_PROVIDER", "http").strip() or "http"
 SCENARIO = os.getenv("V5_SMOKE_SCENARIO", "basic").strip() or "basic"
-MODEL_PROVIDER = os.getenv("V5_AGENT_PROVIDER", "openai").strip() or "openai"
 
 
 def log(message: str) -> None:
@@ -133,40 +131,32 @@ def wait_system_ready(system_id: str) -> dict:
     raise RuntimeError(f"等待系统 readiness 超时: {last.get('issues') if last else 'none'}")
 
 
-def configure_fullstack_roles(system_id: str) -> None:
-    config = request("GET", f"/api/v5/systems/{system_id}/agent-config") or {}
-    profile_id = config["modelProfiles"][0]["id"]
-    role_ids = []
-    for name, scope, prompt in (
-        ("前端 Agent", ["frontend/"], "只修改 frontend/ 下的前端文件"),
-        ("后端 Agent", ["backend/"], "只修改 backend/ 下的后端文件"),
-    ):
-        updated = request("POST", f"/api/v5/systems/{system_id}/agent-roles", {
-            "name": name,
-            "engine": EXECUTION_PROVIDER,
-            "modelProfileRef": profile_id,
-            "pathScope": scope,
-            "prompt": prompt,
-            "maxTurns": int(os.getenv("V5_SMOKE_CLAUDE_MAX_TURNS", "50")),
-            "timeoutSeconds": int(os.getenv("V5_SMOKE_EXECUTION_TIMEOUT_SECONDS", "600")),
-        }) or {}
-        role_ids.append(updated["agentRoles"][-1]["id"])
-    default_role = config.get("defaultRoleId")
-    if default_role:
-        request("DELETE", f"/api/v5/systems/{system_id}/agent-roles/{default_role}")
-    request("PATCH", f"/api/v5/systems/{system_id}/execution-policy", {
-        "mode": "planner_select",
-        "defaultRoleId": role_ids[0],
+def configure_developer(system_id: str) -> str:
+    """真实 smoke 显式配置唯一的 Claude SDK developer，不依赖旧执行字段。"""
+
+    config = request("POST", f"/api/v5/systems/{system_id}/model-profiles", {
+        "name": "Smoke Claude",
+        "provider": "anthropic",
+        "model": os.getenv("V5_MODEL", os.getenv("V5_AGENT_MODEL", "")),
+        "baseUrl": os.getenv("V5_MODEL_BASE_URL", ""),
+        "apiKey": os.getenv("V5_MODEL_API_KEY", ""),
+        "supportsVision": False,
+    }) or {}
+    profile_id = config["modelProfiles"][-1]["id"]
+    request("PATCH", f"/api/v5/systems/{system_id}/agents/developer", {
+        "name": "developer",
+        "engine": "claude_sdk_team",
+        "modelProfileRef": profile_id,
+        "pathScope": [],
+        "prompt": "",
+        "maxTurns": int(os.getenv("V5_SMOKE_CLAUDE_MAX_TURNS", "50")),
+        "timeoutSeconds": int(os.getenv("V5_SMOKE_EXECUTION_TIMEOUT_SECONDS", "600")),
     })
-    log("已配置前端/后端两个 Agent 角色与独立路径范围")
+    return profile_id
 
 
 def changed_paths(diff_patch: str) -> set[str]:
     return set(re.findall(r"^diff --git a/(.+?) b/", diff_patch, re.MULTILINE))
-
-
-def legacy_model_config(model: str, base_url: str, api_key: str) -> dict:
-    return {"provider": MODEL_PROVIDER, "model": model, "baseUrl": base_url, "apiKey": api_key}
 
 
 def prepare_prd(system_id: str, goal: str, acceptance: str) -> dict:
@@ -205,52 +195,52 @@ def main() -> int:
     if not ADMIN_PASSWORD:
         print("缺少 V5_SMOKE_ADMIN_PASSWORD，请使用首次启动密码或显式配置的 admin 密码。", file=sys.stderr)
         return 2
-    if EXECUTION_PROVIDER == "claude_sdk" and not (os.getenv("V5_MODEL_API_KEY") or os.getenv("V5_ANTHROPIC_API_KEY")):
-        print("SKIP: Claude SDK 缺少 V5_MODEL_API_KEY（旧环境可继续用 V5_ANTHROPIC_API_KEY）。", file=sys.stderr)
+    if not os.getenv("V5_MODEL_API_KEY"):
+        print("缺少 V5_MODEL_API_KEY，Claude SDK Supervisor 无法执行。", file=sys.stderr)
         return 2
-    if EXECUTION_PROVIDER not in {"http", "claude_sdk"}:
-        print(f"不支持的 V5_SMOKE_EXECUTION_PROVIDER={EXECUTION_PROVIDER}", file=sys.stderr)
+    if not (os.getenv("V5_MODEL") or os.getenv("V5_AGENT_MODEL")):
+        print("缺少 V5_MODEL，Claude SDK Supervisor 无法选择模型。", file=sys.stderr)
         return 2
     if SCENARIO not in {"basic", "fullstack"}:
         print(f"不支持的 V5_SMOKE_SCENARIO={SCENARIO}", file=sys.stderr)
         return 2
-    if EXECUTION_PROVIDER == "claude_sdk":
-        compatible_url = os.getenv("V5_MODEL_BASE_URL", os.getenv("V5_ANTHROPIC_BASE_URL", "")).strip()
-        auth_mode = "AUTH_TOKEN" if compatible_url else "API_KEY"
-        log(f"Claude SDK 端点: {compatible_url or 'Anthropic 默认端点'}，鉴权变量: {auth_mode}")
+    compatible_url = os.getenv("V5_MODEL_BASE_URL", "").strip()
+    auth_mode = "AUTH_TOKEN" if compatible_url else "API_KEY"
+    log(f"Claude SDK 端点: {compatible_url or 'Anthropic 默认端点'}，鉴权变量: {auth_mode}")
 
     suffix = str(int(time.time()))
     system_id = f"smoke-system-{suffix}"
     repo_name = f"asterism-smoke-{suffix}"
     host_repo, repo_path = make_repo(repo_name)
-    model = os.getenv("V5_AGENT_MODEL", "gpt-4.1-mini")
-    base_url = os.getenv("V5_AGENT_BASE_URL", "")
-
     log(f"临时 repo: {host_repo}")
     fullstack = SCENARIO == "fullstack"
+    allowed_paths = ["frontend/", "backend/"] if fullstack else ["README.md", "app.py"]
+    test_commands = [
+        "python -c \"from pathlib import Path; assert 'Asterism web' in Path('frontend/page.txt').read_text(); assert 'Asterism API' in Path('backend/service.py').read_text()\""
+        if fullstack else
+        "python -c \"from pathlib import Path; assert 'Asterism smoke' in Path('README.md').read_text()\""
+    ]
     request("POST", "/api/v5/systems", {
         "systemId": system_id,
         "name": "Smoke Real",
         "description": "真实 LLM smoke",
         "repoPath": repo_path,
         "ownerUserId": ADMIN_USER,
-        "allowedPaths": ["frontend/", "backend/"] if fullstack else ["README.md", "app.py"],
+        "allowedPaths": allowed_paths,
         "forbiddenPaths": [],
-        "testCommands": [
-            "python -c \"from pathlib import Path; assert 'Asterism web' in Path('frontend/page.txt').read_text(); assert 'Asterism API' in Path('backend/service.py').read_text()\""
-            if fullstack else
-            "python -c \"from pathlib import Path; assert 'Asterism smoke' in Path('README.md').read_text()\""
-        ],
-        "agentConfig": {
-            "executionProvider": EXECUTION_PROVIDER,
-            "claudeMaxTurns": int(os.getenv("V5_SMOKE_CLAUDE_MAX_TURNS", "50")),
-            "executionTimeoutSeconds": int(os.getenv("V5_SMOKE_EXECUTION_TIMEOUT_SECONDS", "600")),
+        "testCommands": test_commands,
+        "gitConfiguration": {
+            "repos": [{
+                "repoId": "main", "name": "Smoke Repo", "kind": "fullstack" if fullstack else "other",
+                "gitlabProject": "", "defaultBranch": "main", "cloneMode": "local",
+                "localPath": repo_path, "allowedPaths": allowed_paths, "forbiddenPaths": [],
+                "testCommands": test_commands,
+            }],
+            "releaseMode": "local", "validationMode": "auto", "mrTargetBranch": "", "mrLabels": [],
         },
-        "modelProviderConfig": legacy_model_config(model, base_url, api_key),
     })
     log("系统已创建")
-    if fullstack:
-        configure_fullstack_roles(system_id)
+    configure_developer(system_id)
     wait_system_ready(system_id)
     log("系统 readiness 已通过")
 
@@ -272,10 +262,9 @@ def main() -> int:
     request("POST", f"/api/v5/work-items/{work_item_id}/signals/start_modification")
     wait_item(work_item_id, "modification_completed")
     modification = event_payload(wait_event(work_item_id, "ModificationCompleted"))
-    expected_provider = "handoff" if fullstack else EXECUTION_PROVIDER
-    if modification.get("executionProvider") != expected_provider:
-        raise RuntimeError(f"执行内核不一致: {modification.get('executionProvider')} != {expected_provider}")
-    if not fullstack and EXECUTION_PROVIDER == "claude_sdk" and (not modification.get("turns") or not modification.get("tokenUsage")):
+    if modification.get("executionProvider") != "claude_sdk_team":
+        raise RuntimeError(f"执行内核不一致: {modification.get('executionProvider')} != claude_sdk_team")
+    if not modification.get("turns") or not modification.get("tokenUsage"):
         raise RuntimeError(f"Claude SDK 审计摘要不完整: {modification}")
     diff_patch = modification.get("diffPatch", "")
     if "diff --git" not in diff_patch:
@@ -286,12 +275,10 @@ def main() -> int:
         expected = {"frontend/page.txt", "backend/service.py"}
         if not expected.issubset(paths):
             raise RuntimeError(f"前后端 diff 不完整: {sorted(paths)}")
-        stages = request("GET", f"/api/v5/work-items/{work_item_id}/events") or []
-        completed_roles = {event_payload(event).get("role") for event in stages
-                           if event.get("eventType") == "AgentStageCompleted"}
-        if len(completed_roles) < 2:
-            raise RuntimeError(f"前后端 Agent 阶段不足: {completed_roles}")
-    log(f"{EXECUTION_PROVIDER} diff 非空且 git apply --check 通过")
+    runs = modification.get("subagentRuns") or []
+    if not any(item.get("repo") == "main" for item in runs):
+        raise RuntimeError(f"缺少仓库子 Agent 审计记录: {runs}")
+    log("claude_sdk_team diff 非空且 git apply --check 通过")
 
     request("POST", f"/api/v5/work-items/{work_item_id}/signals/patch_apply_approved")
     wait_item(work_item_id, "validation_passed")

@@ -52,6 +52,7 @@ class ModelConfigurationMigrationIntegrationTest {
         ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/V4__unify_model_configuration.sql"));
         ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/V8__collapse_agent_configuration.sql"));
         ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/V8__collapse_agent_configuration.sql"));
+        ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/V15__unify_claude_sdk_team.sql"));
 
         var config = objectMapper.readTree(jdbc.sql("""
                 select model_provider_config::text from systems where system_id = :systemId
@@ -60,12 +61,12 @@ class ModelConfigurationMigrationIntegrationTest {
         assertThat(config.at("/modelProfiles/0/provider").asText()).isEqualTo("openai-compat");
         assertThat(config.at("/agents/0/name").asText()).isEqualTo("product");
         assertThat(config.at("/agents/0/modelProfileRef").asText()).isEqualTo("bm-main");
-        assertThat(config.at("/agents/1/name").asText()).isEqualTo("planner");
+        assertThat(config.at("/agents/1/name").asText()).isEqualTo("developer");
+        assertThat(config.at("/agents/1/engine").asText()).isEqualTo("claude_sdk_team");
         assertThat(config.at("/agents/1/modelProfileRef").asText()).isEqualTo("bm-main");
-        assertThat(config.at("/agents/2/name").asText()).isEqualTo("developer");
-        assertThat(config.at("/agents/2/engine").asText()).isEqualTo("http");
-        assertThat(config.at("/agents/2/modelProfileRef").asText()).isEqualTo("bm-main");
-        assertThat(config.get("agents")).hasSize(3);
+        assertThat(config.get("agents")).hasSize(2);
+        assertThat(config.at("/executionMigration/migrated").asBoolean()).isTrue();
+        assertThat(config.at("/executionMigration/from/0").asText()).isEqualTo("http");
         assertThat(config.get("modelRouting")).isNull();
         assertThat(config.get("agentRoles")).isNull();
         assertThat(config.get("defaultAgentRoleId")).isNull();

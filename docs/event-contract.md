@@ -4,32 +4,31 @@
 
 | Event | 说明 |
 | --- | --- |
-| `ExecutionPlanDrafted` | 计划与 assignments 已生成，不改状态 |
 | `PRDUpdated` | PRD 草稿已更新；手工编辑时 payload 含 `source: manual_edit` 和最新 `status` |
-| `AgentStageCompleted` | 单个 role 完成，payload 含 stageIndex、role、repo、engine、摘要、changedPaths、tokenUsage，不含 Key |
-| `ModificationCompleted` | 单 Agent diff 或多段无冲突合并 diff 完成；多仓另含 repoDiffs |
-| `WorkerBlocked` | 执行被阻塞 |
+| `CodingAttemptStarted` | Claude SDK Supervisor 已启动，payload 含 architecture、supervisor、repositories、contextManifestId |
+| `AgentStageCompleted` | 仓库子 Agent 完成，payload 含 stageIndex、role、repo、engine、changedPaths、agentId，不含 Key |
+| `ModificationCompleted` | Coding Attempt 已生成有效 Diff；多仓 Diff 同时写入 `repoDiffs` |
+| `WorkerBlocked` | Activity、模型、门禁或发布执行被阻塞，payload 含稳定 reason 与 failedPhase |
+| `PatchApplied` / `PatchRejected` | 候选代码已应用或被人工打回 |
+| `ValidationPassed` / `ValidationFailed` | 自动或人工验证结果 |
+| `RepositoryReleasePrepared` | 单仓提交、推送和 MR 元数据已准备 |
 | `MergeRequestCreated` | 每仓 MR 已创建或复用；首个事件把状态推进到 waiting_merge |
 | `MergeRequestMerged` | Temporal 轮询确认单仓 MR 已合并，不单独改状态 |
 | `MergeRequestClosed` | Temporal 轮询确认 MR 未合并而关闭，状态转 worker_blocked |
 | `ReleaseCompleted` | local 模式提交完成，或 gitlab 模式全部 MR 已合并 |
 
-`AgentStageCompleted` 使用 `caseId:AgentStageCompleted:<signalId>:stage:<index>:<role>` 作为稳定幂等键；causationId 使用相同 stage suffix。
+`AgentStageCompleted` 使用 `caseId:AgentStageCompleted:<signalId>:subagent:<index>:<agentId>` 作为稳定幂等键；同一个 Coding Attempt 内的仓库子 Agent 不会互相去重。
 
-相邻 Agent 通过 `HandoffContext{role,repo,summary,diff_patch,interface_notes}` 列表交接。单段 diff 不超过 32KB 时完整传递；超出后 `diff_patch` 只保留 changed paths、`diff --git` 行和 hunk 头，且最终仍限制在 32KB。
+`WorkerBlocked.payload.reason` 的主要值：
 
-`WorkerBlocked.payload.reason` 额外支持：
+- `context_fetch_failed`：获取需求上下文失败。
+- `coding_attempt_failed`：Claude SDK Supervisor 异常、未生成 Diff 或 Diff 门禁失败。
+- `patch_apply_failed` / `patch_revert_failed`：本地 Patch 应用或回滚失败。
+- `validation_activity_failed`：验证 Activity 本身异常；测试不通过使用 `ValidationFailed`。
+- `mr_create_failed` / `mr_ready_failed`：GitLab 推送、MR 创建或 ready 操作失败。
+- `release_failed` / `push_failed`：local 发布或推送失败。
+- `recovery_artifact_missing`：阶段恢复缺少上下文或候选 Diff。
 
-- `role_scope_violation`：role diff 越出自身 path scope。
-- `handoff_conflict`：两个 assignment 修改同一文件。
-- `execution_failed`：执行内核异常或阶段 diff 无效。
-- `mr_create_failed`：Git push 或 MR 创建在幂等重试后仍失败。
-
-新快照 Case 的多 assignment 执行失败时，`WorkerBlocked.payload` 还包含：
-
-- `completed_stages`：已完成段的 role、summary、changed_paths。
-- `failed_stage`：失败段的 index、role。
-
-此时 `rework` 先发出 `ReworkStarted`，随后直接从 `failed_stage.index` 续跑；已完成段的结果和 handoff 复用，不重新抓上下文、规划或执行。其它失败仍保持原语义：`rework` 回到 `activated`，等待新的 `start_modification`。全新重跑使用 cancel + 新工作项。
+`retry_current_phase` 根据 `failedPhase` 恢复对应 checkpoint；`rework` 自动回到 Coding Attempt 完整重做；`rework_with_latest_config` 只替换 Agent 配置快照后重试 Coding。所有动作先产生业务事件，再以 `TemporalActionCompleted` 记录动作是否被接受。
 
 完整生命周期迁移见 [lifecycle-transitions.json](lifecycle-transitions.json)。

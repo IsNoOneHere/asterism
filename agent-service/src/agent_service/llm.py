@@ -42,7 +42,7 @@ class OpenAIChatClient:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,
         }
-        # ProductAgent/Planner 使用模型 JSON Output，execute 仍返回纯 diff 文本。
+        # ProductAgent 使用结构化 JSON 输出，代码执行不经过 agent-service。
         if json_mode:
             request["response_format"] = {"type": "json_object"}
         response = client.chat.completions.create(**request)

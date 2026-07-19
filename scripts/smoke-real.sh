@@ -29,8 +29,8 @@ if [ -z "${V5_SMOKE_ADMIN_PASSWORD:-}" ]; then
   exit 2
 fi
 
-if [ "${V5_SMOKE_EXECUTION_PROVIDER:-http}" = "claude_sdk" ] && [ -z "${V5_MODEL_API_KEY:-${V5_ANTHROPIC_API_KEY:-}}" ]; then
-  echo "SKIP: Claude SDK 缺少 V5_MODEL_API_KEY（旧环境可继续用 V5_ANTHROPIC_API_KEY）。"
+if [ -z "${V5_MODEL_API_KEY:-}" ]; then
+  echo "缺少 V5_MODEL_API_KEY，Claude SDK Supervisor 无法执行。"
   exit 2
 fi
 

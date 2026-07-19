@@ -34,7 +34,6 @@ async def report_readiness(settings: Settings) -> None:
         targets_response.raise_for_status()
         targets = targets_response.json()
 
-        http_ready = await _reachable(client, settings.agent_service_url.rstrip("/") + "/healthz")
         target_reports = []
         for target in targets:
             repo_path = str(target.get("repoPath", ""))
@@ -42,42 +41,26 @@ async def report_readiness(settings: Settings) -> None:
             local_paths = [str(repo.get("localPath", "")) for repo in repos if repo.get("cloneMode") != "gitlab"]
             model = await _model_readiness(client, settings, str(target["systemId"]))
             agents = await _agent_readiness(client, settings, str(target["systemId"]))
-            stages = model.get("stages", {})
-            prd = stages.get("prd", {})
-            planning = stages.get("planning", {})
-            diff = stages.get("diff", {})
+            prd = model.get("stages", {}).get("prd", {})
             target_reports.append({
                 "systemId": target["systemId"],
                 "repositoryAccessible": all(Path(path).is_dir() for path in local_paths),
                 "gitRepository": all(_is_git_repository(path) for path in local_paths),
-                "modelReady": bool(model.get("ready")),
-                "model": str(prd.get("model", model.get("model", ""))),
                 "prdModelReady": bool(prd.get("ready", model.get("ready"))),
                 "prdModel": str(prd.get("name") or prd.get("model", model.get("model", ""))),
-                "planningModelReady": bool(planning.get("ready", model.get("ready"))),
-                "planningModel": str(planning.get("name") or planning.get("model", model.get("model", ""))),
-                "diffModelReady": bool(diff.get("ready", model.get("ready"))),
-                "diffModel": str(diff.get("name") or diff.get("model", model.get("model", ""))),
-                "claudeReady": agents["claude_ready"],
-                "claudeModel": agents["claude_model"],
-                "claudeConfigSource": agents["source"],
-                "deepagentsReady": agents["deepagents_ready"],
-                "deepagentsModel": agents["deepagents_model"],
+                "claudeSdkTeamReady": agents["ready"],
+                "claudeSdkTeamModel": agents["model"],
+                "configSource": agents["source"],
             })
 
         capabilities = ["fake"]
-        if http_ready:
-            capabilities.append("http")
         if importlib.util.find_spec("claude_agent_sdk"):
-            capabilities.append("claude_sdk")
-        if importlib.util.find_spec("deepagents"):
-            capabilities.append("deepagents")
+            capabilities.append("claude_sdk_team")
         payload = {
             "workerId": settings.worker_id,
             "taskQueue": settings.temporal_task_queue,
             "defaultExecutionProvider": settings.default_engine,
             "capabilities": capabilities,
-            "httpProviderReachable": http_ready,
             "releasePush": settings.release_push,
             "checkedAt": datetime.now(timezone.utc).isoformat(),
             "targets": target_reports,
@@ -89,13 +72,6 @@ async def report_readiness(settings: Settings) -> None:
         )
         response.raise_for_status()
         log.info("Worker readiness 已上报，系统数=%s capabilities=%s", len(target_reports), capabilities)
-
-
-async def _reachable(client: httpx.AsyncClient, url: str) -> bool:
-    try:
-        return (await client.get(url)).status_code == 200
-    except httpx.HTTPError:
-        return False
 
 
 async def _model_readiness(client: httpx.AsyncClient, settings: Settings, system_id: str) -> dict:
@@ -132,19 +108,15 @@ async def _agent_readiness(client: httpx.AsyncClient, settings: Settings, system
                 return True, settings.default_model
             return False, ""
 
-        claude_ready, claude_model = configured("claude_sdk")
-        deep_ready, deep_model = configured("deepagents")
+        ready, model = configured("claude_sdk_team")
         return {
-            "claude_ready": claude_ready,
-            "claude_model": claude_model,
-            "deepagents_ready": deep_ready,
-            "deepagents_model": deep_model,
+            "ready": ready,
+            "model": model,
             "source": "system" if developer.get("model_profile_ref") else "worker_env",
         }
     except httpx.HTTPError:
         # 心跳失败不能泄露配置或影响 Worker 主轮询。
-        return {"claude_ready": False, "claude_model": "", "deepagents_ready": False,
-                "deepagents_model": "", "source": "unconfigured"}
+        return {"ready": False, "model": "", "source": "unconfigured"}
 
 
 def _is_git_repository(repo_path: str) -> bool:

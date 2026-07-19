@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
 class LifecycleStatus(StrEnum):
@@ -59,9 +59,6 @@ class RepoSnapshot(BaseModel):
 
 
 class CaseInput(BaseModel):
-    # 旧 history 的散字段保留在 model_extra，仅用于无快照 replay。
-    model_config = ConfigDict(extra="allow")
-
     case_id: str
     work_item_id: str
     prd_id: str
@@ -77,10 +74,10 @@ class CaseInput(BaseModel):
     mr_target_branch: str = ""
     mr_labels: list[str] = Field(default_factory=list)
     agent_config_snapshot: AgentConfigSnapshot | None = None
-    execution_architecture: str = "legacy_planner_v1"
+    execution_architecture: str = "claude_sdk_team"
 
     def effective_repos(self) -> list[RepoSnapshot]:
-        # 旧 workflow history 没有 repos，继续使用原单仓字段。
+        # 单仓调用可继续使用顶层字段，多仓统一读取 repos。
         if self.repos:
             return self.repos
         return [RepoSnapshot(
@@ -104,50 +101,6 @@ class ProjectionEvent(BaseModel):
     correlationId: str
     causationId: str | None = None
     idempotencyKey: str
-
-
-class HandoffContext(BaseModel):
-    role: str
-    repo: str = ""
-    summary: str
-    diff_patch: str
-    interface_notes: str = ""
-
-
-class ExecutionRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    case_id: str
-    work_item_id: str
-    system_id: str
-    repo_path: str
-    repo: RepoSnapshot | None = None
-    goal: str
-    acceptance_criteria: list[str] = Field(default_factory=list)
-    feedback: str = ""
-    plan: "ExecutionPlan"
-    memories: list[dict[str, Any]] = Field(default_factory=list)
-    context_manifest_id: str = ""
-    allowed_paths: list[str] = Field(default_factory=list)
-    forbidden_paths: list[str] = Field(default_factory=list)
-    test_commands: list[str] = Field(default_factory=list)
-    agent_config_snapshot: AgentConfigSnapshot | None = None
-    file_listing: str = ""
-    file_contents: dict[str, str] = Field(default_factory=dict)
-    previous_attempt: "PreviousAttempt | None" = None
-    role_id: str = ""
-    role_name: str = ""
-    model_profile_id: str = ""
-    role_scope: list[str] = Field(default_factory=list)
-    role_prompt: str = ""
-    handoff: list[HandoffContext] = Field(default_factory=list)
-    assignment_index: int = 0
-    step_refs: list[str] = Field(default_factory=list)
-
-
-class PreviousAttempt(BaseModel):
-    diff: str
-    apply_error: str
 
 
 class PatchApplyResult(BaseModel):
@@ -180,16 +133,12 @@ class ValidationResult(BaseModel):
 class ExecutionResult(BaseModel):
     summary: str
     diff_patch: str
-    interface_notes: str | None = None
     execution_provider: str = ""
     turns: int | None = None
     token_usage: dict[str, Any] = Field(default_factory=dict)
-    role_id: str = ""
     repo: str = ""
     engine: str = ""
     changed_paths: list[str] = Field(default_factory=list)
-    blocked_reason: str = ""
-    blocked_detail: str = ""
     session_id: str = ""
     subagent_runs: list["SubagentRun"] = Field(default_factory=list)
 
@@ -233,7 +182,7 @@ class CodingAttemptResult(BaseModel):
     token_usage: dict[str, Any] = Field(default_factory=dict)
     session_id: str = ""
     turns: int | None = None
-    execution_provider: str = "claude_sdk_supervisor"
+    execution_provider: str = "claude_sdk_team"
 
 
 class ReleaseResult(BaseModel):
@@ -269,40 +218,6 @@ class ContextSnapshot(BaseModel):
     system_id: str
     manifest_id: str
     approved_memories: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class ExecutionPlan(BaseModel):
-    steps: list[str] = Field(default_factory=list)
-    target_files: list[str] = Field(default_factory=list)
-    test_plan: list[str] = Field(default_factory=list)
-    risks: list[str] = Field(default_factory=list)
-    assignments: list["AgentAssignment"] = Field(default_factory=list)
-
-
-class AgentAssignment(BaseModel):
-    role: str
-    repo: str = ""
-    scope_paths: list[str] = Field(default_factory=list)
-    step_refs: list[str] = Field(default_factory=list)
-
-
-class AvailableAgent(BaseModel):
-    name: str
-    engine: str
-    path_scope: list[str] = Field(default_factory=list)
-
-
-class PlanRequest(BaseModel):
-    system_id: str
-    prd: PrdSpec
-    repo_summary: str = ""
-    repos: list[RepoSnapshot] = Field(default_factory=list)
-    memories: list[dict[str, Any]] = Field(default_factory=list)
-    allowed_paths: list[str] = Field(default_factory=list)
-    context_manifest_id: str
-    feedback: str = ""
-    available_agents: list[AvailableAgent] | None = None
-    agent_config_snapshot: AgentConfigSnapshot | None = None
 
 
 class RouteIndexInput(BaseModel):

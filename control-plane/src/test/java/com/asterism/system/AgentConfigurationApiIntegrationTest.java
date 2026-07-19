@@ -49,8 +49,8 @@ class AgentConfigurationApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.modelProfiles[0].apiKeySet").value(true))
                 .andExpect(jsonPath("$.agents[0].name").value("product"))
-                .andExpect(jsonPath("$.agents[1].name").value("planner"))
-                .andExpect(jsonPath("$.agents[2].name").value("developer"))
+                .andExpect(jsonPath("$.agents[1].name").value("developer"))
+                .andExpect(jsonPath("$.engines[0]").value("claude_sdk_team"))
                 .andExpect(jsonPath("$.modelRouting").doesNotExist())
                 .andExpect(content().string(not(containsString("profile-secret"))))
                 .andExpect(content().string(not(containsString("\"apiKey\":"))))
@@ -64,33 +64,23 @@ class AgentConfigurationApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.agents[0].modelProfileRef").value(profileId));
 
-        mockMvc.perform(patch("/api/v5/systems/" + systemId + "/agents/planner")
-                        .contentType(MediaType.APPLICATION_JSON).content("""
-                                {"name":"planner","modelProfileRef":"%s"}
-                                """.formatted(profileId)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.agents[1].modelProfileRef").value(profileId));
-
         mockMvc.perform(patch("/api/v5/systems/" + systemId + "/agents/developer")
                         .contentType(MediaType.APPLICATION_JSON).content("""
-                                {"name":"developer","engine":"claude_sdk","modelProfileRef":"%s",
+                                {"name":"developer","engine":"claude_sdk_team","modelProfileRef":"%s",
                                  "pathScope":["src"],"maxTurns":12,"timeoutSeconds":300}
                                 """.formatted(profileId)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.agents[2].engine").value("claude_sdk"));
+                .andExpect(jsonPath("$.agents[1].engine").value("claude_sdk_team"));
 
         mockMvc.perform(post("/api/v5/systems/" + systemId + "/agents")
                         .contentType(MediaType.APPLICATION_JSON).content("""
-                                {"name":"frontend-dev","engine":"claude_sdk","modelProfileRef":"%s",
+                                {"name":"frontend-dev","engine":"claude_sdk_team","modelProfileRef":"%s",
                                  "pathScope":["web"],"prompt":"只改前端","maxTurns":12,"timeoutSeconds":300}
                                 """.formatted(profileId)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.agents[3].name").value("frontend-dev"))
-                .andExpect(jsonPath("$.agents[3].kind").value("custom"));
+                .andExpect(status().isMethodNotAllowed());
 
         mockMvc.perform(delete("/api/v5/systems/" + systemId + "/agents/product"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("BUILTIN_AGENT_REQUIRED"));
+                .andExpect(status().isMethodNotAllowed());
 
         mockMvc.perform(get("/api/v5/systems"))
                 .andExpect(status().isOk())

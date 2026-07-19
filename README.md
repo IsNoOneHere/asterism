@@ -1,25 +1,22 @@
 # Asterism
 
-Asterism 是一个以 Temporal 为生命周期权威、支持多执行内核和多 Agent 顺序 handoff 的开源 AI 代码开发工作台。
+Asterism 是一个以 Temporal 为生命周期权威、以 Claude SDK Supervisor 为代码执行内核的开源 AI 代码开发工作台。
 
-> Asterism is an open-source AI coding workbench with a Temporal-controlled lifecycle, pluggable execution engines, and artifact-based multi-agent handoff.
+> Asterism is an open-source AI coding workbench with a Temporal-controlled lifecycle and a Claude SDK supervisor that delegates work to repository-scoped subagents.
 
 ```mermaid
 flowchart LR
   UI[Workbench] --> CP[Control Plane]
   CP --> T[Temporal]
   T --> W[Worker]
-  W --> P[Model Profile]
-  W --> E{Engine}
-  E --> C[Claude SDK]
-  E --> D[Deep Agents]
-  E --> H[HTTP]
-  W --> G[Git branch + commit]
+  W --> S[Claude SDK Supervisor]
+  S --> A[Repository Subagents]
+  A --> G[Git diff / branch / MR]
 ```
 
 ## Quickstart
 
-要求 Docker Compose、Java 21/Maven 3.9（开发测试）、Python 3.12 和 Node.js 20。
+要求 Docker Compose、Java 21/Maven 3.9（开发编译）、Python 3.12 和 Node.js 20。
 
 ```bash
 cp .env.example .env
@@ -32,12 +29,12 @@ make doctor
 
 ## 配置模型
 
-1. 在“系统配置”创建系统并设置仓库、允许路径和测试命令。
-2. 在“Agent / 模型配置”的模型列表创建 Model Profile；API Key 只写入，页面只显示 `apiKeySet`。
-3. 为内置 `product/planner/developer` 选择 Profile；`developer` 的 Profile 是整个 Claude SDK 团队唯一的模型凭证。
-4. Claude SDK 会按仓库自动生成子 Agent，无需手工创建 frontend/backend Agent；自定义 Agent 只用于 `deepagents`、`http`、`fake` 或旧 Planner。
+1. 在“系统配置”创建系统，按仓库设置路径门禁和测试命令。
+2. 在“Agent / 模型配置”创建 Model Profile；API Key 只写入，页面只显示 `apiKeySet`。
+3. 为 `product` 选择 PRD 对话模型，为 `developer` 选择代码模型。
+4. `developer` 使用 `claude_sdk_team`。Claude SDK 会为每个仓库自动生成受权限约束的子 Agent，无需手工创建 frontend/backend Agent。
 
-旧 `businessModels` 和单模型 JSON 由 Flyway 一次性迁入 Model Profile，运行期不再维护第二套模型池。
+生产代码只支持 `claude_sdk_team`；`fake` 实现保留为 `ExecutionProvider` 协议的测试基线。
 
 ## 截图反馈
 
@@ -47,17 +44,17 @@ make doctor
 2. 立即看到自己的消息和“正在分析…”占位，等待 AI 追问。
 3. 在右侧草稿直接填写验收标准，无需再组织一段对话。
 4. 在最新回复的页面卡片点击“是这个”或“不是”。
-5. 草稿完整后在聊天区点击“确认 PRD”，等待修改、验证和发布结果。
+5. 草稿完整后点击“确认 PRD”，等待修改、验证和发布结果。
 
 管理员首次使用也只需三步：
 
 1. 在 Agent / 模型配置中勾选一个支持图片理解的 Model Profile。
 2. 在“系统知识”中运行路由索引。
-3. 审批 worker 提取的页面、路由和接口 candidate；只有 approved 条目参与截图匹配。
+3. 审批 Worker 提取的页面、路由和接口 candidate；只有 approved 条目参与截图匹配。
 
 ## 文档
 
-- [架构与两层配置](docs/architecture.md)
+- [架构与配置](docs/architecture.md)
 - [事件契约](docs/event-contract.md)
 - [部署与故障处理](docs/operations.md)
 - [路线图](docs/roadmap.md)

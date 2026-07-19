@@ -17,10 +17,10 @@ test('projects out-of-order multi-agent and multi-repository events into one sev
   const flow = buildWorkItemFlow(workItem('waiting_merge', { waitingFor: 'gitlab' }), [
     event(11, 'MergeRequestMerged', { repo: 'backend', mrIid: 21, mrUrl: 'https://gitlab/backend/21' }),
     event(1, 'OwnerApprovalRequested'),
-    event(3, 'ExecutionPlanDrafted', { plan: { steps: ['改后端', '改前端'], assignments: [{ role: 'backend-agent', repo: 'backend' }, { role: 'frontend-agent', repo: 'frontend' }] } }),
+    event(3, 'CodingAttemptStarted', { architecture: 'claude_sdk_team', supervisor: { role: 'developer', engine: 'claude_sdk_team' }, repositories: ['backend', 'frontend'] }),
     event(2, 'WorkItemActivated'),
-    event(4, 'AgentStageCompleted', { stageIndex: 0, role: 'backend-agent', repo: 'backend', engine: 'claude_sdk', summary: '后端完成', changedPaths: ['src/Api.java'] }),
-    event(5, 'AgentStageCompleted', { stageIndex: 1, role: 'frontend-agent', repo: 'frontend', engine: 'http', summary: '前端完成', changedPaths: ['src/App.tsx'] }),
+    event(4, 'AgentStageCompleted', { stageIndex: 1, role: 'backend-agent', repo: 'backend', engine: 'claude_sdk_team', summary: '后端完成', changedPaths: ['src/Api.java'] }),
+    event(5, 'AgentStageCompleted', { stageIndex: 2, role: 'frontend-agent', repo: 'frontend', engine: 'claude_sdk_team', summary: '前端完成', changedPaths: ['src/App.tsx'] }),
     event(6, 'ModificationCompleted', { summary: '跨仓修改完成', repoDiffs: [{ repo: 'backend', diffPatch: 'diff --git a/src/Api.java b/src/Api.java\n+x' }, { repo: 'frontend', diffPatch: 'diff --git a/src/App.tsx b/src/App.tsx\n+y' }] }),
     event(7, 'PatchApplied'),
     event(8, 'ValidationPassed', { commands: [{ repo: 'backend', command: 'mvn test', exitCode: 0 }] }),
@@ -34,8 +34,8 @@ test('projects out-of-order multi-agent and multi-repository events into one sev
   expect(flow.currentStageId).toBe('release');
   expect(flow.stages.find((stage) => stage.id === 'release')).toMatchObject({ status: 'waiting', waitingFor: 'GitLab' });
   expect(flow.stages.find((stage) => stage.id === 'execution')?.agents).toEqual(expect.arrayContaining([
-    expect.objectContaining({ role: 'backend-agent', repo: 'backend', engine: 'claude_sdk', status: 'completed' }),
-    expect.objectContaining({ role: 'frontend-agent', repo: 'frontend', engine: 'http', status: 'completed' }),
+    expect.objectContaining({ role: 'backend-agent', repo: 'backend', engine: 'claude_sdk_team', status: 'completed' }),
+    expect.objectContaining({ role: 'frontend-agent', repo: 'frontend', engine: 'claude_sdk_team', status: 'completed' }),
   ]));
   expect(flow.repositories).toEqual(expect.arrayContaining([
     expect.objectContaining({ repo: 'backend', branch: 'wi/backend', commitHash: 'abc12345', mrIid: 21, status: 'merged' }),
@@ -48,19 +48,19 @@ test('projects Claude SDK Supervisor and native subagents without a Planner node
   const flow = buildWorkItemFlow(workItem('modification_completed', { waitingFor: 'owner' }), [
     event(1, 'WorkItemActivated'),
     event(2, 'CodingAttemptStarted', {
-      architecture: 'claude_supervisor_v1', supervisor: { role: 'developer', engine: 'claude_sdk' },
+      architecture: 'claude_sdk_team', supervisor: { role: 'developer', engine: 'claude_sdk_team' },
       repositories: ['backend', 'frontend'],
     }),
     event(3, 'AgentStageCompleted', {
-      stageIndex: 1, role: 'backend-dev', repo: 'backend', engine: 'claude_sdk',
+      stageIndex: 1, role: 'backend-dev', repo: 'backend', engine: 'claude_sdk_team',
       summary: '后端完成', changedPaths: ['src/Api.java'], agentId: 'agent-back',
     }),
     event(4, 'AgentStageCompleted', {
-      stageIndex: 2, role: 'frontend-dev', repo: 'frontend', engine: 'claude_sdk',
+      stageIndex: 2, role: 'frontend-dev', repo: 'frontend', engine: 'claude_sdk_team',
       summary: '前端完成', changedPaths: ['src/App.tsx'], agentId: 'agent-front',
     }),
     event(5, 'ModificationCompleted', {
-      executionProvider: 'claude_sdk_supervisor', sessionId: 'session-team',
+      executionProvider: 'claude_sdk_team', sessionId: 'session-team',
       repoDiffs: [
         { repo: 'backend', diffPatch: 'diff --git a/src/Api.java b/src/Api.java\n+x' },
         { repo: 'frontend', diffPatch: 'diff --git a/src/App.tsx b/src/App.tsx\n+y' },
@@ -68,10 +68,9 @@ test('projects Claude SDK Supervisor and native subagents without a Planner node
     }),
   ]);
 
-  expect(flow.plan).toBeNull();
   expect(flow.currentStageId).toBe('patch');
   expect(flow.stages.find((stage) => stage.id === 'execution')?.agents).toEqual([
-    expect.objectContaining({ role: 'developer · Supervisor', engine: 'claude_sdk', status: 'completed' }),
+    expect.objectContaining({ role: 'developer · Supervisor', engine: 'claude_sdk_team', status: 'completed' }),
     expect.objectContaining({ role: 'backend-dev', repo: 'backend', status: 'completed' }),
     expect.objectContaining({ role: 'frontend-dev', repo: 'frontend', status: 'completed' }),
   ]);
@@ -79,7 +78,6 @@ test('projects Claude SDK Supervisor and native subagents without a Planner node
 });
 
 test.each([
-  ['planner_failed', 'execution', '执行计划生成失败'],
   ['coding_attempt_failed', 'execution', 'Claude SDK Coding Attempt 执行失败'],
   ['patch_apply_failed', 'patch', 'Patch 应用失败'],
   ['test_failed', 'validation', '自动检查失败'],
@@ -100,10 +98,10 @@ test('falls back to the lifecycle phase opened by the latest boundary event', ()
 
 test('keeps retry history while the main graph shows only the latest attempt', () => {
   const flow = buildWorkItemFlow(workItem('modification_completed', { waitingFor: 'owner' }), [
-    event(1, 'WorkItemActivated'), event(2, 'ExecutionPlanDrafted', { plan: { steps: ['首次执行'] } }),
+    event(1, 'WorkItemActivated'), event(2, 'CodingAttemptStarted', { supervisor: { role: 'developer', engine: 'claude_sdk_team' } }),
     event(3, 'ModificationCompleted', { diffPatch: 'diff --git a/a.ts b/a.ts\n+x' }), event(4, 'PatchApplied'),
     event(5, 'ValidationFailed', { failedCommand: 'npm test', stderrTail: '断言失败' }),
-    event(6, 'ReworkStarted'), event(7, 'ExecutionPlanDrafted', { plan: { steps: ['修复测试'] } }),
+    event(6, 'ReworkStarted'), event(7, 'CodingAttemptStarted', { supervisor: { role: 'developer', engine: 'claude_sdk_team' } }),
     event(8, 'ModificationCompleted', { diffPatch: 'diff --git a/a.ts b/a.ts\n+y' }),
   ]);
 
@@ -138,7 +136,7 @@ test('uses lifecycle boundaries for exact stage times', () => {
   }), [
     event(1, 'OwnerApprovalRequested'),
     event(2, 'WorkItemActivated'),
-    event(3, 'ExecutionPlanDrafted', { plan: { steps: ['修改'] } }),
+    event(3, 'CodingAttemptStarted', { supervisor: { role: 'developer', engine: 'claude_sdk_team' } }),
     event(4, 'ModificationCompleted', { diffPatch: 'diff --git a/a.ts b/a.ts\n+x' }),
     event(5, 'PatchApplied'),
     event(6, 'ValidationPassed', { commands: [{ command: 'npm test', exitCode: 0 }] }),
@@ -157,44 +155,44 @@ test('uses lifecycle boundaries for exact stage times', () => {
   ]);
 });
 
-test('shows the next Agent running after execution has started', () => {
+test('shows the supervisor running while completed subagents accumulate', () => {
   const flow = buildWorkItemFlow(workItem('activated', { waitingFor: 'worker' }), [
     event(1, 'WorkItemActivated'),
-    event(2, 'ExecutionPlanDrafted', { plan: { assignments: [{ role: 'frontend' }, { role: 'backend' }] } }),
-    event(3, 'AgentStageCompleted', { stageIndex: 0, role: 'frontend', summary: '前端完成' }),
+    event(2, 'CodingAttemptStarted', { supervisor: { role: 'developer', engine: 'claude_sdk_team' } }),
+    event(3, 'AgentStageCompleted', { stageIndex: 1, role: 'frontend', summary: '前端完成' }),
   ]);
 
   expect(flow.stages.find((stage) => stage.id === 'execution')).toMatchObject({ status: 'running', waitingFor: 'Agent' });
   expect(flow.stages.find((stage) => stage.id === 'execution')?.agents).toEqual([
+    expect.objectContaining({ role: 'developer · Supervisor', status: 'running' }),
     expect.objectContaining({ role: 'frontend', status: 'completed' }),
-    expect.objectContaining({ role: 'backend', status: 'running' }),
   ]);
 });
 
-test('resumes a failed Agent without retaining the old error', () => {
+test('starts a clean supervisor attempt after rework without retaining the old error', () => {
   const flow = buildWorkItemFlow(workItem('activated', { waitingFor: 'worker' }), [
     event(1, 'WorkItemActivated'),
-    event(2, 'ExecutionPlanDrafted', { plan: { assignments: [{ role: 'frontend' }, { role: 'backend' }] } }),
-    event(3, 'AgentStageCompleted', { stageIndex: 0, role: 'frontend', summary: '前端完成', changedPaths: ['web/app.ts'] }),
-    event(4, 'WorkerBlocked', { reason: 'execution_failed', detail: 'ActivityError | internal trace', failed_stage: { index: 1, role: 'backend' } }),
+    event(2, 'CodingAttemptStarted', { supervisor: { role: 'developer', engine: 'claude_sdk_team' } }),
+    event(3, 'AgentStageCompleted', { stageIndex: 1, role: 'frontend', summary: '前端完成', changedPaths: ['web/app.ts'] }),
+    event(4, 'WorkerBlocked', { reason: 'coding_attempt_failed', detail: 'ActivityError | internal trace' }),
     event(5, 'ReworkStarted'),
+    event(6, 'CodingAttemptStarted', { supervisor: { role: 'developer', engine: 'claude_sdk_team' } }),
   ]);
 
   const execution = flow.stages.find((stage) => stage.id === 'execution')!;
   expect(execution).toMatchObject({ status: 'running', waitingFor: 'Agent' });
   expect(execution.failureReason).toBeUndefined();
-  expect(execution.events.map((item) => item.eventType)).toEqual(['ReworkStarted']);
+  expect(execution.events.map((item) => item.eventType)).toEqual(['ReworkStarted', 'CodingAttemptStarted']);
   expect(execution.agents).toEqual([
-    expect.objectContaining({ role: 'frontend', status: 'completed', changedPaths: ['web/app.ts'] }),
-    expect.objectContaining({ role: 'backend', status: 'running', changedPaths: [] }),
+    expect.objectContaining({ role: 'developer · Supervisor', status: 'running' }),
   ]);
   expect(flow.attempts).toHaveLength(2);
-  expect(flow.attempts[0]).toMatchObject({ status: 'failed', failureReason: 'Agent 执行失败' });
+  expect(flow.attempts[0]).toMatchObject({ status: 'failed', failureReason: 'Claude SDK Coding Attempt 执行失败' });
 });
 
 test('uses the ValidationFailed top-level repo for every command', () => {
   const flow = buildWorkItemFlow(workItem('validation_failed', { waitingFor: 'owner' }), [
-    event(1, 'ExecutionPlanDrafted', { plan: { assignments: [{ role: 'frontend', repo: 'frontend' }] } }),
+    event(1, 'CodingAttemptStarted', { supervisor: { role: 'developer', engine: 'claude_sdk_team' } }),
     event(2, 'ModificationCompleted', { repoDiffs: [{ repo: 'frontend', diffPatch: 'diff --git a/web.ts b/web.ts\n+x' }] }),
     event(3, 'PatchApplied'),
     event(4, 'ValidationFailed', {

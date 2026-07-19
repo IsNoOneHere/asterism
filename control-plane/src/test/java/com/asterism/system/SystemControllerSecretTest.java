@@ -19,14 +19,14 @@ import static org.mockito.Mockito.when;
 
 class SystemControllerSecretTest {
     @Test
-    void legacyPutKeepsAgentConfigWhenRequestOmitsIt() {
+    void updateClearsRetiredAgentConfigAndKeepsModelSecrets() {
         var saved = new AtomicReference<SystemProfile>();
         var repo = mock(SystemProfileRepository.class);
         var aggregate = mock(JdbcAggregateTemplate.class);
         var current = existing();
         current = new SystemProfile(current.systemId(), current.name(), current.description(), current.repoPath(),
                 current.ownerUserId(), current.allowedPaths(), current.forbiddenPaths(), current.testCommands(),
-                "{\"executionProvider\":\"claude_sdk\"}", current.modelProviderConfig(), current.createdBy(), current.createdAt(), current.updatedAt());
+                "{\"retired\":true}", current.modelProviderConfig(), current.createdBy(), current.createdAt(), current.updatedAt());
         when(repo.findById("sys-1")).thenReturn(Optional.of(current));
         when(aggregate.update(any(SystemProfile.class))).thenAnswer(call -> {
             saved.set(call.getArgument(0));
@@ -40,7 +40,7 @@ class SystemControllerSecretTest {
 
         controller.update("sys-1", request, new UsernamePasswordAuthenticationToken("admin", "n/a"));
 
-        assertThat(saved.get().agentConfig()).contains("claude_sdk");
+        assertThat(saved.get().agentConfig()).isEqualTo("{}");
         assertThat(saved.get().modelProviderConfig()).contains("old-secret");
     }
 

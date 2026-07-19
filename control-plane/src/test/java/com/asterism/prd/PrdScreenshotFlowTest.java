@@ -77,11 +77,11 @@ class PrdScreenshotFlowTest {
         var systems = mock(SystemProfileRepository.class);
         var now = Instant.now();
         var system = new SystemProfile("sys-1", "订单系统", "", "/repo", "owner", "[\"src\"]", "[]",
-                "[\"test\"]", "{\"executionProvider\":\"http\"}", "{}", "owner", now, now);
+                "[\"test\"]", "{}", "{}", "owner", now, now);
         when(systems.findById("sys-1")).thenReturn(Optional.of(system));
         var readiness = mock(ExecutionReadinessService.class);
         when(readiness.readiness(system)).thenReturn(new ExecutionReadinessService.SystemReadiness(
-                "sys-1", true, now, "http", List.of(), List.of()));
+                "sys-1", true, now, "claude_sdk_team", List.of(), List.of()));
         var ids = mock(WorkItemIdGenerator.class);
         when(ids.nextId()).thenReturn("WI202607141234");
         var temporal = mock(TemporalCasePort.class);
@@ -93,7 +93,7 @@ class PrdScreenshotFlowTest {
         var configurations = mock(AgentConfigurationService.class);
         when(configurations.internal("sys-1")).thenReturn(new AgentConfigurationService.InternalAgentConfiguration(
                 List.of(), List.of(new AgentConfigurationService.Agent(
-                        "developer", "builtin", "http", "", List.of(), "", 50, 600))));
+                        "developer", "builtin", "claude_sdk_team", "", List.of(), "", 50, 600))));
         var transactions = new TransactionOperations() {
             @Override
             public <T> T execute(TransactionCallback<T> action) {

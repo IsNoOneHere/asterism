@@ -105,8 +105,7 @@ services:
       V5_TEMPORAL_TASK_QUEUE: ${V5_TEMPORAL_TASK_QUEUE:-asterism}
       V5_CONTROL_PLANE_URL: http://control-plane:8085
       V5_WORKER_CALLBACK_TOKEN: ${V5_WORKER_CALLBACK_TOKEN:?必须设置 V5_WORKER_CALLBACK_TOKEN}
-      V5_EXECUTION_ENGINE: http
-      V5_EXECUTION_HTTP_ENDPOINT: http://agent-service:8090/execute
+      V5_EXECUTION_ENGINE: claude_sdk_team
       V5_MODEL_PROVIDER: ${V5_MODEL_PROVIDER:-anthropic}
       V5_MODEL_API_KEY: ${V5_MODEL_API_KEY:-}
       V5_MODEL_BASE_URL: ${V5_MODEL_BASE_URL:-}
@@ -114,20 +113,12 @@ services:
       V5_ENGINE_MAX_TURNS: ${V5_ENGINE_MAX_TURNS:-50}
       V5_ENGINE_TIMEOUT_SECONDS: ${V5_ENGINE_TIMEOUT_SECONDS:-600}
       V5_ENGINE_EFFORT_LEVEL: ${V5_ENGINE_EFFORT_LEVEL:-}
-      # 旧变量只作升级兼容，应用内已统一解析成一个默认 Profile/EngineConfig。
-      V5_ANTHROPIC_API_KEY: ${V5_ANTHROPIC_API_KEY:-}
-      V5_ANTHROPIC_BASE_URL: ${V5_ANTHROPIC_BASE_URL:-}
-      V5_ANTHROPIC_MODEL: ${V5_ANTHROPIC_MODEL:-}
-      V5_CLAUDE_CODE_EFFORT_LEVEL: ${V5_CLAUDE_CODE_EFFORT_LEVEL:-}
-      V5_CLAUDE_MAX_TURNS: ${V5_CLAUDE_MAX_TURNS:-50}
       V5_ARTIFACTS_ROOT: /app/runtime/artifacts
-      V5_PLANNER_PROVIDER: http
-      V5_PLANNER_HTTP_ENDPOINT: http://agent-service:8090/plan
       V5_AGENT_SERVICE_URL: http://agent-service:8090
       V5_RELEASE_PUSH: ${V5_RELEASE_PUSH:-false}
       V5_WORKSPACE_ROOT: /tmp/asterism-workspaces
       V5_PUBLIC_URL: ${V5_PUBLIC_URL:-http://127.0.0.1:8080}
-      # Claude SDK 与 HTTP provider 共用同一出站代理设置。
+      # Claude SDK 与 PRD 模型共用同一出站代理设置。
       HTTP_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
       HTTPS_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
       http_proxy: ${V5_OUTBOUND_PROXY_URL:-}

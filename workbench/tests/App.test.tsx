@@ -332,23 +332,17 @@ test('browser back restores work item query state', async () => {
   expect(await screen.findByLabelText('搜索工作项')).toHaveValue('登录');
 });
 
-test('work item detail shows drafted execution plan in the execution stage', async () => {
+test('work item detail shows the Claude SDK supervisor and repository agent', async () => {
   renderApp('/work-items/wi-1');
 
   expect(await screen.findByText('登录页错误提示')).toBeInTheDocument();
   expect(screen.queryByLabelText('当前工作系统')).not.toBeInTheDocument();
   expect(await screen.findByText('alpha-system')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /计划与执行/ }));
-  expect((await screen.findAllByText('执行计划已生成')).length).toBeGreaterThan(0);
-  expect(await screen.findByText('执行步骤')).toBeInTheDocument();
-  expect(await screen.findByText(/错误密码时显示提示/)).toBeInTheDocument();
-  expect(await screen.findByText('目标文件')).toBeInTheDocument();
-  expect((await screen.findAllByText('src/login.tsx')).length).toBeGreaterThan(0);
-  expect(await screen.findByText('测试计划')).toBeInTheDocument();
-  expect(await screen.findByText('npm test')).toBeInTheDocument();
-  expect(await screen.findByText('风险')).toBeInTheDocument();
-  expect(await screen.findByText('登录态回归')).toBeInTheDocument();
-  expect(screen.queryByText(/"steps"/)).not.toBeInTheDocument();
+  const progress = await screen.findByRole('list', { name: 'Agent 执行进度' });
+  expect(within(progress).getByText(/developer · Supervisor/)).toBeInTheDocument();
+  expect(within(progress).getByText('frontend')).toBeInTheDocument();
+  expect(within(progress).getByText('前端修改完成')).toBeInTheDocument();
 });
 
 test('work item polling keeps the stage selected by the user', async () => {
@@ -374,13 +368,13 @@ test('work item detail keeps full diff in the code tab', async () => {
   expect(screen.queryByText('原始 JSON')).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: '代码变更' }));
-  expect((await screen.findAllByText('claude_sdk')).length).toBeGreaterThan(0);
+  expect((await screen.findAllByText('claude_sdk_team')).length).toBeGreaterThan(0);
   expect(await screen.findByText('输入 320 / 输出 80')).toBeInTheDocument();
   expect(await screen.findByText('完整 diff')).toBeInTheDocument();
   expect(await screen.findByText(/diff --git a\/src\/login.tsx/)).toBeInTheDocument();
 });
 
-test('work item detail shows agent stage handoff metadata', async () => {
+test('work item detail shows repository agent completion metadata', async () => {
   renderApp('/work-items/wi-1');
 
   await screen.findByRole('heading', { name: '登录页错误提示' });
@@ -388,7 +382,7 @@ test('work item detail shows agent stage handoff metadata', async () => {
   expect(await screen.findByText('Agent 阶段已完成')).toBeInTheDocument();
   expect((await screen.findAllByText('frontend')).length).toBeGreaterThan(0);
   expect((await screen.findAllByText('前端修改完成')).length).toBeGreaterThan(0);
-  expect((await screen.findAllByText('src/login.tsx')).length).toBeGreaterThan(0);
+  expect(screen.getAllByText('frontend')[0].closest('li')).toHaveTextContent('1 个文件');
 });
 
 test('work item detail translates waiting role and merge request status', async () => {
@@ -419,17 +413,17 @@ test('work item detail shows completed and failed agent stages', async () => {
   });
   setApiResponse('/api/v5/work-items/wi-1/events', [
     {
-      sequence: 1, eventType: 'ExecutionPlanDrafted', payloadJson: JSON.stringify({
-        plan: { steps: ['前端', '后端'], assignments: [{ role: 'frontend' }, { role: 'backend' }] },
+      sequence: 1, eventType: 'CodingAttemptStarted', payloadJson: JSON.stringify({
+        architecture: 'claude_sdk_team', supervisor: { role: 'developer', engine: 'claude_sdk_team' },
       }),
     },
     {
       sequence: 2, eventType: 'AgentStageCompleted',
-      payloadJson: JSON.stringify({ stageIndex: 0, role: 'frontend', summary: '前端完成' }),
+      payloadJson: JSON.stringify({ stageIndex: 1, role: 'frontend', summary: '前端完成' }),
     },
     {
       sequence: 3, eventType: 'WorkerBlocked',
-      payloadJson: JSON.stringify({ reason: 'execution_failed', failed_stage: { index: 1, role: 'backend' } }),
+      payloadJson: JSON.stringify({ reason: 'coding_attempt_failed' }),
     },
   ]);
 
@@ -437,7 +431,7 @@ test('work item detail shows completed and failed agent stages', async () => {
 
   const progress = await screen.findByRole('list', { name: 'Agent 执行进度' });
   expect(within(progress).getByText('frontend').closest('li')).toHaveTextContent('已完成');
-  expect(within(progress).getByText('backend').closest('li')).toHaveTextContent('失败');
+  expect(within(progress).getByText(/developer · Supervisor/).closest('li')).toHaveTextContent('失败');
   expect(screen.getByRole('button', { name: '重试失败阶段' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '完整重做' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '刷新配置并重试失败阶段' })).toBeInTheDocument();
@@ -473,7 +467,7 @@ test('work item detail audit tab contains all raw events without polluting the d
   expect(screen.queryByText('原始 JSON')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '事件审计' }));
   expect((await screen.findAllByText('原始 JSON')).length).toBe(3);
-  expect(screen.getByText('ExecutionPlanDrafted')).toBeInTheDocument();
+  expect(screen.getByText('CodingAttemptStarted')).toBeInTheDocument();
 });
 
 test('terminal work item fetches final events once before polling stops', async () => {

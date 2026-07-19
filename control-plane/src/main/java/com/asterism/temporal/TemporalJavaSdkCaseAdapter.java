@@ -54,7 +54,7 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
                 .setWorkflowId(command.caseId())
                 .setTaskQueue(settings.taskQueue())
                 .build();
-        var workflow = client.newUntypedWorkflowStub("AgentTeamV5CaseWorkflow", options);
+        var workflow = client.newUntypedWorkflowStub("AsterismCaseWorkflow", options);
         workflow.start(payload(command));
         log.info("Temporal workflow 已启动 caseId={}", command.caseId());
         return command.caseId();
@@ -107,7 +107,7 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
                 text(command.validationMode()),
                 text(command.mrTargetBranch()),
                 list(command.mrLabels()),
-                "claude_supervisor_v1",
+                "claude_sdk_team",
                 command.agentConfigSnapshot(),
                 new PrdPayloadDto(
                         text(prd.title()),

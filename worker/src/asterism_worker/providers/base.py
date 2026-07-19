@@ -1,11 +1,11 @@
 from typing import Protocol
 
-from asterism_worker.contracts import ExecutionRequest, ExecutionResult
+from asterism_worker.contracts import CodingAttemptRequest, CodingAttemptResult
+from asterism_worker.repo_source import TeamWorkspace
 
 
 class ExecutionProvider(Protocol):
-    """执行 provider 协议；真实 DeepAgents/OpenAI-Agents 按此替换 fake。"""
+    """Coding Attempt 扩展协议；实现方不得接管 Temporal 生命周期。"""
 
-    async def run(self, request: ExecutionRequest) -> ExecutionResult:
+    async def run(self, request: CodingAttemptRequest, workspace: TeamWorkspace) -> CodingAttemptResult:
         ...
-

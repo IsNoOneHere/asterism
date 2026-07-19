@@ -7,7 +7,7 @@ import { App } from '../src/App';
 const responses: Record<string, unknown> = {
   '/api/v5/auth/me': { userId: 'admin', roles: ['ROLE_ADMIN'] },
   '/api/v5/systems': [
-    { systemId: 'alpha-system', name: 'Alpha System', repoPath: '/tmp/alpha', ownerUserId: 'admin', allowedPaths: '[]', forbiddenPaths: '[]', testCommands: '[]', agentConfig: '{"executionProvider":"claude_sdk","claudeMaxTurns":40,"executionTimeoutSeconds":900}', modelProviderConfig: '{"provider":"deepseek","model":"deepseek-chat","baseUrl":"https://api.deepseek.com","apiKey":"******","claudePreset":"deepseek","claudeModel":"deepseek-v4-pro","claudeBaseUrl":"https://api.deepseek.com/anthropic","claudeReuseBusinessApiKey":true}' },
+    { systemId: 'alpha-system', name: 'Alpha System', repoPath: '/tmp/alpha', ownerUserId: 'admin', allowedPaths: '[]', forbiddenPaths: '[]', testCommands: '[]', agentConfig: '{}', modelProviderConfig: '{}' },
     { systemId: 'prod-system', name: 'Prod System', repoPath: '/tmp/prod', ownerUserId: 'owner', allowedPaths: '[]', forbiddenPaths: '[]', testCommands: '[]', agentConfig: '{}', modelProviderConfig: '{}' },
   ],
   '/api/v5/users': [
@@ -40,16 +40,12 @@ const responses: Record<string, unknown> = {
   '/api/v5/work-items/wi-1/events': [
     {
       sequence: 1,
-      eventId: 'evt-plan',
-      eventType: 'ExecutionPlanDrafted',
+      eventId: 'evt-attempt',
+      eventType: 'CodingAttemptStarted',
       payloadJson: JSON.stringify({
         contextManifestId: 'manifest-1',
-        plan: {
-          steps: ['按验收标准修改: 错误密码时显示提示'],
-          target_files: ['src/login.tsx'],
-          test_plan: ['npm test'],
-          risks: ['登录态回归'],
-        },
+        architecture: 'claude_sdk_team',
+        supervisor: { role: 'developer', engine: 'claude_sdk_team' },
       }),
       createdAt: '2026-07-05T12:00:00Z',
       actorId: 'worker',
@@ -59,7 +55,7 @@ const responses: Record<string, unknown> = {
       eventId: 'evt-stage',
       eventType: 'AgentStageCompleted',
       payloadJson: JSON.stringify({
-        role: 'frontend', engine: 'claude_sdk', summary: '前端修改完成',
+        stageIndex: 1, role: 'frontend', repo: 'main', engine: 'claude_sdk_team', summary: '前端修改完成',
         changedPaths: ['src/login.tsx'], tokenUsage: { input_tokens: 100, output_tokens: 20 },
       }),
       createdAt: '2026-07-05T12:00:30Z',
@@ -70,7 +66,7 @@ const responses: Record<string, unknown> = {
       eventId: 'evt-modification',
       eventType: 'ModificationCompleted',
       payloadJson: JSON.stringify({
-        executionProvider: 'claude_sdk',
+        executionProvider: 'claude_sdk_team',
         turns: 4,
         tokenUsage: { input_tokens: 320, output_tokens: 80 },
         diffPatch: 'diff --git a/src/login.tsx b/src/login.tsx\n+显示登录错误\n',
@@ -106,11 +102,10 @@ export function resetAppTestState() {
     modelProfiles: [{ id: 'mp-1', name: 'Claude 主模型', provider: 'anthropic', model: 'claude-sonnet', baseUrl: '', apiKeySet: true }],
     agents: [
       { name: 'product', kind: 'builtin', engine: '', modelProfileRef: 'mp-1', pathScope: [], prompt: '' },
-      { name: 'planner', kind: 'builtin', engine: '', modelProfileRef: 'mp-1', pathScope: [], prompt: '' },
-      { name: 'developer', kind: 'builtin', engine: 'claude_sdk', modelProfileRef: 'mp-1', pathScope: [], prompt: '', maxTurns: 40, timeoutSeconds: 900 },
-      { name: 'frontend-dev', kind: 'custom', engine: 'claude_sdk', modelProfileRef: 'mp-1', pathScope: ['web'], prompt: '只改前端', maxTurns: 40, timeoutSeconds: 900 },
+      { name: 'developer', kind: 'builtin', engine: 'claude_sdk_team', modelProfileRef: 'mp-1', pathScope: [], prompt: '', maxTurns: 40, timeoutSeconds: 900 },
     ],
-    engines: ['claude_sdk', 'deepagents', 'http', 'fake'],
+    engines: ['claude_sdk_team', 'fake'],
+    migration: { migrated: false, from: [] },
   };
   gitConfiguration = {
     repos: [{ repoId: 'main', name: 'Alpha Web', kind: 'frontend', gitlabProject: 'alpha/web',
@@ -146,23 +141,13 @@ export function resetAppTestState() {
       agentConfiguration = { ...agentConfiguration, modelProfiles: agentConfiguration.modelProfiles.filter((item: any) => item.id !== id) };
       return jsonResponse(agentConfiguration);
     }
-    if (path === '/api/v5/systems/alpha-system/agents' && init?.method === 'POST') {
-      const body = JSON.parse(String(init.body));
-      agentConfiguration = { ...agentConfiguration, agents: [...agentConfiguration.agents, { ...body, kind: 'custom' }] };
-      return jsonResponse(agentConfiguration);
-    }
     if (path.startsWith('/api/v5/systems/alpha-system/agents/') && init?.method === 'PATCH') {
       const body = JSON.parse(String(init.body));
       const name = decodeURIComponent(path.split('/').pop() || '');
       agentConfiguration = { ...agentConfiguration, agents: agentConfiguration.agents.map((item: any) => item.name === name ? { ...item, ...body, name } : item) };
       return jsonResponse(agentConfiguration);
     }
-    if (path.startsWith('/api/v5/systems/alpha-system/agents/') && init?.method === 'DELETE') {
-      const name = decodeURIComponent(path.split('/').pop() || '');
-      agentConfiguration = { ...agentConfiguration, agents: agentConfiguration.agents.filter((item: any) => item.name !== name) };
-      return jsonResponse(agentConfiguration);
-    }
-    if (path.endsWith('/readiness')) return jsonResponse({ ready: true, stages: [], issues: [], effectiveExecutionProvider: 'claude_sdk' });
+    if (path.endsWith('/readiness')) return jsonResponse({ ready: true, stages: [], issues: [], effectiveExecutionProvider: 'claude_sdk_team' });
     if (path.startsWith('/api/v5/prd-sessions?')) return jsonResponse([]);
     if (path === '/api/v5/prd-sessions/prd-1') {
       return jsonResponse({

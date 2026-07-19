@@ -10,7 +10,7 @@ import { errorMessage, ErrorState, formatDateTime, StatusBadge } from '../compon
 import { MemoryEditorDialog } from '../components/MemoryEditorDialog';
 import {
   AgentStageView, buildWorkItemFlow, eventName, eventPayload, failureReason, FlowAttempt, FlowStage, FlowStageId,
-  FlowStageStatus, PlanView, RepositoryFlowView, ValidationCheckView, WorkItemFlow,
+  FlowStageStatus, RepositoryFlowView, ValidationCheckView, WorkItemFlow,
 } from '../workItemFlow';
 import { WorkItemNavigationState } from '../workItemListState';
 
@@ -287,7 +287,7 @@ function StageDetail({ stage, flow, workItem, actions, pending, pendingAction, o
         <div><dt>参与角色</dt><dd>{stageParticipants(stage, workItem)}</dd></div>
       </dl>
 
-      {stage.id === 'execution' && <ExecutionDetail plan={flow.plan} agents={stage.agents ?? []} />}
+      {stage.id === 'execution' && <ExecutionDetail agents={stage.agents ?? []} />}
       {stage.id === 'patch' && <PatchDetail flow={flow} />}
       {stage.id === 'validation' && <ValidationChecks checks={stage.checks ?? []} status={stage.status} />}
       {stage.id === 'release' && <RepositoryLanes repositories={stage.repositories ?? []} />}
@@ -330,18 +330,11 @@ function StageDetail({ stage, flow, workItem, actions, pending, pendingAction, o
   );
 }
 
-function ExecutionDetail({ plan, agents }: { plan: PlanView | null; agents: AgentStageView[] }) {
-  if (!plan && agents.length === 0) return <div className="empty stage-empty">等待 Coding Supervisor 启动。</div>;
+function ExecutionDetail({ agents }: { agents: AgentStageView[] }) {
+  if (agents.length === 0) return <div className="empty stage-empty">等待 Coding Supervisor 启动。</div>;
   return (
     <div className="execution-detail">
-      {plan && <div className="plan-view">
-        <PlanList title="执行步骤" items={plan.steps} />
-        <PlanList title="目标文件" items={plan.targetFiles} />
-        <PlanList title="测试计划" items={plan.testPlan} />
-        <PlanList title="风险" items={plan.risks} />
-      </div>}
       <ol className="agent-lane" aria-label="Agent 执行进度">
-        {plan && <li className="completed"><span className="agent-icon"><Workflow size={17} /></span><div><strong>Planner</strong><p>执行计划已生成</p></div><em>已完成</em></li>}
         {agents.map((agent) => (
           <li key={`${agent.index}-${agent.role}`} className={agent.status}>
             <span className="agent-icon"><Bot size={17} /></span>
@@ -456,11 +449,6 @@ function EventAudit({ events }: { events: WorkItemEvent[] }) {
   );
 }
 
-function PlanList({ title, items }: { title: string; items: string[] }) {
-  if (items.length === 0) return null;
-  return <div><strong>{title}</strong><ul>{items.map((item) => <li key={item}>{item}</li>)}</ul></div>;
-}
-
 function stageAction(code: string, currentStageId: FlowStageId, workItem: WorkItem): StageAction | null {
   const values: Record<string, Omit<StageAction, 'code'>> = {
     owner_approved: { label: '批准执行', stageId: 'approval', ownerApproval: true },
@@ -513,7 +501,6 @@ function stageSummary(stage: FlowStage, workItem: WorkItem, flow: WorkItemFlow) 
   if (stage.id === 'created') return `${workItem.createdBy || '系统'} 创建了“${workItem.title}”。`;
   if (stage.id === 'approval') return stage.status === 'waiting' ? '等待系统负责人确认是否进入执行。' : '负责人审批结果已记录。';
   if (stage.id === 'execution') {
-    if (flow.plan) return `${flow.plan.steps.length} 个步骤，${flow.plan.assignments.length || 1} 个执行角色。`;
     if (stage.agents?.length) return `Claude SDK Supervisor 正在调度 ${Math.max(0, stage.agents.length - 1)} 个仓库子 Agent。`;
     return '等待 Coding Supervisor 启动。';
   }

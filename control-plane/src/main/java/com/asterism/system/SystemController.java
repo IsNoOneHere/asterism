@@ -105,7 +105,7 @@ public class SystemController {
         var saved = aggregate.update(new SystemProfile(
                 existing.systemId(), request.name(), request.description(), request.repoPath(), request.ownerUserId(),
                 json(request.allowedPaths()), json(request.forbiddenPaths()), json(request.testCommands()),
-                existing.agentConfig(), existing.modelProviderConfig(), existing.createdBy(), existing.createdAt(), Instant.now()));
+                "{}", existing.modelProviderConfig(), existing.createdBy(), existing.createdAt(), Instant.now()));
         ensureConfiguredOwner(saved, actor);
         if (request.gitConfiguration() != null) git.update(systemId, request.gitConfiguration());
         log.info("系统基础配置已更新 system={} actor={}", systemId, actor.getName());
@@ -140,7 +140,7 @@ public class SystemController {
                 json(request.allowedPaths()),
                 json(request.forbiddenPaths()),
                 json(request.testCommands()),
-                existing == null ? "{}" : existing.agentConfig(),
+                "{}",
                 existing == null ? "{}" : existing.modelProviderConfig(),
                 createdBy,
                 existing == null ? now : existing.createdAt(),
@@ -170,7 +170,7 @@ public class SystemController {
                 profile.allowedPaths(),
                 profile.forbiddenPaths(),
                 profile.testCommands(),
-                profile.agentConfig(),
+                "{}",
                 json(maskSecrets(readMap(profile.modelProviderConfig()))),
                 profile.createdBy(),
                 profile.createdAt(),

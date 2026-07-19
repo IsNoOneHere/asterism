@@ -54,27 +54,21 @@ public class ExecutionReadinessService {
 
         var issues = new ArrayList<ReadinessIssue>();
         var prdReady = targetReports.stream().anyMatch(item -> item.target().prdModelReady());
-        var planningReady = targetReports.stream().anyMatch(item -> item.target().planningModelReady());
-        var diffReady = targetReports.stream().anyMatch(item -> item.target().diffModelReady());
         var repositoryReady = gitlabMode ? gitReadiness.ready()
                 : targetReports.stream().anyMatch(item -> item.target().repositoryAccessible() && item.target().gitRepository());
         var workerReady = targetReports.stream().anyMatch(item -> switch (executionProvider) {
-            case "http" -> item.worker().capabilities().contains("http") && item.worker().httpProviderReachable()
-                    && item.target().diffModelReady();
-            case "claude_sdk" -> item.worker().capabilities().contains("claude_sdk") && item.target().claudeReady();
-            case "deepagents" -> item.worker().capabilities().contains("deepagents") && item.target().deepagentsReady();
+            case "claude_sdk_team" -> item.worker().capabilities().contains("claude_sdk_team")
+                    && item.target().claudeSdkTeamReady();
             case "fake" -> item.worker().capabilities().contains("fake");
             default -> false;
         });
         var validationReady = gitConfig == null ? !readList(profile.testCommands()).isEmpty()
                 : "skip".equals(gitConfig.validationMode())
                 || gitConfig.repos().stream().allMatch(repo -> repo.testCommands() != null && !repo.testCommands().isEmpty());
-        var claudeFallback = "claude_sdk".equals(executionProvider) && targetReports.stream()
-                .anyMatch(item -> "worker_env".equals(item.target().claudeConfigSource()));
+        var claudeFallback = "claude_sdk_team".equals(executionProvider) && targetReports.stream()
+                .anyMatch(item -> "worker_env".equals(item.target().configSource()));
 
         if (!prdReady) error(issues, "PRD_MODEL_NOT_READY", "需求沟通模型配置不可用");
-        if (!planningReady) error(issues, "PLANNING_MODEL_NOT_READY", "方案规划模型配置不可用");
-        if ("http".equals(executionProvider) && !diffReady) error(issues, "DIFF_MODEL_NOT_READY", "单次 Diff 模型配置不可用");
         if (executionProvider.isBlank()) error(issues, "EXECUTION_PROVIDER_REQUIRED", "必须显式选择代码执行内核");
         if ("fake".equals(executionProvider)) error(issues, "FAKE_EXECUTION_FORBIDDEN", "模拟执行不能用于业务工作项");
         if (live.isEmpty()) error(issues, "WORKER_OFFLINE", "没有在线 Worker");
@@ -100,8 +94,7 @@ public class ExecutionReadinessService {
         }
 
         var stages = List.of(
-                new ReadinessStage("prd", prdReady, modelDetail(targetReports, "prd", prdReady)),
-                new ReadinessStage("planning", planningReady, modelDetail(targetReports, "planning", planningReady)),
+                new ReadinessStage("prd", prdReady, modelDetail(targetReports, prdReady)),
                 new ReadinessStage("codeExecution", workerReady && !"fake".equals(executionProvider),
                         executionDetail(executionProvider, targetReports)),
                 new ReadinessStage("repository", repositoryReady,
@@ -122,34 +115,25 @@ public class ExecutionReadinessService {
 
     private String executionDetail(String provider, List<WorkerTarget> targets) {
         if (provider == null || provider.isBlank()) return "未配置";
-        if ("http".equals(provider)) {
-            return targets.stream().filter(item -> item.target().diffModelReady()).findFirst()
-                    .map(item -> "单次 Diff，" + value(item.target().diffModel())).orElse("单次 Diff 模型不可用");
-        }
-        if ("deepagents".equals(provider)) {
-            return targets.stream().filter(item -> item.target().deepagentsReady()).findFirst()
-                    .map(item -> "Deep Agents，系统模型配置 " + value(item.target().deepagentsModel()))
-                    .orElse("Deep Agents，模型配置不可用");
-        }
-        if (!"claude_sdk".equals(provider)) return provider;
+        if (!"claude_sdk_team".equals(provider)) return provider;
         return targets.stream()
-                .filter(item -> item.target().claudeReady())
+                .filter(item -> item.target().claudeSdkTeamReady())
                 .findFirst()
-                .map(item -> "worker_env".equals(item.target().claudeConfigSource())
-                        ? "Claude Agent SDK，部署环境兼容配置"
-                        : "Claude Agent SDK，系统模型配置 " + value(item.target().claudeModel()))
-                .orElse("Claude Agent SDK，模型配置不可用");
+                .map(item -> "worker_env".equals(item.target().configSource())
+                        ? "Claude SDK Supervisor，部署环境配置"
+                        : "Claude SDK Supervisor，系统模型配置 " + value(item.target().claudeSdkTeamModel()))
+                .orElse("Claude SDK Supervisor，模型配置不可用");
     }
 
     private String value(Object value) {
         return value == null ? "" : String.valueOf(value);
     }
 
-    private String modelDetail(List<WorkerTarget> targets, String stage, boolean ready) {
+    private String modelDetail(List<WorkerTarget> targets, boolean ready) {
         if (!ready) return "业务模型不可用";
-        return targets.stream().filter(item -> "prd".equals(stage) ? item.target().prdModelReady() : item.target().planningModelReady())
+        return targets.stream().filter(item -> item.target().prdModelReady())
                 .findFirst()
-                .map(item -> "prd".equals(stage) ? value(item.target().prdModel()) : value(item.target().planningModel()))
+                .map(item -> value(item.target().prdModel()))
                 .filter(value -> !value.isBlank())
                 .orElse("业务模型已配置");
     }
@@ -178,46 +162,26 @@ public class ExecutionReadinessService {
                 }
             }
         }
-        return "http";
+        return "claude_sdk_team";
     }
 
     private record WorkerTarget(WorkerReadinessReport worker, TargetReadiness target) {
     }
 
     public record WorkerReadinessReport(String workerId, String taskQueue, String defaultExecutionProvider,
-                                        List<String> capabilities, boolean httpProviderReachable, boolean releasePush,
+                                        List<String> capabilities, boolean releasePush,
                                         Instant checkedAt, List<TargetReadiness> targets, Instant receivedAt) {
         public WorkerReadinessReport withReceivedAt(Instant value) {
             return new WorkerReadinessReport(workerId, taskQueue, defaultExecutionProvider,
-                    capabilities == null ? List.of() : capabilities, httpProviderReachable, releasePush,
+                    capabilities == null ? List.of() : capabilities, releasePush,
                     checkedAt, targets == null ? List.of() : targets, value);
         }
     }
 
     public record TargetReadiness(String systemId, boolean repositoryAccessible, boolean gitRepository,
-                                  boolean modelReady, String model, boolean claudeReady,
-                                  String claudeModel, String claudeConfigSource,
                                   boolean prdModelReady, String prdModel,
-                                  boolean planningModelReady, String planningModel,
-                                  boolean diffModelReady, String diffModel,
-                                  boolean deepagentsReady, String deepagentsModel) {
-        public TargetReadiness(String systemId, boolean repositoryAccessible, boolean gitRepository,
-                               boolean modelReady, String model, boolean claudeReady,
-                               String claudeModel, String claudeConfigSource,
-                               boolean prdModelReady, String prdModel,
-                               boolean planningModelReady, String planningModel,
-                               boolean diffModelReady, String diffModel) {
-            this(systemId, repositoryAccessible, gitRepository, modelReady, model, claudeReady, claudeModel,
-                    claudeConfigSource, prdModelReady, prdModel, planningModelReady, planningModel,
-                    diffModelReady, diffModel, false, "");
-        }
-
-        public TargetReadiness(String systemId, boolean repositoryAccessible, boolean gitRepository,
-                               boolean modelReady, String model, boolean claudeReady,
-                               String claudeModel, String claudeConfigSource) {
-            this(systemId, repositoryAccessible, gitRepository, modelReady, model, claudeReady, claudeModel,
-                    claudeConfigSource, modelReady, model, modelReady, model, modelReady, model, false, "");
-        }
+                                  boolean claudeSdkTeamReady, String claudeSdkTeamModel,
+                                  String configSource) {
     }
 
     public record SystemReadiness(String systemId, boolean ready, Instant checkedAt, String effectiveExecutionProvider,

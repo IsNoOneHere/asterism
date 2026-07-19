@@ -33,8 +33,11 @@ def test_report_contains_capabilities_but_never_secret(monkeypatch, tmp_path):
         async def get(self, url, **kwargs):
             if url.endswith("execution-targets"):
                 return Response([{"systemId": "sys-1", "repoPath": str(tmp_path)}])
-            if url.endswith("healthz"):
-                return Response({"ok": True})
+            if "/internal/systems/" in url:
+                return Response({
+                    "model_profiles": [],
+                    "agents": [{"name": "developer", "engine": "claude_sdk_team", "model_profile_ref": ""}],
+                })
             return Response({"ready": True, "model": "model-1"})
 
         async def post(self, url, **kwargs):
@@ -42,13 +45,13 @@ def test_report_contains_capabilities_but_never_secret(monkeypatch, tmp_path):
             return Response({})
 
     monkeypatch.setattr(readiness.httpx, "AsyncClient", lambda **_: Client())
-    settings = Settings(default_model_api_key="top-secret", default_engine="claude_sdk", worker_id="worker-1")
+    settings = Settings(default_model_api_key="top-secret", default_engine="claude_sdk_team", worker_id="worker-1")
 
     asyncio.run(readiness.report_readiness(settings))
 
-    assert {"fake", "http", "claude_sdk"}.issubset(posted["capabilities"])
+    assert {"fake", "claude_sdk_team"}.issubset(posted["capabilities"])
     assert posted["targets"][0]["gitRepository"] is True
-    assert posted["targets"][0]["claudeConfigSource"] == "worker_env"
+    assert posted["targets"][0]["configSource"] == "worker_env"
     assert "top-secret" not in json.dumps(posted)
 
 
@@ -66,12 +69,10 @@ def test_report_uses_system_claude_config_without_uploading_key(monkeypatch, tmp
         async def get(self, url, **kwargs):
             if url.endswith("execution-targets"):
                 return Response([{"systemId": "sys-1", "repoPath": str(tmp_path)}])
-            if url.endswith("healthz"):
-                return Response({"ok": True})
             if "/internal/systems/" in url:
                 return Response({
                     "model_profiles": [{"id": "mp-1", "model": "deepseek-v4-pro", "api_key": "system-secret"}],
-                    "agents": [{"name": "developer", "kind": "builtin", "engine": "claude_sdk", "model_profile_ref": "mp-1"}],
+                    "agents": [{"name": "developer", "kind": "builtin", "engine": "claude_sdk_team", "model_profile_ref": "mp-1"}],
                 })
             return Response({"ready": True, "model": "business-model"})
 
@@ -82,9 +83,9 @@ def test_report_uses_system_claude_config_without_uploading_key(monkeypatch, tmp
     monkeypatch.setattr(readiness.httpx, "AsyncClient", lambda **_: Client())
     asyncio.run(readiness.report_readiness(Settings(worker_id="worker-1")))
 
-    assert "claude_sdk" in posted["capabilities"]
-    assert posted["targets"][0]["claudeReady"] is True
-    assert posted["targets"][0]["claudeConfigSource"] == "system"
+    assert "claude_sdk_team" in posted["capabilities"]
+    assert posted["targets"][0]["claudeSdkTeamReady"] is True
+    assert posted["targets"][0]["configSource"] == "system"
     assert "system-secret" not in json.dumps(posted)
 
 
@@ -98,17 +99,13 @@ def test_report_contains_stage_models_without_keys(monkeypatch, tmp_path):
         async def get(self, url, **kwargs):
             if url.endswith("execution-targets"):
                 return Response([{"systemId": "sys-1", "repoPath": str(tmp_path)}])
-            if url.endswith("healthz"):
-                return Response({"ok": True})
             if "/internal/systems/" in url:
                 return Response({
                     "model_profiles": [{"id": "mp-1", "model": "deepseek-v4-pro", "api_key": ""}],
-                    "agents": [{"name": "developer", "kind": "builtin", "engine": "claude_sdk", "model_profile_ref": "mp-1"}],
+                    "agents": [{"name": "developer", "kind": "builtin", "engine": "claude_sdk_team", "model_profile_ref": "mp-1"}],
                 })
             return Response({"ready": True, "stages": {
                 "prd": {"ready": True, "name": "需求模型", "api_key_configured": True},
-                "planning": {"ready": True, "name": "规划模型", "api_key_configured": True},
-                "diff": {"ready": True, "name": "Diff 模型", "api_key_configured": True},
             }})
         async def post(self, url, **kwargs):
             posted.update(kwargs["json"])
@@ -118,7 +115,7 @@ def test_report_contains_stage_models_without_keys(monkeypatch, tmp_path):
     asyncio.run(readiness.report_readiness(Settings(worker_id="worker-1")))
 
     target = posted["targets"][0]
-    assert (target["prdModel"], target["planningModel"], target["diffModel"]) == ("需求模型", "规划模型", "Diff 模型")
-    assert target["claudeReady"] is False
-    assert target["claudeConfigSource"] == "system"
+    assert target["prdModel"] == "需求模型"
+    assert target["claudeSdkTeamReady"] is False
+    assert target["configSource"] == "system"
     assert "api_key" not in json.dumps(posted)

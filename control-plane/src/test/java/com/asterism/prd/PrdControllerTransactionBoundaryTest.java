@@ -137,7 +137,7 @@ class PrdControllerTransactionBoundaryTest {
         assertThat(holder.command.toString()).doesNotContainIgnoringCase("token");
         assertThat(holder.command.agentConfigSnapshot().agents()).singleElement().satisfies(agent -> {
             assertThat(agent.name()).isEqualTo("developer");
-            assertThat(agent.engine()).isEqualTo("claude_sdk");
+            assertThat(agent.engine()).isEqualTo("claude_sdk_team");
             assertThat(agent.maxTurns()).isEqualTo(40);
             assertThat(agent.timeoutSeconds()).isEqualTo(900);
         });
@@ -226,7 +226,7 @@ class PrdControllerTransactionBoundaryTest {
         var readiness = mock(ExecutionReadinessService.class);
         var git = mock(GitIntegrationService.class);
         when(readiness.readiness(any())).thenReturn(new ExecutionReadinessService.SystemReadiness(
-                "sys-1", true, Instant.now(), "claude_sdk", List.of(), List.of()));
+                "sys-1", true, Instant.now(), "claude_sdk_team", List.of(), List.of()));
         when(workItemIds.nextId()).thenReturn("WI202607114827");
         when(sessions.findById("prd-1")).thenReturn(Optional.of(session(visibleStatus)), Optional.of(session(lockedStatus)));
         when(systems.findById("sys-1")).thenReturn(Optional.of(system()));
@@ -239,7 +239,7 @@ class PrdControllerTransactionBoundaryTest {
                         "mp-1", "Claude", "anthropic", "https://example.invalid", "never-in-snapshot",
                         "claude-sonnet", false)),
                 List.of(new AgentConfigurationService.Agent(
-                        "developer", "builtin", "claude_sdk", "mp-1", List.of("src"), "", 40, 900))));
+                        "developer", "builtin", "claude_sdk_team", "mp-1", List.of("src"), "", 40, 900))));
         when(aggregate.update(any(PrdSession.class))).thenAnswer(call -> {
             var session = (PrdSession) call.getArgument(0);
             order.add("save:" + session.status());
@@ -308,7 +308,7 @@ class PrdControllerTransactionBoundaryTest {
                 "[\"src\",\"README.md\"]",
                 "[\"secrets\"]",
                 "[\"mvn test\"]",
-                "{\"executionProvider\":\"claude_sdk\",\"claudeMaxTurns\":40,\"executionTimeoutSeconds\":900}",
+                "{}",
                 "{}",
                 "seed",
                 now,

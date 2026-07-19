@@ -225,8 +225,8 @@ export type ModelProfile = {
 
 export type Agent = {
   name: string;
-  kind: 'builtin' | 'custom';
-  engine: 'claude_sdk' | 'deepagents' | 'http' | 'fake' | string;
+  kind: 'builtin';
+  engine: 'claude_sdk_team' | 'fake' | '';
   modelProfileRef: string;
   pathScope: string[];
   prompt: string;
@@ -238,6 +238,7 @@ export type AgentConfiguration = {
   modelProfiles: ModelProfile[];
   agents: Agent[];
   engines: string[];
+  migration?: { migrated: boolean; from: string[] };
 };
 
 export type ModelConnectionTestResult = {
@@ -319,16 +320,10 @@ export const api = {
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-profiles/' + encodeURIComponent(profileId), { method: 'DELETE' }),
   testModelProfileConnection: (systemId: string, profileId: string) =>
     request<ModelConnectionTestResult>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-profiles/' + encodeURIComponent(profileId) + '/connection-test', { method: 'POST' }),
-  createAgent: (systemId: string, body: unknown) =>
-    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agents', {
-      method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),
-    }),
   updateAgent: (systemId: string, agentName: string, body: unknown) =>
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agents/' + encodeURIComponent(agentName), {
       method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
     }),
-  deleteAgent: (systemId: string, agentName: string) =>
-    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agents/' + encodeURIComponent(agentName), { method: 'DELETE' }),
   systemReadiness: (systemId: string) => request<SystemReadiness>('/api/v5/systems/' + encodeURIComponent(systemId) + '/readiness'),
   uploadAttachment: (systemId: string, file: File) => {
     const body = new FormData();

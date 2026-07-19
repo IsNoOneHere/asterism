@@ -61,34 +61,23 @@ test.each([
   expect(fetch).toHaveBeenCalledWith(path, expect.objectContaining({ method: 'POST' }));
 });
 
-test('custom agent can select deepagents profile and path scope', async () => {
+test('developer exposes only terminal engines and saves supervisor constraints', async () => {
   renderApp('/agents');
-  await screen.findAllByText('frontend-dev');
+  await screen.findAllByText('developer');
   expect(screen.getByRole('heading', { name: 'Agent 列表' })).toBeInTheDocument();
-  expect(screen.getByText(/Claude SDK 使用单一团队凭证/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '新增 Agent' }));
+  expect(screen.queryByRole('button', { name: '新增 Agent' })).not.toBeInTheDocument();
+  expect(screen.queryByText('planner')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '编辑 developer' }));
   expect(screen.getByRole('dialog')).toHaveAttribute('open');
-  expect(within(screen.getByLabelText('执行内核')).queryByRole('option', { name: 'claude_sdk' })).not.toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText('Agent 名称'), { target: { value: 'backend-dev' } });
-  fireEvent.change(screen.getByLabelText('执行内核'), { target: { value: 'deepagents' } });
+  expect(within(screen.getByLabelText('执行内核')).getAllByRole('option').map((item) => item.textContent))
+    .toEqual(['claude_sdk_team', 'fake']);
   fireEvent.change(screen.getByLabelText('Model Profile'), { target: { value: 'mp-1' } });
   fireEvent.change(screen.getByLabelText(/Path Scope/), { target: { value: 'api\ndb' } });
-  fireEvent.click(screen.getByRole('button', { name: '添加 Agent' }));
+  fireEvent.click(screen.getByRole('button', { name: '保存 Agent' }));
 
-  expect((await screen.findAllByText('backend-dev')).length).toBeGreaterThan(0);
-  const call = vi.mocked(fetch).mock.calls.find(([path]) => path === '/api/v5/systems/alpha-system/agents');
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/agents/developer', expect.objectContaining({ method: 'PATCH' })));
+  const call = vi.mocked(fetch).mock.calls.find(([path, init]) => path === '/api/v5/systems/alpha-system/agents/developer' && init?.method === 'PATCH');
   expect(JSON.parse(String(call?.[1]?.body)).pathScope).toEqual(['api', 'db']);
-});
-
-test('legacy Claude custom agent is marked as replaced by automatic repository agents', async () => {
-  renderApp('/agents');
-  expect(await screen.findByText('claude_sdk · 已由团队模式替代')).toBeInTheDocument();
-
-  fireEvent.click(screen.getByRole('button', { name: '编辑 frontend-dev' }));
-
-  expect(screen.getByText(/该旧配置已由 Claude SDK 自动仓库 Agent 替代/)).toBeInTheDocument();
-  expect(screen.getByLabelText('Model Profile')).toBeDisabled();
-  expect(screen.getByLabelText(/Path Scope/)).toBeDisabled();
 });
 
 test('builtin product only edits its profile and cannot be deleted', async () => {
@@ -103,12 +92,10 @@ test('builtin product only edits its profile and cannot be deleted', async () =>
   await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/agents/product', expect.objectContaining({ method: 'PATCH' })));
 });
 
-test.each([
-  { path: '/models', button: '删除 Claude 主模型', requestPath: '/api/v5/systems/alpha-system/model-profiles/mp-1' },
-  { path: '/agents', button: '删除 frontend-dev', requestPath: '/api/v5/systems/alpha-system/agents/frontend-dev' },
-])('$path asks for confirmation before deleting configuration', async ({ path, button, requestPath }) => {
-  renderApp(path);
-  fireEvent.click(await screen.findByRole('button', { name: button }));
+test('model configuration asks for confirmation before deleting a profile', async () => {
+  const requestPath = '/api/v5/systems/alpha-system/model-profiles/mp-1';
+  renderApp('/models');
+  fireEvent.click(await screen.findByRole('button', { name: '删除 Claude 主模型' }));
 
   const dialog = screen.getByRole('dialog');
   expect(fetch).not.toHaveBeenCalledWith(requestPath, expect.objectContaining({ method: 'DELETE' }));
@@ -119,7 +106,7 @@ test.each([
 
 test.each([
   { path: '/models', createButton: '新增 Profile', editButton: '编辑 Claude 主模型' },
-  { path: '/agents', createButton: '新增 Agent', editButton: '编辑 product' },
+  { path: '/agents', createButton: '', editButton: '编辑 product' },
 ])('$path disables configuration changes for non-owner members', async ({ path, createButton, editButton }) => {
   setApiResponse('/api/v5/auth/me', { userId: 'reader', roles: [] });
   setApiResponse('/api/v5/systems/alpha-system/members', [
@@ -128,7 +115,7 @@ test.each([
   renderApp(path);
 
   expect(await screen.findByText('当前账号在此系统中为只读成员，配置操作已禁用。')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: createButton })).toBeDisabled();
+  if (createButton) expect(screen.getByRole('button', { name: createButton })).toBeDisabled();
   expect(screen.getByRole('button', { name: editButton })).toBeDisabled();
 });
 

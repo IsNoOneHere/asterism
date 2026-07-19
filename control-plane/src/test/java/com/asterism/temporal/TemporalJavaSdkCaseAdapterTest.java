@@ -23,7 +23,7 @@ class TemporalJavaSdkCaseAdapterTest {
     void startCaseToleratesNullPrdPayloadFields() {
         var client = mock(WorkflowClient.class);
         var workflow = mock(WorkflowStub.class);
-        when(client.newUntypedWorkflowStub(eq("AgentTeamV5CaseWorkflow"), any(WorkflowOptions.class))).thenReturn(workflow);
+        when(client.newUntypedWorkflowStub(eq("AsterismCaseWorkflow"), any(WorkflowOptions.class))).thenReturn(workflow);
         var adapter = new TemporalJavaSdkCaseAdapter(client, new TemporalSettings("unused", "default", "queue"), new ObjectMapper());
 
         assertThatCode(() -> adapter.startCase(new TemporalCasePort.StartCaseCommand(
@@ -39,7 +39,7 @@ class TemporalJavaSdkCaseAdapterTest {
                         List.of(new TemporalCasePort.ModelProfileSnapshot(
                                 "mp-1", "Claude", "anthropic", "https://example.invalid", "claude", false)),
                         List.of(new TemporalCasePort.AgentSnapshot(
-                                "developer", "builtin", "claude_sdk", "mp-1", List.of("src"), "", 40, 900))),
+                                "developer", "builtin", "claude_sdk_team", "mp-1", List.of("src"), "", 40, 900))),
                 new TemporalCasePort.PrdPayload(null, null, null, null))))
                 .doesNotThrowAnyException();
 
@@ -55,7 +55,7 @@ class TemporalJavaSdkCaseAdapterTest {
         assertThat(prd.get("acceptance_criteria")).isEqualTo(List.of());
         assertThat(prd.get("draft_json")).isEqualTo(Map.of());
         assertThat(payload).doesNotContainKeys("execution_provider", "claude_max_turns", "execution_timeout_seconds");
-        assertThat(payload).containsEntry("execution_architecture", "claude_supervisor_v1");
+        assertThat(payload).containsEntry("execution_architecture", "claude_sdk_team");
         @SuppressWarnings("unchecked")
         var snapshot = (Map<String, Object>) payload.get("agent_config_snapshot");
         assertThat(snapshot.toString()).doesNotContainIgnoringCase("apiKey");

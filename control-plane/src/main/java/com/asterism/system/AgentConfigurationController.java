@@ -50,13 +50,6 @@ public class AgentConfigurationController {
         return config.testProfile(systemId, profileId);
     }
 
-    @PostMapping("/agents")
-    AgentConfigurationService.AgentConfigurationResponse createAgent(@PathVariable String systemId,
-            @RequestBody AgentConfigurationService.AgentRequest request, Authentication actor) {
-        access.requireOwnerOrAdmin(systemId, actor);
-        return config.createAgent(systemId, request);
-    }
-
     @PatchMapping("/agents/{agentName}")
     AgentConfigurationService.AgentConfigurationResponse updateAgent(@PathVariable String systemId,
             @PathVariable String agentName, @RequestBody AgentConfigurationService.AgentRequest request,
@@ -65,10 +58,4 @@ public class AgentConfigurationController {
         return config.updateAgent(systemId, agentName, request);
     }
 
-    @DeleteMapping("/agents/{agentName}")
-    AgentConfigurationService.AgentConfigurationResponse deleteAgent(@PathVariable String systemId,
-            @PathVariable String agentName, Authentication actor) {
-        access.requireOwnerOrAdmin(systemId, actor);
-        return config.deleteAgent(systemId, agentName);
-    }
 }

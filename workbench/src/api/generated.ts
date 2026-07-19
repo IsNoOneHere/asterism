@@ -260,22 +260,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v5/systems/{systemId}/agents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["createAgent"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v5/projections": {
         parameters: {
             query?: never;
@@ -510,7 +494,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete: operations["deleteAgent"];
+        delete?: never;
         options?: never;
         head?: never;
         patch: operations["updateAgent"];
@@ -973,6 +957,7 @@ export interface components {
             modelProfiles?: components["schemas"]["ModelProfileView"][];
             agents?: components["schemas"]["Agent"][];
             engines?: string[];
+            migration?: components["schemas"]["ConfigurationMigration"];
         };
         ModelProfileView: {
             id?: string;
@@ -1112,26 +1097,17 @@ export interface components {
             systemId?: string;
             repositoryAccessible?: boolean;
             gitRepository?: boolean;
-            modelReady?: boolean;
-            model?: string;
-            claudeReady?: boolean;
-            claudeModel?: string;
-            claudeConfigSource?: string;
             prdModelReady?: boolean;
             prdModel?: string;
-            planningModelReady?: boolean;
-            planningModel?: string;
-            diffModelReady?: boolean;
-            diffModel?: string;
-            deepagentsReady?: boolean;
-            deepagentsModel?: string;
+            claudeSdkTeamReady?: boolean;
+            claudeSdkTeamModel?: string;
+            configSource?: string;
         };
         WorkerReadinessReport: {
             workerId?: string;
             taskQueue?: string;
             defaultExecutionProvider?: string;
             capabilities?: string[];
-            httpProviderReachable?: boolean;
             releasePush?: boolean;
             /** Format: date-time */
             checkedAt?: string;
@@ -1318,6 +1294,10 @@ export interface components {
         CurrentUser: {
             userId?: string;
             roles?: string[];
+        };
+        ConfigurationMigration: {
+            migrated?: boolean;
+            from?: string[];
         };
     };
     responses: never;
@@ -1822,32 +1802,6 @@ export interface operations {
             };
         };
     };
-    createAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AgentRequest"];
-            };
-        };
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["AgentConfigurationResponse"];
-                };
-            };
-        };
-    };
     ingest: {
         parameters: {
             query?: never;
@@ -2236,29 +2190,6 @@ export interface operations {
                 };
                 content: {
                     "*/*": components["schemas"]["KnowledgeView"];
-                };
-            };
-        };
-    };
-    deleteAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                systemId: string;
-                agentName: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "*/*": components["schemas"]["AgentConfigurationResponse"];
                 };
             };
         };

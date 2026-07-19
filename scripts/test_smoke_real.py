@@ -42,15 +42,22 @@ class PreparePrdTest(unittest.TestCase):
         self.assertEqual(2, len(self.calls))
         self.assertEqual({"prdId": "prd-1", "content": "criteria"}, self.calls[1][2])
 
-    def test_legacy_create_config_uses_selected_provider(self):
-        original = smoke.MODEL_PROVIDER
+    def test_configures_only_claude_sdk_team_developer(self):
+        original_request = smoke.request
+        calls = []
         try:
-            smoke.MODEL_PROVIDER = "anthropic"
-            config = smoke.legacy_model_config("deepseek-v4-pro[1m]", "https://api.deepseek.com/anthropic", "key")
+            smoke.request = lambda method, path, body=None: (
+                calls.append((method, path, body))
+                or ({"modelProfiles": [{"id": "mp-1"}]} if path.endswith("/model-profiles") else {})
+            )
+            profile_id = smoke.configure_developer("sys-1")
         finally:
-            smoke.MODEL_PROVIDER = original
+            smoke.request = original_request
 
-        self.assertEqual("anthropic", config["provider"])
+        self.assertEqual("mp-1", profile_id)
+        update = next(body for method, path, body in calls if method == "PATCH" and path.endswith("/agents/developer"))
+        self.assertEqual("claude_sdk_team", update["engine"])
+        self.assertEqual([], update["pathScope"])
 
 
 if __name__ == "__main__":

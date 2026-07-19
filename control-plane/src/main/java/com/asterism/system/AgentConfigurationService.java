@@ -13,7 +13,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,9 +21,9 @@ import java.util.UUID;
 @Service
 public class AgentConfigurationService {
     private static final Logger log = LoggerFactory.getLogger(AgentConfigurationService.class);
-    private static final List<String> ENGINES = List.of("fake", "http", "claude_sdk", "deepagents");
+    private static final List<String> ENGINES = List.of("claude_sdk_team", "fake");
     private static final List<String> PROVIDERS = List.of("anthropic", "openai-compat");
-    private static final List<String> BUILTIN_AGENTS = List.of("product", "planner", "developer");
+    private static final List<String> BUILTIN_AGENTS = List.of("product", "developer");
 
     private final SystemProfileRepository systems;
     private final JdbcAggregateTemplate aggregate;
@@ -44,7 +43,8 @@ public class AgentConfigurationService {
     public AgentConfigurationResponse get(String systemId) {
         var state = load(systemId);
         return new AgentConfigurationResponse(
-                state.profiles().stream().map(ModelProfile::masked).toList(), state.agents(), ENGINES);
+                state.profiles().stream().map(ModelProfile::masked).toList(), state.agents(), ENGINES,
+                readMigration(state.config().get("executionMigration")));
     }
 
     public InternalAgentConfiguration internal(String systemId) {
@@ -98,51 +98,24 @@ public class AgentConfigurationService {
     }
 
     @Transactional
-    public AgentConfigurationResponse createAgent(String systemId, AgentRequest request) {
-        var state = locked(systemId);
-        var name = value(request.name()).trim();
-        if (name.isBlank()) throw new IllegalArgumentException("Agent 名称不能为空");
-        if (BUILTIN_AGENTS.contains(name) || findAgentIndex(state.agents(), name) >= 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "AGENT_NAME_CONFLICT", "Agent 名称已存在: " + name);
-        }
-        var agent = executionAgent(name, "custom", request, state.profiles());
-        state.agents().add(agent);
-        save(state);
-        log.info("自定义 Agent 已新增 system={} agent={} engine={}", systemId, name, agent.engine());
-        return get(systemId);
-    }
-
-    @Transactional
     public AgentConfigurationResponse updateAgent(String systemId, String agentName, AgentRequest request) {
         var state = locked(systemId);
         var index = agentIndex(state.agents(), agentName);
-        var current = state.agents().get(index);
         if (!value(request.name()).isBlank() && !agentName.equals(request.name().trim())) {
             throw new IllegalArgumentException("Agent 名称不可修改");
         }
         Agent updated;
-        if ("product".equals(agentName) || "planner".equals(agentName)) {
+        if ("product".equals(agentName)) {
             requireOptionalProfile(state.profiles(), request.modelProfileRef());
             updated = builtinModelAgent(agentName, value(request.modelProfileRef()));
+        } else if ("developer".equals(agentName)) {
+            updated = executionAgent(request, state.profiles());
         } else {
-            updated = executionAgent(agentName, current.kind(), request, state.profiles());
+            throw new IllegalArgumentException("只支持内置 Agent: " + agentName);
         }
         state.agents().set(index, updated);
         save(state);
         log.info("Agent 已更新 system={} agent={} engine={}", systemId, agentName, updated.engine());
-        return get(systemId);
-    }
-
-    @Transactional
-    public AgentConfigurationResponse deleteAgent(String systemId, String agentName) {
-        var state = locked(systemId);
-        var index = agentIndex(state.agents(), agentName);
-        if ("builtin".equals(state.agents().get(index).kind())) {
-            throw new ApiException(HttpStatus.CONFLICT, "BUILTIN_AGENT_REQUIRED", "内置 Agent 不可删除: " + agentName);
-        }
-        state.agents().remove(index);
-        save(state);
-        log.info("自定义 Agent 已删除 system={} agent={}", systemId, agentName);
         return get(systemId);
     }
 
@@ -165,7 +138,7 @@ public class AgentConfigurationService {
         var current = state.profile();
         aggregate.update(new SystemProfile(current.systemId(), current.name(), current.description(), current.repoPath(),
                 current.ownerUserId(), current.allowedPaths(), current.forbiddenPaths(), current.testCommands(),
-                current.agentConfig(), json(state.config()), current.createdBy(), current.createdAt(), Instant.now()));
+                "{}", json(state.config()), current.createdBy(), current.createdAt(), Instant.now()));
     }
 
     private List<ModelProfile> readProfiles(Object value) {
@@ -173,7 +146,9 @@ public class AgentConfigurationService {
     }
 
     private List<Agent> readAgents(Object value) {
-        var agents = convertList(value, Agent.class);
+        var agents = convertList(value, Agent.class).stream()
+                .filter(agent -> BUILTIN_AGENTS.contains(value(agent.name())))
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         for (var index = 0; index < agents.size(); index++) agents.set(index, normalized(agents.get(index)));
         return agents;
     }
@@ -188,24 +163,20 @@ public class AgentConfigurationService {
 
     private void ensureBuiltinAgents(List<Agent> agents) {
         if (findAgentIndex(agents, "product") < 0) agents.add(builtinModelAgent("product", ""));
-        if (findAgentIndex(agents, "planner") < 0) agents.add(builtinModelAgent("planner", ""));
         if (findAgentIndex(agents, "developer") < 0) {
-            agents.add(new Agent("developer", "builtin", "http", "", List.of(), "", 50, 600));
+            agents.add(new Agent("developer", "builtin", "claude_sdk_team", "", List.of(), "", 50, 600));
         }
-        // 内置 Agent 固定置顶，后续自定义 Agent 保持原顺序。
-        agents.sort(Comparator.comparingInt(agent -> {
-            var index = BUILTIN_AGENTS.indexOf(agent.name());
-            return index < 0 ? BUILTIN_AGENTS.size() : index;
-        }));
+        // 内置 Agent 固定顺序，配置页面与 Worker 共用同一份语义。
+        agents.sort((left, right) -> Integer.compare(BUILTIN_AGENTS.indexOf(left.name()), BUILTIN_AGENTS.indexOf(right.name())));
     }
 
     private Agent normalized(Agent agent) {
         var name = value(agent.name());
-        if ("product".equals(name) || "planner".equals(name)) {
+        if ("product".equals(name)) {
             return builtinModelAgent(name, value(agent.modelProfileRef()));
         }
-        var kind = "developer".equals(name) ? "builtin" : "custom";
-        return new Agent(name, kind, value(agent.engine()), value(agent.modelProfileRef()),
+        var engine = ENGINES.contains(value(agent.engine())) ? value(agent.engine()) : "claude_sdk_team";
+        return new Agent("developer", "builtin", engine, value(agent.modelProfileRef()),
                 agent.pathScope() == null ? List.of() : agent.pathScope(), value(agent.prompt()),
                 agent.maxTurns(), agent.timeoutSeconds());
     }
@@ -214,12 +185,19 @@ public class AgentConfigurationService {
         return new Agent(name, "builtin", "", profileId, List.of(), "", null, null);
     }
 
-    private Agent executionAgent(String name, String kind, AgentRequest request, List<ModelProfile> profiles) {
+    private Agent executionAgent(AgentRequest request, List<ModelProfile> profiles) {
         if (!ENGINES.contains(request.engine())) throw new IllegalArgumentException("不支持的执行内核: " + request.engine());
         requireOptionalProfile(profiles, request.modelProfileRef());
-        return new Agent(name, kind, request.engine(), value(request.modelProfileRef()),
+        return new Agent("developer", "builtin", request.engine(), value(request.modelProfileRef()),
                 request.pathScope() == null ? List.of() : request.pathScope(), value(request.prompt()),
                 request.maxTurns(), request.timeoutSeconds());
+    }
+
+    private ConfigurationMigration readMigration(Object value) {
+        if (!(value instanceof Map<?, ?> migration)) return new ConfigurationMigration(false, List.of());
+        var from = migration.get("from") instanceof List<?> values
+                ? values.stream().map(String::valueOf).toList() : List.<String>of();
+        return new ConfigurationMigration(Boolean.TRUE.equals(migration.get("migrated")), from);
     }
 
     private void requireProvider(String provider) {
@@ -281,7 +259,8 @@ public class AgentConfigurationService {
     public record AgentRequest(String name, String engine, String modelProfileRef, List<String> pathScope,
                                String prompt, Integer maxTurns, Integer timeoutSeconds) {}
     public record AgentConfigurationResponse(List<ModelProfileView> modelProfiles, List<Agent> agents,
-                                             List<String> engines) {}
+                                             List<String> engines, ConfigurationMigration migration) {}
+    public record ConfigurationMigration(boolean migrated, List<String> from) {}
     public record InternalAgentConfiguration(List<ModelProfile> modelProfiles, List<Agent> agents) {}
 
     private record State(SystemProfile profile, LinkedHashMap<String, Object> config,

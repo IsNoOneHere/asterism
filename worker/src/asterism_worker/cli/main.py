@@ -9,14 +9,10 @@ from temporalio.worker import Worker
 
 from asterism_worker.activities.execution import (
     apply_patch_to_repo,
-    plan_execution,
     revert_patch,
     run_coding_attempt,
-    run_execution,
     run_release,
     run_validation,
-    summarize_repo,
-    validate_plan_targets_activity,
 )
 from asterism_worker.activities.projections import fetch_context, send_projection_event
 from asterism_worker.activities.gitlab import check_merge_requests, publish_merge_request, ready_merge_requests
@@ -52,11 +48,7 @@ async def _worker() -> None:
         workflows=[AsterismCaseWorkflow, AsterismRouteIndexWorkflow],
         activities=[
             fetch_context,
-            summarize_repo,
-            plan_execution,
-            validate_plan_targets_activity,
             run_coding_attempt,
-            run_execution,
             apply_patch_to_repo,
             run_release,
             revert_patch,

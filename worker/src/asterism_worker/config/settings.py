@@ -1,6 +1,6 @@
 import socket
 
-from pydantic import AliasChoices, Field
+from pydantic import Field
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -17,19 +17,16 @@ class Settings(BaseSettings):
     profile: str = Field(default="local")
     workspace_root: str = Field(default="runtime/workspaces")
     artifacts_root: str = Field(default="runtime/artifacts")
-    default_engine: str = Field(default="fake", validation_alias=AliasChoices("V5_EXECUTION_ENGINE", "V5_EXECUTION_PROVIDER"))
-    execution_http_endpoint: str = Field(default="http://127.0.0.1:8090/execute")
-    default_model_provider: str = Field(default="anthropic", validation_alias=AliasChoices("V5_MODEL_PROVIDER", "V5_AGENT_PROVIDER"))
-    default_model: str = Field(default="", validation_alias=AliasChoices("V5_MODEL", "V5_ANTHROPIC_MODEL", "V5_AGENT_MODEL"))
-    default_model_base_url: str = Field(default="", validation_alias=AliasChoices("V5_MODEL_BASE_URL", "V5_ANTHROPIC_BASE_URL", "V5_AGENT_BASE_URL"))
-    default_model_api_key: str = Field(default="", validation_alias=AliasChoices("V5_MODEL_API_KEY", "V5_ANTHROPIC_API_KEY", "V5_AGENT_API_KEY"))  # gitleaks:allow 这里只包含环境变量名
-    engine_max_turns: int = Field(default=50, validation_alias=AliasChoices("V5_ENGINE_MAX_TURNS", "V5_CLAUDE_MAX_TURNS"))
-    engine_timeout_seconds: int = Field(default=600, validation_alias=AliasChoices("V5_ENGINE_TIMEOUT_SECONDS", "V5_EXECUTION_TIMEOUT_SECONDS"))
+    default_engine: str = Field(default="fake", validation_alias="V5_EXECUTION_ENGINE")
+    default_model_provider: str = Field(default="anthropic", validation_alias="V5_MODEL_PROVIDER")
+    default_model: str = Field(default="", validation_alias="V5_MODEL")
+    default_model_base_url: str = Field(default="", validation_alias="V5_MODEL_BASE_URL")
+    default_model_api_key: str = Field(default="", validation_alias="V5_MODEL_API_KEY")  # gitleaks:allow 这里只包含环境变量名
+    engine_max_turns: int = Field(default=50, validation_alias="V5_ENGINE_MAX_TURNS")
+    engine_timeout_seconds: int = Field(default=600, validation_alias="V5_ENGINE_TIMEOUT_SECONDS")
     # Claude SDK 的默认 1 MiB 仅适合小仓库；团队探索结果可能通过单条协议消息返回。
     claude_sdk_max_buffer_size: int = Field(default=16 * 1024 * 1024, validation_alias="V5_CLAUDE_SDK_MAX_BUFFER_SIZE")
-    engine_effort_level: str = Field(default="", validation_alias=AliasChoices("V5_ENGINE_EFFORT_LEVEL", "V5_CLAUDE_CODE_EFFORT_LEVEL"))
-    planner_provider: str = Field(default="fake")
-    planner_http_endpoint: str = Field(default="http://127.0.0.1:8090/plan")
+    engine_effort_level: str = Field(default="", validation_alias="V5_ENGINE_EFFORT_LEVEL")
     agent_service_url: str = Field(default="http://127.0.0.1:8090")
     worker_id: str = Field(default_factory=socket.gethostname)
     readiness_interval_seconds: int = Field(default=30)
