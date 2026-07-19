@@ -237,6 +237,7 @@ export type Agent = {
 export type AgentConfiguration = {
   modelProfiles: ModelProfile[];
   agents: Agent[];
+  maxRevisions: number;
   engines: string[];
   migration?: { migrated: boolean; from: string[] };
 };
@@ -322,6 +323,10 @@ export const api = {
     request<ModelConnectionTestResult>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-profiles/' + encodeURIComponent(profileId) + '/connection-test', { method: 'POST' }),
   updateAgent: (systemId: string, agentName: string, body: unknown) =>
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agents/' + encodeURIComponent(agentName), {
+      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
+    }),
+  updateExecutionSettings: (systemId: string, body: { maxRevisions: number }) =>
+    request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agent-config/settings', {
       method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
     }),
   systemReadiness: (systemId: string) => request<SystemReadiness>('/api/v5/systems/' + encodeURIComponent(systemId) + '/readiness'),

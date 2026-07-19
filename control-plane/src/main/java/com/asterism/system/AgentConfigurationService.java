@@ -24,6 +24,7 @@ public class AgentConfigurationService {
     private static final List<String> ENGINES = List.of("claude_sdk_team", "fake");
     private static final List<String> PROVIDERS = List.of("anthropic", "openai-compat");
     private static final List<String> BUILTIN_AGENTS = List.of("product", "developer");
+    private static final int DEFAULT_MAX_REVISIONS = 5;
 
     private final SystemProfileRepository systems;
     private final JdbcAggregateTemplate aggregate;
@@ -43,13 +44,14 @@ public class AgentConfigurationService {
     public AgentConfigurationResponse get(String systemId) {
         var state = load(systemId);
         return new AgentConfigurationResponse(
-                state.profiles().stream().map(ModelProfile::masked).toList(), state.agents(), ENGINES,
+                state.profiles().stream().map(ModelProfile::masked).toList(), state.agents(),
+                maxRevisions(state.config()), ENGINES,
                 readMigration(state.config().get("executionMigration")));
     }
 
     public InternalAgentConfiguration internal(String systemId) {
         var state = load(systemId);
-        return new InternalAgentConfiguration(state.profiles(), state.agents());
+        return new InternalAgentConfiguration(state.profiles(), state.agents(), maxRevisions(state.config()));
     }
 
     public ModelConnectionClient.ConnectionResult testProfile(String systemId, String profileId) {
@@ -116,6 +118,17 @@ public class AgentConfigurationService {
         state.agents().set(index, updated);
         save(state);
         log.info("Agent 已更新 system={} agent={} engine={}", systemId, agentName, updated.engine());
+        return get(systemId);
+    }
+
+    @Transactional
+    public AgentConfigurationResponse updateExecutionSettings(String systemId, ExecutionSettingsRequest request) {
+        var state = locked(systemId);
+        var maxRevisions = request.maxRevisions() == null ? DEFAULT_MAX_REVISIONS : request.maxRevisions();
+        if (maxRevisions < 1 || maxRevisions > 20) throw new IllegalArgumentException("最大修订轮次必须在 1 到 20 之间");
+        state.config().put("maxRevisions", maxRevisions);
+        save(state);
+        log.info("执行策略已更新 system={} maxRevisions={}", systemId, maxRevisions);
         return get(systemId);
     }
 
@@ -200,6 +213,12 @@ public class AgentConfigurationService {
         return new ConfigurationMigration(Boolean.TRUE.equals(migration.get("migrated")), from);
     }
 
+    private int maxRevisions(Map<String, Object> config) {
+        var value = config.get("maxRevisions");
+        return value instanceof Number number && number.intValue() > 0
+                ? number.intValue() : DEFAULT_MAX_REVISIONS;
+    }
+
     private void requireProvider(String provider) {
         if (!PROVIDERS.contains(provider)) throw new IllegalArgumentException("不支持的模型 provider: " + provider);
     }
@@ -258,10 +277,12 @@ public class AgentConfigurationService {
                                       boolean supportsVision) {}
     public record AgentRequest(String name, String engine, String modelProfileRef, List<String> pathScope,
                                String prompt, Integer maxTurns, Integer timeoutSeconds) {}
+    public record ExecutionSettingsRequest(Integer maxRevisions) {}
     public record AgentConfigurationResponse(List<ModelProfileView> modelProfiles, List<Agent> agents,
-                                             List<String> engines, ConfigurationMigration migration) {}
+                                             int maxRevisions, List<String> engines, ConfigurationMigration migration) {}
     public record ConfigurationMigration(boolean migrated, List<String> from) {}
-    public record InternalAgentConfiguration(List<ModelProfile> modelProfiles, List<Agent> agents) {}
+    public record InternalAgentConfiguration(List<ModelProfile> modelProfiles, List<Agent> agents,
+                                             int maxRevisions) {}
 
     private record State(SystemProfile profile, LinkedHashMap<String, Object> config,
                          List<ModelProfile> profiles, List<Agent> agents) {}

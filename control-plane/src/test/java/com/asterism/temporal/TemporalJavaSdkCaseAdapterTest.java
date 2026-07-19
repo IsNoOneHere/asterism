@@ -70,6 +70,7 @@ class TemporalJavaSdkCaseAdapterTest {
         assertThat(prd.get("draft_json")).isEqualTo(Map.of());
         assertThat(payload).doesNotContainKeys("execution_provider", "claude_max_turns", "execution_timeout_seconds");
         assertThat(payload).containsEntry("execution_architecture", "claude_sdk_team");
+        assertThat(payload).containsEntry("max_revisions", 5);
         @SuppressWarnings("unchecked")
         var snapshot = (Map<String, Object>) payload.get("agent_config_snapshot");
         assertThat(snapshot.toString()).doesNotContainIgnoringCase("apiKey");

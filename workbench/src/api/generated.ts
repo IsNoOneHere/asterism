@@ -500,6 +500,22 @@ export interface paths {
         patch: operations["updateAgent"];
         trace?: never;
     };
+    "/api/v5/systems/{systemId}/agent-config/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: operations["updateExecutionSettings"];
+        trace?: never;
+    };
     "/api/v5/prd-sessions/{prdId}/draft": {
         parameters: {
             query?: never;
@@ -956,8 +972,14 @@ export interface components {
         AgentConfigurationResponse: {
             modelProfiles?: components["schemas"]["ModelProfileView"][];
             agents?: components["schemas"]["Agent"][];
+            /** Format: int32 */
+            maxRevisions?: number;
             engines?: string[];
             migration?: components["schemas"]["ConfigurationMigration"];
+        };
+        ConfigurationMigration: {
+            migrated?: boolean;
+            from?: string[];
         };
         ModelProfileView: {
             id?: string;
@@ -1004,17 +1026,6 @@ export interface components {
         };
         RouteIndexResponse: {
             workflowId?: string;
-        };
-        AgentRequest: {
-            name?: string;
-            engine?: string;
-            modelProfileRef?: string;
-            pathScope?: string[];
-            prompt?: string;
-            /** Format: int32 */
-            maxTurns?: number;
-            /** Format: int32 */
-            timeoutSeconds?: number;
         };
         ProjectionEventRequest: {
             eventType: string;
@@ -1157,6 +1168,21 @@ export interface components {
         StatusRequest: {
             status?: string;
         };
+        AgentRequest: {
+            name?: string;
+            engine?: string;
+            modelProfileRef?: string;
+            pathScope?: string[];
+            prompt?: string;
+            /** Format: int32 */
+            maxTurns?: number;
+            /** Format: int32 */
+            timeoutSeconds?: number;
+        };
+        ExecutionSettingsRequest: {
+            /** Format: int32 */
+            maxRevisions?: number;
+        };
         DraftUpdateRequest: {
             title?: string;
             goal?: string;
@@ -1294,10 +1320,6 @@ export interface components {
         CurrentUser: {
             userId?: string;
             roles?: string[];
-        };
-        ConfigurationMigration: {
-            migrated?: boolean;
-            from?: string[];
         };
     };
     responses: never;
@@ -2207,6 +2229,32 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AgentRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["AgentConfigurationResponse"];
+                };
+            };
+        };
+    };
+    updateExecutionSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                systemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExecutionSettingsRequest"];
             };
         };
         responses: {

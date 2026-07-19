@@ -26,6 +26,26 @@ import static org.mockito.Mockito.*;
 
 class WorkItemControllerSignalAttemptTest {
     @Test
+    void patchAndMergeRejectionsRequireARevisionNote() {
+        var patch = fixture(item("modification_completed", 10));
+        var merge = fixture(item("waiting_merge", 11));
+        var blankPatch = new WorkItemActionService.ActionRequest(
+                "request-010", "modification_completed", 10L, "  ", null);
+        var blankMerge = new WorkItemActionService.ActionRequest(
+                "request-011", "waiting_merge", 11L, null, null);
+
+        assertThatThrownBy(() -> patch.service.submit("wi-1", "patch_apply_rejected", blankPatch, patch.actor))
+                .isInstanceOf(ApiException.class)
+                .extracting(error -> ((ApiException) error).code())
+                .isEqualTo("ACTION_NOTE_REQUIRED");
+        assertThatThrownBy(() -> merge.service.submit("wi-1", "rework", blankMerge, merge.actor))
+                .isInstanceOf(ApiException.class)
+                .extracting(error -> ((ApiException) error).code())
+                .isEqualTo("ACTION_NOTE_REQUIRED");
+        verifyNoInteractions(patch.temporal, merge.temporal);
+    }
+
+    @Test
     void sameRequestIsDispatchedOnlyOnce() {
         var fixture = fixture(item("validation_failed", 10));
         var key = "manual-action:wi-1:rework:request-001";
@@ -135,7 +155,7 @@ class WorkItemControllerSignalAttemptTest {
                                 "mp-latest", "deepseek-worker", "anthropic", "https://api.deepseek.com/anthropic",
                                 "secret", "deepseek-v4-pro", false)),
                         List.of(new AgentConfigurationService.Agent(
-                                "developer", "builtin", "claude_sdk_team", "mp-latest", List.of(), "", 50, 600))));
+                                "developer", "builtin", "claude_sdk_team", "mp-latest", List.of(), "", 50, 600)), 5));
         var request = new WorkItemActionService.ActionRequest(
                 "request-003", "worker_blocked", 10L, "刷新配置", null);
 

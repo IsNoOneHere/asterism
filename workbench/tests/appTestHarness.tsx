@@ -104,6 +104,7 @@ export function resetAppTestState() {
       { name: 'product', kind: 'builtin', engine: '', modelProfileRef: 'mp-1', pathScope: [], prompt: '' },
       { name: 'developer', kind: 'builtin', engine: 'claude_sdk_team', modelProfileRef: 'mp-1', pathScope: [], prompt: '', maxTurns: 40, timeoutSeconds: 900 },
     ],
+    maxRevisions: 5,
     engines: ['claude_sdk_team', 'fake'],
     migration: { migrated: false, from: [] },
   };
@@ -145,6 +146,11 @@ export function resetAppTestState() {
       const body = JSON.parse(String(init.body));
       const name = decodeURIComponent(path.split('/').pop() || '');
       agentConfiguration = { ...agentConfiguration, agents: agentConfiguration.agents.map((item: any) => item.name === name ? { ...item, ...body, name } : item) };
+      return jsonResponse(agentConfiguration);
+    }
+    if (path === '/api/v5/systems/alpha-system/agent-config/settings' && init?.method === 'PATCH') {
+      const body = JSON.parse(String(init.body));
+      agentConfiguration = { ...agentConfiguration, ...body };
       return jsonResponse(agentConfiguration);
     }
     if (path.endsWith('/readiness')) return jsonResponse({ ready: true, stages: [], issues: [], effectiveExecutionProvider: 'claude_sdk_team' });

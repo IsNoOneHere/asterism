@@ -36,7 +36,6 @@ public class WorkItemActionService {
             Map.entry("activated", List.of("start_modification", "cancel_case")),
             Map.entry("worker_blocked", List.of(
                     "retry_current_phase", "rework", "rework_with_latest_config", "cancel_case")),
-            Map.entry("patch_rejected", List.of("rework", "cancel_case")),
             Map.entry("validation_failed", List.of("rework", "cancel_case")),
             Map.entry("modification_completed", List.of("patch_apply_approved", "patch_apply_rejected", "cancel_case")),
             Map.entry("patch_applied", List.of("validation_passed", "validation_rejected")),
@@ -44,6 +43,9 @@ public class WorkItemActionService {
             Map.entry("waiting_merge", List.of("check_merge_status", "rework", "cancel_case")));
     private static final Set<String> VALIDATION_ACTIONS = Set.of("validation_passed", "validation_rejected");
     private static final Set<String> CONFIG_REFRESH_PHASES = Set.of("coding");
+    private static final Map<String, Set<String>> NOTE_REQUIRED_STATUSES = Map.of(
+            "patch_apply_rejected", Set.of("modification_completed"),
+            "rework", Set.of("waiting_merge"));
     private static final Predicate<RuntimeState> ALWAYS_AVAILABLE = ignored -> true;
     private static final Map<String, Predicate<RuntimeState>> ACTION_GUARDS = Map.of(
             "retry_current_phase", RuntimeState::phaseRetrySupported,
@@ -119,6 +121,9 @@ public class WorkItemActionService {
         }
         var note = text(request.note(), 2000, "note");
         var evidence = text(request.evidence(), 4000, "evidence");
+        if (noteRequired(action, item.lifecycleStatus()) && note.isBlank()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ACTION_NOTE_REQUIRED", "打回修订必须填写修改意见");
+        }
         var signalId = action + "-" + requestId;
         var requestKey = "manual-action:" + workItemId + ":" + action + ":" + requestId;
         var runtime = runtime(item);
@@ -200,6 +205,10 @@ public class WorkItemActionService {
 
     private boolean actionAvailable(String action, RuntimeState runtime) {
         return ACTION_GUARDS.getOrDefault(action, ALWAYS_AVAILABLE).test(runtime);
+    }
+
+    private boolean noteRequired(String action, String status) {
+        return NOTE_REQUIRED_STATUSES.getOrDefault(action, Set.of()).contains(status);
     }
 
     private RuntimeState runtime(WorkItemProjection item) {

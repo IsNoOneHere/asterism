@@ -33,8 +33,20 @@ make doctor
 2. 在“Agent / 模型配置”创建 Model Profile；API Key 只写入，页面只显示 `apiKeySet`。
 3. 为 `product` 选择 PRD 对话模型，为 `developer` 选择代码模型。
 4. `developer` 使用 `claude_sdk_team`。Claude SDK 会为每个仓库自动生成受权限约束的子 Agent，无需手工创建 frontend/backend Agent。
+5. 在“Agent”页设置最大修订轮次（默认 5），新建工作项会冻结当时的设置。
 
 生产代码只支持 `claude_sdk_team`；`fake` 实现保留为 `ExecutionProvider` 协议的测试基线。
+
+## 人工审查与自动修订
+
+1. 提交需求并完成负责人审批，启动 Agent 开发。
+2. `ModificationCompleted` 后打开“代码变更”，审查完整 Diff。
+3. 发现问题时填写必填修订意见，点击“打回修订”。系统会自动进入第 N 轮修订，不需要再点“开始执行”。
+4. Agent 优先在上一版候选 Diff 上增量修订；候选无法恢复时自动降级为带意见的全量修订。
+5. 审查新 Diff；通过后继续验证和发布，仍有问题可继续打回。
+6. GitLab MR 审查期间也可“打回修订”，新 commit 会推送到原分支并更新同一 MR。
+
+达到修订上限时，工作项以 `revision_limit_reached` 进入阻塞；负责人可取消，或选择“完整重做”并重置轮次。
 
 ## 截图反馈
 

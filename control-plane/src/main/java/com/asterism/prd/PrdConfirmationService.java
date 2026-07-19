@@ -83,6 +83,7 @@ public class PrdConfirmationService {
             // Temporal 是外部系统，必须在数据库事务提交后调用。
             var profile = systems.findById(current.systemId()).orElseThrow(() -> new IllegalArgumentException("系统不存在"));
             var gitConfig = git.internal(current.systemId());
+            var agentConfig = configurations.internal(current.systemId());
             try {
                 temporal.startCase(new TemporalCasePort.StartCaseCommand(
                         caseId,
@@ -101,7 +102,8 @@ public class PrdConfirmationService {
                         gitConfig.validationMode(),
                         gitConfig.mrTargetBranch(),
                         gitConfig.mrLabels(),
-                        agentConfigSnapshot(current.systemId()),
+                        agentConfig.maxRevisions(),
+                        agentConfigSnapshot(agentConfig),
                         prdPayload(current)));
             } catch (WorkflowExecutionAlreadyStarted error) {
                 // confirm 幂等：Temporal workflow 已存在说明上一轮启动实际成功，按成功路径收敛。
@@ -163,8 +165,8 @@ public class PrdConfirmationService {
                 draftCodec.toMap(draft));
     }
 
-    private TemporalCasePort.AgentConfigSnapshot agentConfigSnapshot(String systemId) {
-        var config = configurations.internal(systemId);
+    private TemporalCasePort.AgentConfigSnapshot agentConfigSnapshot(
+            AgentConfigurationService.InternalAgentConfiguration config) {
         // Case 只冻结非密钥配置，API Key 仍由 activity 按 Profile 引用实时读取。
         return new TemporalCasePort.AgentConfigSnapshot(
                 config.modelProfiles().stream().map(profile -> new TemporalCasePort.ModelProfileSnapshot(

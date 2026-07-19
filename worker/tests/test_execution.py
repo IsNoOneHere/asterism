@@ -5,6 +5,7 @@ import pytest
 
 from asterism_worker.activities.execution import (
     _apply_previous_candidate,
+    _restore_revision_candidate,
     apply_patch_to_repo,
     run_coding_attempt,
     run_validation,
@@ -64,6 +65,61 @@ def test_previous_candidate_is_restored_before_revision(tmp_path):
     _apply_previous_candidate(request, TeamWorkspace(tmp_path, {"main": repo}))
 
     assert (repo / "README.md").read_text() == "Asterism\n"
+
+
+def test_unrestorable_revision_candidate_falls_back_to_clean_full_mode(tmp_path):
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    request = CodingAttemptRequest.model_validate({
+        "case_id": "case-1", "work_item_id": "wi-1", "system_id": "sys-1",
+        "repos": [{"repo_id": "main", "local_path": str(repo)}],
+        "goal": "修订 README",
+        "previous_candidate": [{
+            "repo": "main",
+            "diff_patch": "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-missing\n+new\n",
+        }],
+        "revision_context": {
+            "revision": 1, "revision_mode": "incremental", "feedback": "只修改标题",
+        },
+    })
+
+    restored = _restore_revision_candidate(request, TeamWorkspace(tmp_path, {"main": repo}))
+
+    assert restored.previous_candidate == []
+    assert restored.revision_context.revision_mode == "full"
+    assert (repo / "README.md").read_text() == "asterism\n"
+
+
+def test_partial_candidate_restore_resets_every_touched_repo_before_full_fallback(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    _git_repo(first)
+    _git_repo(second)
+    request = CodingAttemptRequest.model_validate({
+        "case_id": "case-1", "work_item_id": "wi-1", "system_id": "sys-1",
+        "repos": [{"repo_id": "first"}, {"repo_id": "second"}],
+        "goal": "修订多仓 README",
+        "previous_candidate": [
+            {
+                "repo": "first",
+                "diff_patch": "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-asterism\n+first\n",
+            },
+            {
+                "repo": "second",
+                "diff_patch": "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-missing\n+second\n",
+            },
+        ],
+        "revision_context": {
+            "revision": 1, "revision_mode": "incremental", "feedback": "只修改标题",
+        },
+    })
+
+    restored = _restore_revision_candidate(request, TeamWorkspace(tmp_path, {"first": first, "second": second}))
+
+    assert restored.previous_candidate == []
+    assert restored.revision_context.revision_mode == "full"
+    assert (first / "README.md").read_text() == "asterism\n"
+    assert (second / "README.md").read_text() == "asterism\n"
 
 
 def test_run_coding_attempt_uses_terminal_fake_baseline_and_cleans_workspace(tmp_path, monkeypatch):

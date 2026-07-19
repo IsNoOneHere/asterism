@@ -8,12 +8,10 @@ from temporalio.exceptions import ActivityError, ApplicationError
 
 from asterism_worker.contracts import (
     AgentConfigSnapshot,
-    CaseInput,
     CodingAttemptResult,
     ContextSnapshot,
     ExecutionResult,
     LifecycleStatus,
-    RepoSnapshot,
 )
 
 CLAUDE_SDK_TEAM_ARCHITECTURE = "claude_sdk_team"
@@ -51,28 +49,89 @@ PHASE_RECOVERIES = {
 }
 
 
-def error_detail(error: BaseException) -> str:
-    messages: list[str] = []
-    current: BaseException | None = error
-    while current is not None:
-        text = str(current)
-        if text:
-            messages.append(text)
-        current = current.__cause__
-    return " | ".join(messages)
-
-
-def diff_paths(diff_patch: str) -> list[str]:
-    paths: list[str] = []
-    for line in diff_patch.splitlines():
-        if line.startswith("diff --git "):
-            parts = line.split()
-            if len(parts) >= 4:
-                paths.append(parts[3][2:] if parts[3].startswith("b/") else parts[3])
-    return paths
-
-
 class CodingWorkflow:
+    async def _patch_rejected_action(
+        self, _action: str, _spec, signal_id: str, context: dict,
+    ) -> bool:
+        return await self._request_revision(signal_id, context, "review", reject_patch=True)
+
+    async def _request_revision(
+        self, signal_id: str, context: dict, phase: str, reject_patch: bool = False,
+    ) -> bool:
+        """记录人工意见并在同一个 signal 内自动启动下一轮修订。"""
+
+        limit = self._case_input().max_revisions
+        if self.revision >= limit:
+            if phase == "merge":
+                self._prepare_merge_rework()
+            await self._block_worker(
+                signal_id,
+                "revision_limit_reached",
+                RuntimeError(f"已达到最大修订轮次 {limit}"),
+                {"revision": self.revision, "maxRevisions": limit, "phase": phase, "note": context.get("note", "")},
+            )
+            return True
+        if reject_patch:
+            await self._emit(self.state.patch_apply_rejected(), signal_id, context)
+        candidates = self._previous_candidate()
+        next_revision = self.revision + 1
+        self.revision_mode = "incremental" if candidates else "full"
+        await self._emit(self.state.rework(), signal_id, {
+            "retryScope": "revision",
+            "revision": next_revision,
+            "revisionMode": self.revision_mode,
+        })
+        if phase == "merge":
+            self._prepare_merge_rework()
+        self.revision = next_revision
+        await self._emit("RevisionRequested", signal_id, {
+            "note": str(context.get("note", "")).strip(),
+            "revision": self.revision,
+            "requestedBy": str(context.get("actor_id", "")),
+            "phase": phase,
+            "revisionMode": self.revision_mode,
+            "diffSummary": self._candidate_summary(candidates),
+        })
+        self.failed_phase = ""
+        await self._start_supervised_modification(signal_id, reuse_context=True)
+        return True
+
+    async def _recovery_action(self, action: str, spec, signal_id: str, context: dict) -> bool:
+        previous_status = self.state.status.value
+        if previous_status == "waiting_merge":
+            return await self._request_revision(signal_id, context, "merge")
+        phase = self._failed_execution_phase() if spec.retry_failed_phase else ExecutionPhase.coding
+        if phase is None:
+            workflow.logger.warning("缺少可恢复阶段", extra={"action": action})
+            return False
+        if spec.refresh_configuration and phase != ExecutionPhase.coding:
+            workflow.logger.warning("当前阶段不消费 Agent 配置", extra={"phase": phase.value})
+            return False
+        configuration_refreshed = False
+        if spec.refresh_configuration:
+            snapshot = self._agent_config_snapshot(context)
+            if snapshot is None:
+                return False
+            # 刷新配置只替换执行快照，保留候选代码和上下文。
+            self.case_input = self._case_input().model_copy(update={"agent_config_snapshot": snapshot})
+            configuration_refreshed = True
+        context.pop("resume_failed_stage", None)
+        event = self.state.rework()
+        await self._emit(event, signal_id, {
+            "configurationRefreshed": configuration_refreshed,
+            "retryPhase": phase.value,
+            "retryScope": "phase" if spec.retry_failed_phase else "full",
+        })
+        if event is None:
+            return False
+        self.failed_phase = ""
+        if not spec.retry_failed_phase:
+            self.revision = 0
+            self.revision_mode = "full"
+            await self._start_supervised_modification(signal_id, reuse_candidate=False)
+            return True
+        return await self._retry_phase(signal_id, phase)
+
     async def _retry_phase(self, signal_id: str, phase: ExecutionPhase) -> bool:
         recovery = PHASE_RECOVERIES[phase]
         workflow.logger.info("重试失败阶段", extra={"phase": phase.value, "runner": recovery.runner})
@@ -123,7 +182,9 @@ class CodingWorkflow:
     async def _start_modification(self, signal_id: str) -> None:
         await self._start_supervised_modification(signal_id)
 
-    async def _start_supervised_modification(self, signal_id: str, reuse_context: bool = False) -> None:
+    async def _start_supervised_modification(
+        self, signal_id: str, reuse_context: bool = False, reuse_candidate: bool = True,
+    ) -> None:
         """启动 Claude SDK Supervisor，仓库分工由 SDK 会话内部完成。"""
 
         case_input = self._case_input()
@@ -144,7 +205,7 @@ class CodingWorkflow:
                 return
             snapshot = ContextSnapshot.model_validate(result_payload)
         self.context_snapshot = snapshot
-        previous_candidate = self._previous_candidate()
+        previous_candidate = self._previous_candidate() if reuse_candidate else []
         repos = case_input.effective_repos()
         await self._emit("CodingAttemptStarted", signal_id, {
             "architecture": CLAUDE_SDK_TEAM_ARCHITECTURE,
@@ -152,6 +213,8 @@ class CodingWorkflow:
             "repositories": [repo.repo_id for repo in repos],
             "contextManifestId": snapshot.manifest_id,
             "candidateReused": bool(previous_candidate),
+            "revision": self.revision,
+            "revisionMode": self.revision_mode,
         })
         request = {
             "case_id": case_input.case_id,
@@ -165,6 +228,13 @@ class CodingWorkflow:
             "context_manifest_id": snapshot.manifest_id,
             "previous_candidate": previous_candidate,
         }
+        if self.revision:
+            request["revision_context"] = {
+                "revision": self.revision,
+                "revision_mode": self.revision_mode,
+                "feedback": self.rework_feedback,
+                "previous_diff_summary": self._candidate_summary(previous_candidate),
+            }
         if case_input.agent_config_snapshot is not None:
             request["agent_config_snapshot"] = case_input.agent_config_snapshot.model_dump()
         try:
@@ -182,6 +252,8 @@ class CodingWorkflow:
                 "executionArchitecture": CLAUDE_SDK_TEAM_ARCHITECTURE,
             }, phase=ExecutionPhase.coding)
             return
+        if attempt.revision_mode:
+            self.revision_mode = attempt.revision_mode
         changes = [change for change in attempt.repo_changes if change.diff_patch.strip()]
         if not changes:
             await self._block_worker(
@@ -252,6 +324,8 @@ class CodingWorkflow:
             "executionProvider": result.execution_provider,
             "turns": result.turns,
             "tokenUsage": result.token_usage,
+            "revision": self.revision,
+            "revisionMode": self.revision_mode,
         }
         if result.session_id:
             payload["sessionId"] = result.session_id
@@ -262,6 +336,13 @@ class CodingWorkflow:
             for repo, diff in self._repo_diffs()
         ]
         await self._emit(self.state.modification_finished(result), signal_id, payload)
+
+    def _candidate_summary(self, candidates: list[dict]) -> list[dict]:
+        return [{
+            "repo": item.get("repo", ""),
+            "summary": item.get("summary", ""),
+            "changedPaths": item.get("changed_paths", []),
+        } for item in candidates]
 
     def _previous_candidate(self) -> list[dict]:
         if self.completed_stage_results:
@@ -291,27 +372,3 @@ class CodingWorkflow:
             return 3600
         developer = next((agent for agent in snapshot.agents if agent.name == "developer"), None)
         return (developer.timeout_seconds if developer and developer.timeout_seconds else 3600) + 30
-
-    def _repo_diffs(self) -> list[tuple[RepoSnapshot, str]]:
-        repos = self._case_input().effective_repos()
-        if not self.completed_stage_results:
-            return [(repos[0], self.state.diff_patch)]
-        grouped: dict[str, list[str]] = {}
-        for result in self.completed_stage_results:
-            grouped.setdefault(result.repo or repos[0].repo_id, []).append(result.diff_patch.rstrip())
-        by_id = {repo.repo_id: repo for repo in repos}
-        return [(by_id[repo_id], "\n".join(parts) + "\n") for repo_id, parts in grouped.items()]
-
-    def _error_detail(self, error: BaseException) -> str:
-        return error_detail(error)
-
-    def _case_input(self) -> CaseInput:
-        if self.case_input is None:
-            raise RuntimeError("case input is not initialized")
-        return self.case_input
-
-    def _is_gitlab(self) -> bool:
-        return self._case_input().release_mode == "gitlab"
-
-    def _diff_paths(self, diff_patch: str) -> list[str]:
-        return diff_paths(diff_patch)

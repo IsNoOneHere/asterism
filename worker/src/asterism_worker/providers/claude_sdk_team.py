@@ -415,7 +415,18 @@ class ClaudeSdkTeamProvider:
             f"- {spec.name} -> 仓库 {spec.repo.repo_id}，目录 {spec.policy.writable_roots[0].name}"
             for spec in specs
         )
-        previous = json.dumps([item.model_dump() for item in request.previous_candidate], ensure_ascii=False)
+        # 旧 Patch 已恢复到工作区，Prompt 只传摘要，避免重复占用模型上下文。
+        previous = json.dumps([
+            {
+                "repo": item.repo,
+                "summary": item.summary,
+                "changed_paths": item.changed_paths,
+            }
+            for item in request.previous_candidate
+        ], ensure_ascii=False)
+        revision = json.dumps(
+            request.revision_context.model_dump() if request.revision_context else {}, ensure_ascii=False,
+        )
         return (
             "你是 Coding Supervisor。先理解跨仓需求，再自主使用 Claude Code 原生 Agent 完成工作。"
             "Explore、Plan 等内置 Agent 可自由用于只读探索和方案分析；需要修改代码时，调用下方自动生成的仓库 Agent。"
@@ -430,7 +441,8 @@ class ClaudeSdkTeamProvider:
             f"目标：\n{request.goal}\n\n"
             f"验收标准：\n{criteria}\n\n"
             f"人工反馈：\n{request.feedback or '无'}\n\n"
-            f"上一版候选（已恢复到当前工作区；重做时直接按反馈修订，可能为空）：\n{previous or '[]'}\n\n"
+            f"结构化修订上下文：\n{revision}\n\n"
+            f"上一版候选摘要（代码已恢复到当前工作区；重做时直接按反馈修订，可能为空）：\n{previous}\n\n"
             f"可用子 Agent 与仓库：\n{mappings}\n\n"
             f"Supervisor 补充约束：\n{self.supervisor.prompt or '无'}\n"
         )

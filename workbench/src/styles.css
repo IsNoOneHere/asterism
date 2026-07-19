@@ -1495,6 +1495,35 @@ pre {
   min-width: 0;
 }
 
+.agent-config-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.execution-policy-panel {
+  align-items: end;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) 150px auto;
+}
+
+.execution-policy-panel h2 {
+  margin-bottom: 5px;
+}
+
+.execution-policy-panel p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.execution-policy-panel label {
+  font-size: 12px;
+}
+
+.execution-policy-panel .error-text {
+  grid-column: 1 / -1;
+}
+
 .business-model-panel h2,
 .business-model-panel h3,
 .routing-panel h2,
@@ -2979,6 +3008,112 @@ button.row-action-menu-item:disabled {
   white-space: nowrap;
 }
 
+.revision-progress {
+  margin-bottom: 12px;
+}
+
+.revision-history {
+  margin: 14px 0 0;
+  padding: 20px;
+}
+
+.revision-history > header {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.revision-history h2,
+.revision-history p {
+  margin: 0;
+}
+
+.revision-history h2 {
+  font-size: 17px;
+}
+
+.revision-history header p,
+.revision-history header > span {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.revision-history ol {
+  display: grid;
+  gap: 9px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.revision-history li {
+  align-items: start;
+  background: var(--surface-subtle);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 9px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 100px minmax(220px, 1fr) minmax(260px, auto) auto;
+  padding: 12px 14px;
+}
+
+.revision-history li.running {
+  border-left-color: var(--accent);
+}
+
+.revision-history li.completed {
+  border-left-color: #1f725e;
+}
+
+.revision-history li.failed {
+  border-left-color: var(--danger);
+}
+
+.revision-index,
+.revision-content {
+  display: grid;
+  gap: 4px;
+}
+
+.revision-index span,
+.revision-content small,
+.revision-history time,
+.revision-history dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.revision-content p {
+  line-height: 1.45;
+}
+
+.revision-content small {
+  overflow-wrap: anywhere;
+}
+
+.revision-history dl {
+  display: flex;
+  gap: 16px;
+  margin: 0;
+}
+
+.revision-history dl > div {
+  display: grid;
+  gap: 3px;
+}
+
+.revision-history dd {
+  font-size: 12px;
+  margin: 0;
+}
+
+.revision-history time {
+  white-space: nowrap;
+}
+
 .work-item-basic {
   margin-bottom: 14px;
   padding: 13px 18px;
@@ -3494,6 +3629,41 @@ button.row-action-menu-item:disabled {
   gap: 14px;
 }
 
+.code-review-actions {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(240px, 0.75fr) minmax(320px, 1.25fr);
+}
+
+.code-review-actions h2 {
+  font-size: 18px;
+  margin-bottom: 6px;
+}
+
+.code-review-actions p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.code-review-actions label {
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.code-review-actions textarea {
+  margin-top: 7px;
+  resize: vertical;
+}
+
+.code-review-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
 .code-change-summary {
   display: grid;
   gap: 0;
@@ -3775,7 +3945,20 @@ button.row-action-menu-item:disabled {
     grid-template-columns: 1fr;
   }
 
+  .revision-history li {
+    grid-template-columns: 90px minmax(220px, 1fr) minmax(220px, auto);
+  }
+
+  .revision-history time {
+    grid-column: 2 / -1;
+  }
+
   .agent-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .execution-policy-panel {
+    align-items: stretch;
     grid-template-columns: 1fr;
   }
 
@@ -3948,6 +4131,20 @@ button.row-action-menu-item:disabled {
 
   .stage-detail-head {
     flex-direction: column;
+  }
+
+  .revision-history li,
+  .code-review-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .revision-history time,
+  .code-review-buttons {
+    grid-column: 1;
+  }
+
+  .revision-history dl {
+    flex-wrap: wrap;
   }
 
   .stage-failure {

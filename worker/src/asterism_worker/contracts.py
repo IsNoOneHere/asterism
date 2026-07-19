@@ -1,5 +1,5 @@
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -75,6 +75,7 @@ class CaseInput(BaseModel):
     mr_labels: list[str] = Field(default_factory=list)
     agent_config_snapshot: AgentConfigSnapshot | None = None
     execution_architecture: str = "claude_sdk_team"
+    max_revisions: int = Field(default=5, ge=1, le=20)
 
     def effective_repos(self) -> list[RepoSnapshot]:
         # 单仓调用可继续使用顶层字段，多仓统一读取 repos。
@@ -161,6 +162,16 @@ class SubagentRun(BaseModel):
     status: str = "completed"
 
 
+class RevisionContext(BaseModel):
+    """人工修订的结构化上下文，供 Supervisor 精确收敛修改范围。"""
+
+    revision: int = Field(ge=1)
+    revision_mode: Literal["incremental", "full"]
+    feedback: str
+    previous_diff_summary: list[dict[str, Any]] = Field(default_factory=list)
+    instruction: str = "只修订人工意见涉及的部分，不推翻已通过的改动"
+
+
 class CodingAttemptRequest(BaseModel):
     case_id: str
     work_item_id: str
@@ -173,6 +184,7 @@ class CodingAttemptRequest(BaseModel):
     context_manifest_id: str = ""
     agent_config_snapshot: AgentConfigSnapshot | None = None
     previous_candidate: list[RepoChangeResult] = Field(default_factory=list)
+    revision_context: RevisionContext | None = None
 
 
 class CodingAttemptResult(BaseModel):
@@ -183,6 +195,7 @@ class CodingAttemptResult(BaseModel):
     session_id: str = ""
     turns: int | None = None
     execution_provider: str = "claude_sdk_team"
+    revision_mode: Literal["incremental", "full"] | None = None
 
 
 class ReleaseResult(BaseModel):

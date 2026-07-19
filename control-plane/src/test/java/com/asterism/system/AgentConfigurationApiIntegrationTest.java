@@ -50,12 +50,18 @@ class AgentConfigurationApiIntegrationTest {
                 .andExpect(jsonPath("$.modelProfiles[0].apiKeySet").value(true))
                 .andExpect(jsonPath("$.agents[0].name").value("product"))
                 .andExpect(jsonPath("$.agents[1].name").value("developer"))
+                .andExpect(jsonPath("$.maxRevisions").value(5))
                 .andExpect(jsonPath("$.engines[0]").value("claude_sdk_team"))
                 .andExpect(jsonPath("$.modelRouting").doesNotExist())
                 .andExpect(content().string(not(containsString("profile-secret"))))
                 .andExpect(content().string(not(containsString("\"apiKey\":"))))
                 .andReturn().getResponse().getContentAsString();
         var profileId = objectMapper.readTree(profileResponse).get("modelProfiles").get(0).get("id").asText();
+
+        mockMvc.perform(patch("/api/v5/systems/" + systemId + "/agent-config/settings")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"maxRevisions\":3}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.maxRevisions").value(3));
 
         mockMvc.perform(patch("/api/v5/systems/" + systemId + "/agents/product")
                         .contentType(MediaType.APPLICATION_JSON).content("""

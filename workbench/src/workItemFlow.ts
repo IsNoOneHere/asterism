@@ -67,6 +67,21 @@ export type ModificationView = {
   turns: number | null;
   tokenUsage: Record<string, unknown>;
   diffPatch: string;
+  revision: number;
+  revisionMode: 'incremental' | 'full';
+};
+
+export type RevisionHistoryView = {
+  id: string;
+  revision: number;
+  note: string;
+  requestedBy: string;
+  requestedAt?: string;
+  completedAt?: string;
+  diffSummary: string;
+  revisionMode: 'incremental' | 'full';
+  phase: 'review' | 'merge';
+  status: 'running' | 'completed' | 'failed';
 };
 
 export type WorkItemFlow = {
@@ -77,6 +92,8 @@ export type WorkItemFlow = {
   modification: ModificationView | null;
   repositories: RepositoryFlowView[];
   checks: ValidationCheckView[];
+  revisions: RevisionHistoryView[];
+  activeRevision: RevisionHistoryView | null;
 };
 
 export const FLOW_STAGES: ReadonlyArray<{ id: FlowStageId; label: string }> = [
@@ -102,9 +119,10 @@ const FAILURE_REASON_LABELS: Record<string, string> = {
   mr_create_failed: 'Git 提交或 MR 创建失败',
   push_failed: 'Git 推送失败',
   release_failed: '发布失败',
+  revision_limit_reached: '已达到最大修订轮次，等待负责人决定取消或完整重做',
 };
 const ATTEMPT_EVENTS = new Set([
-  'WorkItemActivated', 'ReworkStarted', 'CodingAttemptStarted', 'AgentStageCompleted', 'ModificationCompleted',
+  'WorkItemActivated', 'ReworkStarted', 'RevisionRequested', 'CodingAttemptStarted', 'AgentStageCompleted', 'ModificationCompleted',
   'WorkerBlocked', 'PatchApplied', 'PatchApplyBlocked', 'PatchRejected', 'ValidationPassed', 'ValidationFailed',
   'RepositoryReleasePrepared', 'MergeRequestCreated', 'MergeRequestMerged', 'MergeRequestClosed', 'ReleaseCompleted', 'CaseCancelled',
 ]);
@@ -125,6 +143,7 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
   let lastFailureStage: FlowStageId | null = null;
   let latestMrRoot = '';
   let validationSkipped = false;
+  const revisions: RevisionHistoryView[] = [];
 
   const addAttemptEvent = (event: WorkItemEvent, stageIds: FlowStageId[]) => {
     if (!ATTEMPT_EVENTS.has(event.eventType)) return;
@@ -222,6 +241,21 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
         validationSkipped = false;
         break;
       }
+      case 'RevisionRequested': {
+        const revision = numberValue(payload?.revision) ?? revisions.length + 1;
+        revisions.push({
+          id: event.eventId || String(event.sequence),
+          revision,
+          note: stringValue(payload?.note),
+          requestedBy: stringValue(payload?.requestedBy ?? payload?.requested_by),
+          requestedAt: event.createdAt,
+          diffSummary: revisionDiffSummary(payload?.diffSummary ?? payload?.diff_summary),
+          revisionMode: revisionMode(payload?.revisionMode ?? payload?.revision_mode),
+          phase: stringValue(payload?.phase) === 'merge' ? 'merge' : 'review',
+          status: 'running',
+        });
+        break;
+      }
       case 'AgentStageCompleted': {
         const completedAgent = parseAgent(payload);
         if (!completedAgent) break;
@@ -237,6 +271,16 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
       }
       case 'ModificationCompleted': {
         modification = parseModification(payload);
+        if (modification && modification.revision > 0) {
+          const revision = [...revisions].reverse().find((item) =>
+            item.revision === modification!.revision && item.status === 'running');
+          if (revision) {
+            revision.completedAt = event.createdAt;
+            revision.diffSummary = modification.summary;
+            revision.revisionMode = modification.revisionMode;
+            revision.status = 'completed';
+          }
+        }
         agents = agents.map((agent) => ({ ...agent, status: 'completed' }));
         const repoDiffs = arrayRecords(payload?.repoDiffs ?? payload?.repo_diffs);
         if (repoDiffs.length) {
@@ -248,6 +292,10 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
         break;
       }
       case 'WorkerBlocked': {
+        const revisionNumber = numberValue(payload?.revision);
+        const revision = [...revisions].reverse().find((item) =>
+          item.status === 'running' && (revisionNumber === null || item.revision === revisionNumber));
+        if (revision) revision.status = 'failed';
         if (lastFailureStage === 'execution') {
           const index = agents.findIndex((agent) => agent.status === 'pending' || agent.status === 'running');
           if (index >= 0 && index < agents.length) agents[index] = { ...agents[index], status: 'failed' };
@@ -305,13 +353,16 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
   stageById.get('release')!.repositories = repositoryViews;
   for (const stage of stages) setDuration(stage);
 
-  return { currentStageId, stages, attempts, events, modification, repositories: repositoryViews, checks };
+  const activeRevision = [...revisions].reverse().find((revision) => revision.status === 'running') ?? null;
+  return { currentStageId, stages, attempts, events, modification, repositories: repositoryViews, checks,
+    revisions, activeRevision };
 }
 
 export function eventName(eventType: string) {
   return ({
     OwnerApprovalRequested: '已请求负责人审批', OwnerApprovalSignalSubmitted: '负责人已提交审批',
     WorkItemActivated: '工作项已激活', WorkItemRejected: '负责人已拒绝', ReworkStarted: '已开始重新执行',
+    RevisionRequested: '已请求人工意见修订',
     CodingAttemptStarted: 'Claude SDK Coding Attempt 已启动',
     AgentStageCompleted: 'Agent 阶段已完成', ModificationCompleted: '修改已完成',
     WorkerBlocked: '执行已阻塞', PatchApplied: 'Patch 已应用', PatchApplyBlocked: 'Patch 应用被阻塞', PatchRejected: 'Patch 已打回',
@@ -365,6 +416,7 @@ function stagesForEvent(event: WorkItemEvent, fallback: FlowStageId): FlowStageI
     case 'WorkItemActivated':
     case 'WorkItemRejected': return ['approval'];
     case 'ReworkStarted':
+    case 'RevisionRequested':
     case 'CodingAttemptStarted':
     case 'AgentStageCompleted': return ['execution'];
     case 'ModificationCompleted': return ['execution', 'patch'];
@@ -477,7 +529,22 @@ function parseModification(payload: Record<string, unknown> | null): Modificatio
     summary: stringValue(payload.summary), provider: stringValue(payload.executionProvider ?? payload.execution_provider),
     turns: numberValue(payload.turns), tokenUsage: recordValue(payload.tokenUsage ?? payload.token_usage) ?? {},
     diffPatch: stringValue(payload.diffPatch ?? payload.diff_patch),
+    revision: numberValue(payload.revision) ?? 0,
+    revisionMode: revisionMode(payload.revisionMode ?? payload.revision_mode),
   };
+}
+
+function revisionMode(value: unknown): 'incremental' | 'full' {
+  return stringValue(value) === 'incremental' ? 'incremental' : 'full';
+}
+
+function revisionDiffSummary(value: unknown): string {
+  if (typeof value === 'string') return value;
+  return arrayRecords(value).map((item) => {
+    const repo = stringValue(item.repo) || '默认仓库';
+    const paths = stringList(item.changedPaths ?? item.changed_paths);
+    return paths.length ? `${repo}：${paths.join('、')}` : `${repo}：${stringValue(item.summary) || '已有候选修改'}`;
+  }).join('；');
 }
 
 function parseChecks(payload: Record<string, unknown> | null, passed: boolean): ValidationCheckView[] {

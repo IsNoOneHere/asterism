@@ -104,6 +104,7 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
                 text(command.validationMode()),
                 text(command.mrTargetBranch()),
                 list(command.mrLabels()),
+                command.maxRevisions(),
                 "claude_sdk_team",
                 command.agentConfigSnapshot(),
                 new PrdPayloadDto(
@@ -139,6 +140,7 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
             String validationMode,
             String mrTargetBranch,
             List<String> mrLabels,
+            int maxRevisions,
             String executionArchitecture,
             AgentConfigSnapshot agentConfigSnapshot,
             PrdPayloadDto prd) {

@@ -37,6 +37,7 @@ class ActionSpec:
     feedback_label: str = ""
     retry_failed_phase: bool = False
     refresh_configuration: bool = False
+    note_required_statuses: frozenset[str] = frozenset()
 
 
 def _statuses(*values: str) -> frozenset[str]:
@@ -53,11 +54,11 @@ ACTION_SPECS = {
     "start_modification": ActionSpec("_start_modification_action", _statuses("activated")),
     "patch_apply_approved": ActionSpec("_apply_patch_action", _statuses("modification_completed")),
     "patch_apply_rejected": ActionSpec(
-        "_transition_action",
+        "_patch_rejected_action",
         _statuses("modification_completed"),
-        transition="patch_apply_rejected",
         feedback_mode="replace",
         feedback_label="人工审核反馈",
+        note_required_statuses=_statuses("modification_completed"),
     ),
     "validation_passed": ActionSpec(
         "_transition_action", _statuses("patch_applied"), transition="validation_passed",
@@ -71,9 +72,10 @@ ACTION_SPECS = {
     "release_approved": ActionSpec("_release_action", _statuses("validation_passed")),
     "rework": ActionSpec(
         "_recovery_action",
-        _statuses("worker_blocked", "patch_rejected", "validation_failed", "waiting_merge"),
+        _statuses("worker_blocked", "validation_failed", "waiting_merge"),
         feedback_mode="append",
         feedback_label="重试补充",
+        note_required_statuses=_statuses("waiting_merge"),
     ),
     "retry_current_phase": ActionSpec(
         "_recovery_action",
@@ -117,6 +119,16 @@ def feedback_text(context: dict) -> str:
     )
 
 
+def error_detail(error: BaseException) -> str:
+    messages: list[str] = []
+    current: BaseException | None = error
+    while current is not None:
+        if text := str(current):
+            messages.append(text)
+        current = current.__cause__
+    return " | ".join(messages)
+
+
 @workflow.defn(name="AsterismCaseWorkflow")
 class AsterismCaseWorkflow(CodingWorkflow, PublishingWorkflow, ValidationWorkflow):
     def __init__(self) -> None:
@@ -135,6 +147,8 @@ class AsterismCaseWorkflow(CodingWorkflow, PublishingWorkflow, ValidationWorkflo
         self.resume_phase = ""
         self.failed_phase = ""
         self.rework_feedback = ""
+        self.revision = 0
+        self.revision_mode = "full"
 
     @workflow.run
     async def run(self, case_input: CaseInput) -> str:
@@ -234,6 +248,9 @@ class AsterismCaseWorkflow(CodingWorkflow, PublishingWorkflow, ValidationWorkflo
                 "非法或过期 signal，已拒绝", extra={"action": action, "status": self.state.status.value},
             )
             return False
+        if self.state.status.value in spec.note_required_statuses and not str(context.get("note", "")).strip():
+            workflow.logger.warning("动作缺少必填意见", extra={"action": action})
+            return False
         feedback = feedback_text(context)
         if feedback and spec.feedback_mode:
             self._capture_feedback(spec, feedback)
@@ -298,42 +315,6 @@ class AsterismCaseWorkflow(CodingWorkflow, PublishingWorkflow, ValidationWorkflo
         await self._emit(self.state.cancel_case(), signal_id, context)
         return True
 
-    async def _recovery_action(
-        self, action: str, spec: ActionSpec, signal_id: str, context: dict,
-    ) -> bool:
-        phase = self._failed_execution_phase() if spec.retry_failed_phase else ExecutionPhase.coding
-        if phase is None:
-            workflow.logger.warning("缺少可恢复阶段", extra={"action": action})
-            return False
-        if spec.refresh_configuration and phase != ExecutionPhase.coding:
-            workflow.logger.warning("当前阶段不消费 Agent 配置", extra={"phase": phase.value})
-            return False
-        configuration_refreshed = False
-        if spec.refresh_configuration:
-            snapshot = self._agent_config_snapshot(context)
-            if snapshot is None:
-                return False
-            # 刷新配置只替换执行快照，保留候选代码和上下文。
-            self.case_input = self._case_input().model_copy(update={"agent_config_snapshot": snapshot})
-            configuration_refreshed = True
-        context.pop("resume_failed_stage", None)
-        previous_status = self.state.status.value
-        event = self.state.rework()
-        await self._emit(event, signal_id, {
-            "configurationRefreshed": configuration_refreshed,
-            "retryPhase": phase.value,
-            "retryScope": "phase" if spec.retry_failed_phase else "full",
-        })
-        if event is None:
-            return False
-        if previous_status == "waiting_merge":
-            self._prepare_merge_rework()
-        self.failed_phase = ""
-        if not spec.retry_failed_phase:
-            await self._start_modification(signal_id)
-            return True
-        return await self._retry_phase(signal_id, phase)
-
     def _enqueue(self, action: str, signal: dict) -> None:
         context = dict(signal)
         signal_id = str(context.pop("signal_id", ""))
@@ -386,9 +367,25 @@ class AsterismCaseWorkflow(CodingWorkflow, PublishingWorkflow, ValidationWorkflo
     ) -> None:
         self.failed_phase = phase.value if phase is not None else ""
         phase_payload = {"failedPhase": self.failed_phase} if self.failed_phase else {}
+        revision_payload = {
+            "revision": self.revision,
+            "revisionMode": self.revision_mode,
+        } if self.revision else {}
         await self._emit(self.state.worker_blocked_on(reason), signal_id, {
             "reason": reason,
             "detail": self._error_detail(error),
             **phase_payload,
+            **revision_payload,
             **(extra or {}),
         })
+
+    def _error_detail(self, error: BaseException) -> str:
+        return error_detail(error)
+
+    def _case_input(self) -> CaseInput:
+        if self.case_input is None:
+            raise RuntimeError("case input is not initialized")
+        return self.case_input
+
+    def _is_gitlab(self) -> bool:
+        return self._case_input().release_mode == "gitlab"

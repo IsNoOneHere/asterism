@@ -93,7 +93,7 @@ class PrdScreenshotFlowTest {
         var configurations = mock(AgentConfigurationService.class);
         when(configurations.internal("sys-1")).thenReturn(new AgentConfigurationService.InternalAgentConfiguration(
                 List.of(), List.of(new AgentConfigurationService.Agent(
-                        "developer", "builtin", "claude_sdk_team", "", List.of(), "", 50, 600))));
+                        "developer", "builtin", "claude_sdk_team", "", List.of(), "", 50, 600)), 5));
         var transactions = new TransactionOperations() {
             @Override
             public <T> T execute(TransactionCallback<T> action) {

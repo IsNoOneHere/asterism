@@ -374,6 +374,49 @@ test('work item detail keeps full diff in the code tab', async () => {
   expect(await screen.findByText(/diff --git a\/src\/login.tsx/)).toBeInTheDocument();
 });
 
+test('diff review requires a multiline note before submitting automatic revision', async () => {
+  renderApp('/work-items/wi-1');
+
+  fireEvent.click(await screen.findByRole('button', { name: '代码变更' }));
+  const note = await screen.findByLabelText('修订意见（必填）');
+  const reject = screen.getByRole('button', { name: '打回修订' });
+  expect(note.tagName).toBe('TEXTAREA');
+  expect(reject).toBeDisabled();
+
+  fireEvent.change(note, { target: { value: '错误提示应放在输入框下方' } });
+  expect(reject).toBeEnabled();
+  fireEvent.click(reject);
+  const dialog = screen.getByRole('dialog');
+  expect(within(dialog).getByRole('button', { name: '打回修订' })).toBeEnabled();
+  fireEvent.click(within(dialog).getByRole('button', { name: '打回修订' }));
+
+  await waitFor(() => {
+    const call = vi.mocked(fetch).mock.calls.find(([path, init]) =>
+      String(path).endsWith('/signals/patch_apply_rejected') && init?.method === 'POST');
+    expect(call).toBeDefined();
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ note: '错误提示应放在输入框下方' });
+  });
+});
+
+test('work item detail shows the active revision and revision history', async () => {
+  setApiResponse('/api/v5/work-items/wi-1', {
+    workItemId: 'wi-1', systemId: 'alpha-system', title: '登录页修订', lifecycleStatus: 'activated',
+    waitingFor: 'worker', canControl: true, availableActions: [],
+  });
+  setApiResponse('/api/v5/work-items/wi-1/events', [
+    { sequence: 1, eventId: 'rev-1', eventType: 'RevisionRequested', createdAt: '2026-07-05T12:00:00Z',
+      payloadJson: JSON.stringify({ revision: 1, revisionMode: 'incremental', note: '提示放到输入框下方', requestedBy: 'admin', phase: 'review' }) },
+    { sequence: 2, eventType: 'CodingAttemptStarted', payloadJson: JSON.stringify({ supervisor: { role: 'developer', engine: 'claude_sdk_team' }, revision: 1 }) },
+  ]);
+
+  renderApp('/work-items/wi-1');
+
+  expect((await screen.findAllByText('第 1 轮修订中')).length).toBeGreaterThan(0);
+  expect(screen.getByRole('heading', { name: '修订历史' })).toBeInTheDocument();
+  expect(screen.getByText('提示放到输入框下方')).toBeInTheDocument();
+  expect(screen.getByText('增量修订')).toBeInTheDocument();
+});
+
 test('work item detail shows repository agent completion metadata', async () => {
   renderApp('/work-items/wi-1');
 

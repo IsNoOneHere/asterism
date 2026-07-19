@@ -58,4 +58,11 @@ public class AgentConfigurationController {
         return config.updateAgent(systemId, agentName, request);
     }
 
+    @PatchMapping("/agent-config/settings")
+    AgentConfigurationService.AgentConfigurationResponse updateExecutionSettings(@PathVariable String systemId,
+            @RequestBody AgentConfigurationService.ExecutionSettingsRequest request, Authentication actor) {
+        access.requireOwnerOrAdmin(systemId, actor);
+        return config.updateExecutionSettings(systemId, request);
+    }
+
 }

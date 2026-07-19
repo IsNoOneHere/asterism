@@ -27,6 +27,17 @@ make test-web
 
 当前系统尚未上线，不保留旧 Workflow history。切换执行架构或修改 Workflow type 后，使用 `CONFIRM=yes make prod-reset` 清理本地测试数据库与 Temporal 数据，再部署终态 Worker。正式上线后禁止采用该方式升级。
 
+## 修订闭环验收
+
+1. 创建需求，负责人审批并启动开发。
+2. 等待代码修改完成，进入“代码变更”审查 Diff。
+3. 在“修订意见（必填）”中写明问题，点击“打回修订”。
+4. 确认页面立即显示“第 1 轮修订中”，无需再提交“开始执行”。
+5. 在“修订历史”核对意见、提交人、时间、Diff 摘要和 `incremental | full`。
+6. 第二轮 Diff 通过后继续验证与发布。GitLab 模式另外在 `waiting_merge` 打回一次，确认原 MR 的 source branch 不变且 commit 已更新。
+
+管理员在“Agent”页设置 `maxRevisions`，取值 1–20，默认 5。该值只对之后创建的 Case 生效。达到上限时事件应为 `WorkerBlocked(reason=revision_limit_reached)`；选择“完整重做”后轮次从 0 重新计算。
+
 ## Release 语义
 
 `local` 模式只在本地仓库创建并提交 `wi/<workItemId>` 分支。`gitlab` 模式为每个仓库推送同名分支并创建或复用 MR，全部 MR 合并后工作项才完成。合并后的 CI/CD、部署和服务重启由 GitLab Runner 负责。

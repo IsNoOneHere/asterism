@@ -80,6 +80,22 @@ test('developer exposes only terminal engines and saves supervisor constraints',
   expect(JSON.parse(String(call?.[1]?.body)).pathScope).toEqual(['api', 'db']);
 });
 
+test('revision policy defaults to five and can be updated', async () => {
+  renderApp('/agents');
+
+  const input = await screen.findByLabelText('最大修订轮次');
+  expect(input).toHaveValue(5);
+  fireEvent.change(input, { target: { value: '3' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存策略' }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith(
+    '/api/v5/systems/alpha-system/agent-config/settings', expect.objectContaining({ method: 'PATCH' }),
+  ));
+  const call = vi.mocked(fetch).mock.calls.find(([path, init]) =>
+    path === '/api/v5/systems/alpha-system/agent-config/settings' && init?.method === 'PATCH');
+  expect(JSON.parse(String(call?.[1]?.body))).toEqual({ maxRevisions: 3 });
+});
+
 test('builtin product only edits its profile and cannot be deleted', async () => {
   renderApp('/agents');
   await screen.findAllByText('product');

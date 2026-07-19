@@ -4,11 +4,34 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, ApplicationError
 
-from asterism_worker.contracts import GitlabPublishResult, MergeRequestRef, PatchApplyResult
+from asterism_worker.contracts import GitlabPublishResult, MergeRequestRef, PatchApplyResult, RepoSnapshot
 from asterism_worker.workflows.coding import ExecutionPhase
 
 
+def diff_paths(diff_patch: str) -> list[str]:
+    paths: list[str] = []
+    for line in diff_patch.splitlines():
+        if line.startswith("diff --git "):
+            parts = line.split()
+            if len(parts) >= 4:
+                paths.append(parts[3][2:] if parts[3].startswith("b/") else parts[3])
+    return paths
+
+
 class PublishingWorkflow:
+    def _repo_diffs(self) -> list[tuple[RepoSnapshot, str]]:
+        repos = self._case_input().effective_repos()
+        if not self.completed_stage_results:
+            return [(repos[0], self.state.diff_patch)]
+        grouped: dict[str, list[str]] = {}
+        for result in self.completed_stage_results:
+            grouped.setdefault(result.repo or repos[0].repo_id, []).append(result.diff_patch.rstrip())
+        by_id = {repo.repo_id: repo for repo in repos}
+        return [(by_id[repo_id], "\n".join(parts) + "\n") for repo_id, parts in grouped.items()]
+
+    def _diff_paths(self, diff_patch: str) -> list[str]:
+        return diff_paths(diff_patch)
+
     def _prepare_merge_rework(self) -> None:
         """保留原分支的远端提交基线，让修订继续推送到同一 MR。"""
 

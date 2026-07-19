@@ -23,6 +23,7 @@ type StageAction = {
   ownerApproval?: boolean;
   mergeCheck?: boolean;
   danger?: boolean;
+  noteRequired?: boolean;
   requestId?: string;
   expectedStatus?: string;
   expectedProjectionSequence?: number;
@@ -80,6 +81,7 @@ export function WorkItemDetailPage() {
         : action.mergeCheck ? api.checkMergeStatus(workItemId, body) : api.submitSignal(workItemId, action.signalName!, body);
     },
     onSuccess: () => {
+      setActionNote('');
       queryClient.invalidateQueries({ queryKey: ['work-item', workItemId] });
       queryClient.invalidateQueries({ queryKey: ['work-item-events', workItemId] });
     },
@@ -101,6 +103,13 @@ export function WorkItemDetailPage() {
   const actions = workItem && flow
     ? (workItem.availableActions ?? []).map((code) => stageAction(code, flow.currentStageId, workItem)).filter((action): action is StageAction => Boolean(action))
     : [];
+  const prepareAction = (action: StageAction, note = '') => {
+    runAction.reset();
+    setActionNote(note);
+    setActionEvidence('');
+    setConfirmAction({ ...action, requestId: crypto.randomUUID(), expectedStatus: workItem!.lifecycleStatus,
+      expectedProjectionSequence: workItem!.lastAppliedSequence });
+  };
 
   return (
     <section className="work-item-detail">
@@ -118,6 +127,7 @@ export function WorkItemDetailPage() {
       {workItem && flow && (
         <>
           <WorkItemOverview workItem={workItem} flow={flow} />
+          {flow.activeRevision && <div className="notice revision-progress" role="status">第 {flow.activeRevision.revision} 轮修订中：{flow.activeRevision.note}</div>}
           <details className="work-item-basic panel">
             <summary>基本信息</summary>
             <dl className="summary-list">
@@ -130,6 +140,7 @@ export function WorkItemDetailPage() {
             </dl>
           </details>
           {memoryMessage && <div className="success-text">{memoryMessage}</div>}
+          {flow.revisions.length > 0 && <RevisionHistory revisions={flow.revisions} />}
 
           <nav className="page-tabs work-item-tabs" aria-label="工作项详情">
             {(Object.keys(TAB_LABELS) as DetailTab[]).map((tab) => {
@@ -161,18 +172,21 @@ export function WorkItemDetailPage() {
                 pending={runAction.isPending || Boolean(workItem.pendingAction)}
                 pendingAction={workItem.pendingAction?.action}
                 onAction={(action) => {
-                  runAction.reset();
-                  setActionNote('');
-                  setActionEvidence('');
-                  setConfirmAction({ ...action, requestId: crypto.randomUUID(), expectedStatus: workItem.lifecycleStatus,
-                    expectedProjectionSequence: workItem.lastAppliedSequence });
+                  prepareAction(action);
                 }}
               />
             </div>
           )}
           {!events.isLoading && !events.isError && activeTab === 'code' && (
             <div>
-              <CodeChanges flow={flow} />
+              <CodeChanges
+                flow={flow}
+                actions={actions}
+                pending={runAction.isPending || Boolean(workItem.pendingAction)}
+                reviewNote={actionNote}
+                onReviewNoteChange={setActionNote}
+                onAction={(action) => prepareAction(action, actionNote)}
+              />
             </div>
           )}
           {!events.isLoading && !events.isError && activeTab === 'audit' && (
@@ -192,9 +206,10 @@ export function WorkItemDetailPage() {
         description={confirmAction ? confirmText(confirmAction).replace('，是否继续？', '。') : ''}
         confirmLabel={confirmAction?.label}
         pending={runAction.isPending}
+        confirmDisabled={Boolean(confirmAction?.noteRequired && !actionNote.trim())}
         tone={confirmAction?.danger ? 'danger' : 'primary'}
         fields={confirmAction && actionContextKind(confirmAction.code) !== 'none' ? <div className="action-context-fields">
-          {actionContextKind(confirmAction.code) !== 'evidence' && <label>处理说明（可选）<textarea rows={3} maxLength={2000} value={actionNote} onChange={(event) => setActionNote(event.target.value)} /></label>}
+          {actionContextKind(confirmAction.code) !== 'evidence' && <label>{confirmAction.noteRequired ? '修订意见（必填）' : '处理说明（可选）'}<textarea rows={3} maxLength={2000} required={confirmAction.noteRequired} value={actionNote} onChange={(event) => setActionNote(event.target.value)} /></label>}
           {actionContextKind(confirmAction.code) === 'evidence' && <label>验证证据（建议填写）<textarea rows={3} maxLength={4000} value={actionEvidence} onChange={(event) => setActionEvidence(event.target.value)} placeholder="测试环境、结果、截图或记录链接" /></label>}
         </div> : undefined}
         onClose={() => setConfirmAction(null)}
@@ -219,11 +234,27 @@ function WorkItemOverview({ workItem, flow }: { workItem: WorkItem; flow: WorkIt
   return (
     <div className="work-item-overview panel" aria-label="工作项摘要">
       <div><span>当前状态</span><StatusBadge value={workItem.lifecycleStatus} /></div>
-      <div><span>当前阶段</span><strong>{current.label}</strong></div>
+      <div><span>当前阶段</span><strong>{flow.activeRevision ? `第 ${flow.activeRevision.revision} 轮修订中` : current.label}</strong></div>
       <div><span>等待角色</span><strong>{current.waitingFor || waitingRoleName(workItem.waitingFor)}</strong></div>
       <div><span>创建时间</span><strong>{formatDateTime(workItem.createdAt)}</strong></div>
       <div><span>已用时</span><strong>{elapsedTime(workItem.createdAt, isTerminal(workItem.lifecycleStatus) ? workItem.updatedAt : undefined)}</strong></div>
     </div>
+  );
+}
+
+function RevisionHistory({ revisions }: { revisions: WorkItemFlow['revisions'] }) {
+  return (
+    <section className="panel revision-history" aria-labelledby="revision-history-title">
+      <header><div><h2 id="revision-history-title">修订历史</h2><p>每轮都保留人工意见与修改方式，便于审计和对比。</p></div><span>{revisions.length} 轮</span></header>
+      <ol>
+        {revisions.map((revision) => <li key={revision.id} className={revision.status}>
+          <div className="revision-index"><strong>第 {revision.revision} 轮</strong><span>{revisionStatusName(revision.status)}</span></div>
+          <div className="revision-content"><p>{revision.note || '未记录修订意见'}</p><small>{revision.diffSummary || '等待本轮修订产出'}</small></div>
+          <dl><div><dt>方式</dt><dd>{revision.revisionMode === 'incremental' ? '增量修订' : '全量修订'}</dd></div><div><dt>阶段</dt><dd>{revision.phase === 'merge' ? 'MR 审查' : 'Diff 审查'}</dd></div><div><dt>提交人</dt><dd>{revision.requestedBy || '-'}</dd></div></dl>
+          <time>{formatDateTime(revision.requestedAt)}{revision.completedAt ? ` – ${formatDateTime(revision.completedAt)}` : ''}</time>
+        </li>)}
+      </ol>
+    </section>
   );
 }
 
@@ -402,7 +433,14 @@ function AttemptHistory({ attempts }: { attempts: FlowAttempt[] }) {
   );
 }
 
-function CodeChanges({ flow }: { flow: WorkItemFlow }) {
+function CodeChanges({ flow, actions, pending, reviewNote, onReviewNoteChange, onAction }: {
+  flow: WorkItemFlow;
+  actions: StageAction[];
+  pending: boolean;
+  reviewNote: string;
+  onReviewNoteChange: (note: string) => void;
+  onAction: (action: StageAction) => void;
+}) {
   if (!flow.modification && flow.repositories.length === 0) return <div className="panel empty">当前还没有代码变更。</div>;
   const agents = flow.stages.find((stage) => stage.id === 'execution')?.agents ?? [];
   return (
@@ -413,6 +451,7 @@ function CodeChanges({ flow }: { flow: WorkItemFlow }) {
         <div><span>轮次</span><strong>{flow.modification.turns ?? '-'}</strong></div>
         <div><span>Token</span><strong>{formatTokenUsage(flow.modification.tokenUsage)}</strong></div>
       </div>}
+      <CodeReviewActions actions={actions} pending={pending} note={reviewNote} onNoteChange={onReviewNoteChange} onAction={onAction} />
       {flow.repositories.map((repo) => {
         const repoAgents = agents.filter((agent) => !agent.repo || agent.repo === repo.repo);
         const repoChecks = repo.checks.length ? repo.checks : flow.checks.filter((check) => check.repo === repo.repo);
@@ -431,6 +470,29 @@ function CodeChanges({ flow }: { flow: WorkItemFlow }) {
       })}
     </div>
   );
+}
+
+function CodeReviewActions({ actions, pending, note, onNoteChange, onAction }: {
+  actions: StageAction[];
+  pending: boolean;
+  note: string;
+  onNoteChange: (note: string) => void;
+  onAction: (action: StageAction) => void;
+}) {
+  const reviewActions = actions.filter((action) => ['patch_apply_approved', 'patch_apply_rejected'].includes(action.code)
+    || (action.code === 'rework' && action.noteRequired));
+  if (reviewActions.length === 0) return null;
+  const rejection = reviewActions.find((action) => action.noteRequired);
+  return <section className="panel code-review-actions" aria-labelledby="code-review-title">
+    <div><h2 id="code-review-title">Diff 审查</h2><p>通过后继续发布；发现问题时填写具体意见，Agent 会自动开始下一轮修订。</p></div>
+    {rejection && <label>修订意见（必填）<textarea rows={4} maxLength={2000} required value={note} onChange={(event) => onNoteChange(event.target.value)} placeholder="说明具体问题、期望结果和不应改动的部分" /></label>}
+    <div className="code-review-buttons">
+      {reviewActions.map((action) => <button key={action.code} type="button"
+        className={action.noteRequired ? 'danger-action' : undefined}
+        disabled={pending || Boolean(action.noteRequired && !note.trim())}
+        onClick={() => onAction(action)}>{action.label}</button>)}
+    </div>
+  </section>;
 }
 
 function EventAudit({ events }: { events: WorkItemEvent[] }) {
@@ -456,10 +518,11 @@ function stageAction(code: string, currentStageId: FlowStageId, workItem: WorkIt
     cancel_case: { label: '取消', stageId: currentStageId, signalName: code, danger: true },
     start_modification: { label: '开始执行', stageId: 'execution', signalName: code },
     retry_current_phase: { label: '重试失败阶段', stageId: currentStageId, signalName: code },
-    rework: { label: '完整重做', stageId: currentStageId, signalName: code },
+    rework: { label: workItem.lifecycleStatus === 'waiting_merge' ? '打回修订' : '完整重做', stageId: currentStageId, signalName: code,
+      noteRequired: workItem.lifecycleStatus === 'waiting_merge', danger: workItem.lifecycleStatus === 'waiting_merge' },
     rework_with_latest_config: { label: '刷新配置并重试失败阶段', stageId: currentStageId, signalName: code },
     patch_apply_approved: { label: workItem.releaseMode === 'gitlab' ? (workItem.validationMode === 'manual' ? '创建候选 MR' : '发布 MR') : '应用 Patch', stageId: 'patch', signalName: code },
-    patch_apply_rejected: { label: '打回重做', stageId: 'patch', signalName: code },
+    patch_apply_rejected: { label: '打回修订', stageId: 'patch', signalName: code, noteRequired: true, danger: true },
     validation_passed: { label: workItem.validationMode === 'manual' ? '人工验证通过' : '验证通过', stageId: 'validation', signalName: code },
     validation_rejected: { label: workItem.validationMode === 'manual' ? '人工验证不通过' : '重做', stageId: 'validation', signalName: code },
     release_approved: { label: workItem.releaseMode === 'gitlab' ? '提交 MR' : '创建发布提交', stageId: 'release', signalName: code },
@@ -477,7 +540,7 @@ function actionContextKind(code: string): 'none' | 'note' | 'evidence' {
 function actionLabel(code: string) {
   return ({ owner_approved: '批准执行', owner_rejected: '拒绝', cancel_case: '取消', start_modification: '开始执行',
     retry_current_phase: '重试失败阶段', rework: '完整重做', rework_with_latest_config: '刷新配置并重试失败阶段',
-    patch_apply_approved: '代码确认', patch_apply_rejected: '打回重做',
+    patch_apply_approved: '代码确认', patch_apply_rejected: '打回修订',
     validation_passed: '验证通过', validation_rejected: '验证不通过', release_approved: '发布',
     check_merge_status: '检查合并状态' } as Record<string, string>)[code] || code;
 }
@@ -490,7 +553,7 @@ function confirmText(action: StageAction) {
     retry_current_phase: '将复用已完成成果，只重试失败阶段，是否继续？',
     rework: '将放弃当前执行断点并完整重做，是否继续？',
     rework_with_latest_config: '将刷新 Agent 与模型配置，保留已有计划并重试失败阶段，是否继续？',
-    patch_apply_rejected: '确认后将退回修改阶段重新处理，是否继续？', validation_passed: '确认验证已通过并进入下一阶段，是否继续？',
+    patch_apply_rejected: '确认后 Agent 会带着意见自动开始增量修订，是否继续？', validation_passed: '确认验证已通过并进入下一阶段，是否继续？',
     validation_rejected: '确认后将退回修改阶段重新处理，是否继续？', release_approved: '该操作会创建发布分支和提交，是否继续？',
     check_merge_status: '后端将实时核验所有 GitLab MR，只有确实合并后才会完成工作项，是否继续？',
   } as Record<string, string>)[action.code] || '是否继续？';
@@ -544,6 +607,10 @@ function repositoryStatusName(status: RepositoryFlowView['status']) {
 
 function attemptStatusName(status: FlowAttempt['status']) {
   return ({ running: '进行中', completed: '已完成', failed: '失败', cancelled: '已取消' } as Record<FlowAttempt['status'], string>)[status];
+}
+
+function revisionStatusName(status: WorkItemFlow['revisions'][number]['status']) {
+  return ({ running: '修订中', completed: '已完成', failed: '已阻塞' } as const)[status];
 }
 
 function waitingRoleName(role?: string) {

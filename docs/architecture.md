@@ -59,10 +59,32 @@ Workflow 按职责拆分为四个模块：`lifecycle.py` 只保留 signal、quer
 | 动作 | 语义 | 复用范围 |
 | --- | --- | --- |
 | `retry_current_phase` | 重试失败阶段 | 保留上下文、候选 Diff 与已完成阶段 |
-| `rework` | 完整重做 | 从 Coding Attempt 重新执行，旧候选作为反馈上下文 |
+| `rework` | 完整重做 | 从 Coding Attempt 重新执行，保留人工反馈但不恢复旧候选 |
 | `rework_with_latest_config` | 刷新配置后重试 Coding | 替换 Agent 配置快照，保留候选与上下文 |
 
 Patch 恢复会复用 `ModificationCompleted`；Validation 额外恢复 `PatchApplied`；Release 再额外恢复 `ValidationPassed`。GitLab 临时 clone 目录属于 Activity 资源，不写入 Workflow history。
+
+## 人工打回修订闭环
+
+```mermaid
+flowchart LR
+    M["ModificationCompleted\n人工审查 Diff"] -->|"通过"| P["Patch / 验证 / 发布"]
+    M -->|"必填意见打回"| R["RevisionRequested\nrevision=N"]
+    R --> C["恢复上一版候选"]
+    C -->|"可恢复"| I["增量修订"]
+    C -->|"不可恢复"| F["带意见全量修订"]
+    I --> M
+    F --> M
+    R -->|"达到 maxRevisions"| B["WorkerBlocked\nrevision_limit_reached"]
+```
+
+`patch_apply_rejected` 是一步闭环：Workflow 依次产生 `PatchRejected → ReworkStarted → RevisionRequested`，然后在同一手工动作中启动新 Coding Attempt。不新增生命周期状态，而是复用 `activated → modification_completed` 循环。
+
+修订 Activity 使用冻结的需求上下文，把上一版候选 Diff 恢复到新鲜的团队工作区，并向 Supervisor 注入结构化的 `revision_context`：轮次、人工意见、上一轮 Diff 摘要和“只修订意见涉及部分”指令。候选与当前仓库基线冲突时，Activity 先撤销已恢复的部分，再降级为 `full`，不将半应用工作区交给模型。
+
+`maxRevisions` 是系统级执行策略，默认 5，Case 创建时冻结进 Temporal 入参。达到上限后用 `WorkerBlocked(reason=revision_limit_reached)` 停下，负责人只能取消或完整重做；完整重做会重置轮次。
+
+`waiting_merge` 的“打回修订”共用同一套 `RevisionRequested`。Worker 保留原工作项分支的远端 commit 基线，用 `force-with-lease` 将新 commit 更新到原分支；GitLab 因此复用原 MR，同时会拒绝覆盖他人在远端的并行修改。
 
 ## Temporal 修改守则
 

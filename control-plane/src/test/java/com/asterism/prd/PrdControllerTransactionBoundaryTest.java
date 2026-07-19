@@ -134,6 +134,7 @@ class PrdControllerTransactionBoundaryTest {
             assertThat(repo.allowedPaths()).containsExactly("src", "README.md");
         });
         assertThat(holder.command.releaseMode()).isEqualTo("local");
+        assertThat(holder.command.maxRevisions()).isEqualTo(7);
         assertThat(holder.command.toString()).doesNotContainIgnoringCase("token");
         assertThat(holder.command.agentConfigSnapshot().agents()).singleElement().satisfies(agent -> {
             assertThat(agent.name()).isEqualTo("developer");
@@ -239,7 +240,7 @@ class PrdControllerTransactionBoundaryTest {
                         "mp-1", "Claude", "anthropic", "https://example.invalid", "never-in-snapshot",
                         "claude-sonnet", false)),
                 List.of(new AgentConfigurationService.Agent(
-                        "developer", "builtin", "claude_sdk_team", "mp-1", List.of("src"), "", 40, 900))));
+                        "developer", "builtin", "claude_sdk_team", "mp-1", List.of("src"), "", 40, 900)), 7));
         when(aggregate.update(any(PrdSession.class))).thenAnswer(call -> {
             var session = (PrdSession) call.getArgument(0);
             order.add("save:" + session.status());

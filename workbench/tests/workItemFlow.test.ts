@@ -190,6 +190,35 @@ test('starts a clean supervisor attempt after rework without retaining the old e
   expect(flow.attempts[0]).toMatchObject({ status: 'failed', failureReason: 'Claude SDK Coding Attempt 执行失败' });
 });
 
+test('projects completed and blocked revision rounds into auditable history', () => {
+  const flow = buildWorkItemFlow(workItem('worker_blocked', { waitingFor: 'owner' }), [
+    event(1, 'ModificationCompleted', { diffPatch: 'diff --git a/a.ts b/a.ts\n+first' }),
+    event(2, 'PatchRejected', { note: '提示位置不对' }),
+    event(3, 'ReworkStarted', { revision: 1 }),
+    event(4, 'RevisionRequested', {
+      revision: 1, revisionMode: 'incremental', note: '提示放到输入框下方', requestedBy: 'owner-1', phase: 'review',
+      diffSummary: [{ repo: 'frontend', changedPaths: ['src/login.tsx'] }],
+    }),
+    event(5, 'CodingAttemptStarted', { supervisor: { role: 'developer', engine: 'claude_sdk_team' }, revision: 1 }),
+    event(6, 'ModificationCompleted', {
+      revision: 1, revisionMode: 'full', summary: '已调整错误提示', diffPatch: 'diff --git a/a.ts b/a.ts\n+second',
+    }),
+    event(7, 'PatchRejected', { note: '颜色不对' }),
+    event(8, 'ReworkStarted', { revision: 2 }),
+    event(9, 'RevisionRequested', {
+      revision: 2, revisionMode: 'incremental', note: '使用现有错误色', requestedBy: 'owner-1', phase: 'merge',
+    }),
+    event(10, 'WorkerBlocked', { reason: 'coding_attempt_failed', revision: 2 }),
+  ]);
+
+  expect(flow.revisions).toEqual([
+    expect.objectContaining({ revision: 1, status: 'completed', revisionMode: 'full', diffSummary: '已调整错误提示' }),
+    expect.objectContaining({ revision: 2, status: 'failed', revisionMode: 'incremental', phase: 'merge' }),
+  ]);
+  expect(flow.revisions[0].requestedBy).toBe('owner-1');
+  expect(flow.activeRevision).toBeNull();
+});
+
 test('uses the ValidationFailed top-level repo for every command', () => {
   const flow = buildWorkItemFlow(workItem('validation_failed', { waitingFor: 'owner' }), [
     event(1, 'CodingAttemptStarted', { supervisor: { role: 'developer', engine: 'claude_sdk_team' } }),

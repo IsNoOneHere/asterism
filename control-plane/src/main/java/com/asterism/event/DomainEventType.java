@@ -16,6 +16,7 @@ public enum DomainEventType {
     ReworkStarted,
     CodingAttemptStarted,
     AgentStageCompleted,
+    RevisionRequested,
     WorkItemRejected,
     ModificationCompleted,
     WorkerBlocked,

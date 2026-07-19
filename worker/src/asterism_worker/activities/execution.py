@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import subprocess
+from pathlib import Path
 
 from temporalio import activity
 
@@ -37,7 +38,7 @@ async def run_coding_attempt(request: dict) -> dict:
     parsed = CodingAttemptRequest.model_validate(request)
     workspace = await prepare_team_workspace(parsed.repos, parsed.system_id, settings)
     try:
-        _apply_previous_candidate(parsed, workspace)
+        parsed = _restore_revision_candidate(parsed, workspace)
 
         def heartbeat_provider_event(event: dict) -> None:
             try:
@@ -75,6 +76,8 @@ async def run_coding_attempt(request: dict) -> dict:
             apply_error = git_apply_check(str(workspace.repos[change.repo]), change.diff_patch)
             if apply_error:
                 raise RuntimeError(f"{change.repo}: {apply_error}")
+        if parsed.revision_context is not None:
+            result = result.model_copy(update={"revision_mode": parsed.revision_context.revision_mode})
         return result.model_dump()
     finally:
         cleanup_repo_workspace(workspace.root)
@@ -85,29 +88,65 @@ def _apply_previous_candidate(request: CodingAttemptRequest, workspace: TeamWork
 
     repos = {repo.repo_id: repo for repo in request.repos}
     applied_repos: list[str] = []
-    for candidate in request.previous_candidate:
-        if not candidate.diff_patch.strip():
-            continue
-        repo = repos.get(candidate.repo)
-        repo_path = workspace.repos.get(candidate.repo)
-        if repo is None or repo_path is None:
-            raise RuntimeError(f"上一版候选引用未知仓库: {candidate.repo}")
-        gate = validate_patch_paths(candidate.diff_patch, repo.allowed_paths, repo.forbidden_paths)
-        if gate.blocked:
-            raise RuntimeError(f"{candidate.repo}: 上一版候选不符合路径约束: {gate.reason}")
-        apply_error = git_apply_check(str(repo_path), candidate.diff_patch)
-        if apply_error:
-            raise RuntimeError(f"{candidate.repo}: 上一版候选无法应用: {apply_error}")
-        subprocess.run(
-            ["git", "apply"], cwd=repo_path, input=candidate.diff_patch,
-            text=True, check=True, capture_output=True,
-        )
-        applied_repos.append(candidate.repo)
+    applied: list[Path] = []
+    try:
+        for candidate in request.previous_candidate:
+            if not candidate.diff_patch.strip():
+                continue
+            repo = repos.get(candidate.repo)
+            repo_path = workspace.repos.get(candidate.repo)
+            if repo is None or repo_path is None:
+                raise RuntimeError(f"上一版候选引用未知仓库: {candidate.repo}")
+            gate = validate_patch_paths(candidate.diff_patch, repo.allowed_paths, repo.forbidden_paths)
+            if gate.blocked:
+                raise RuntimeError(f"{candidate.repo}: 上一版候选不符合路径约束: {gate.reason}")
+            apply_error = git_apply_check(str(repo_path), candidate.diff_patch)
+            if apply_error:
+                raise RuntimeError(f"{candidate.repo}: 上一版候选无法应用: {apply_error}")
+            subprocess.run(
+                ["git", "apply"], cwd=repo_path, input=candidate.diff_patch,
+                text=True, check=True, capture_output=True,
+            )
+            applied.append(repo_path)
+            applied_repos.append(candidate.repo)
+    except Exception:
+        # 工作区是 Activity 临时 clone；直接回到 HEAD 比反向套用多份 Patch 更稳定。
+        for repo_path in set(applied):
+            subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=repo_path, check=True, capture_output=True)
+            subprocess.run(["git", "clean", "-fd"], cwd=repo_path, check=True, capture_output=True)
+        raise
     if applied_repos:
         log.info(
             "上一版候选已恢复到 Coding 工作区",
             extra={"work_item_id": request.work_item_id, "repositories": applied_repos},
         )
+
+
+def _restore_revision_candidate(
+    request: CodingAttemptRequest, workspace: TeamWorkspace,
+) -> CodingAttemptRequest:
+    """候选无法恢复时，仅人工修订轮降级为带意见的全量执行。"""
+
+    revision = request.revision_context
+    if revision is None:
+        _apply_previous_candidate(request, workspace)
+        return request
+    if not request.previous_candidate:
+        return request.model_copy(update={
+            "revision_context": revision.model_copy(update={"revision_mode": "full"}),
+        })
+    try:
+        _apply_previous_candidate(request, workspace)
+        return request
+    except (RuntimeError, subprocess.SubprocessError) as error:
+        log.warning(
+            "修订候选恢复失败，降级为全量执行",
+            extra={"work_item_id": request.work_item_id, "revision": revision.revision, "reason": str(error)},
+        )
+        return request.model_copy(update={
+            "previous_candidate": [],
+            "revision_context": revision.model_copy(update={"revision_mode": "full"}),
+        })
 
 
 @activity.defn

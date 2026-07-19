@@ -70,6 +70,12 @@ def team_request(root) -> tuple[CodingAttemptRequest, TeamWorkspace]:
             "changed_paths": ["src/app.txt"],
             "summary": "上一版",
         }],
+        "revision_context": {
+            "revision": 2,
+            "revision_mode": "incremental",
+            "feedback": "不要修改构建产物",
+            "previous_diff_summary": [{"repo": "frontend", "changedPaths": ["src/app.txt"]}],
+        },
     })
     return request, TeamWorkspace(root=root, repos={"backend": backend, "frontend": frontend})
 
@@ -87,6 +93,11 @@ def test_team_provider_uses_native_subagents_and_enforces_repo_write_policy(tmp_
         assert "上一版候选" in text
         assert "已恢复到当前工作区" in text
         assert "人工反馈为准" in text
+        assert "结构化修订上下文" in text
+        assert "只修订人工意见涉及的部分，不推翻已通过的改动" in text
+        assert '"revision": 2' in text
+        assert "diff --git" not in text
+        assert '"changed_paths": ["src/app.txt"]' in text
         assert options.tools == TEAM_TOOLS
         assert set(SUPERVISOR_TOOLS).issubset(options.tools)
         assert "Edit" in options.tools and "Write" in options.tools

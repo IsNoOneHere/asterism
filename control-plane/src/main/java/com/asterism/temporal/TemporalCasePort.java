@@ -24,13 +24,14 @@ public interface TemporalCasePort {
             String validationMode,
             String mrTargetBranch,
             List<String> mrLabels,
+            int maxRevisions,
             AgentConfigSnapshot agentConfigSnapshot,
             PrdPayload prd) {
         public StartCaseCommand(String caseId, String workItemId, String prdId, String systemId, String repoPath,
                                 List<String> allowedPaths, List<String> forbiddenPaths, List<String> testCommands,
                                 AgentConfigSnapshot agentConfigSnapshot, PrdPayload prd) {
             this(caseId, workItemId, prdId, systemId, repoPath, allowedPaths, forbiddenPaths, testCommands,
-                    List.of(), "local", "auto", "", List.of(), agentConfigSnapshot, prd);
+                    List.of(), "local", "auto", "", List.of(), 5, agentConfigSnapshot, prd);
         }
     }
 

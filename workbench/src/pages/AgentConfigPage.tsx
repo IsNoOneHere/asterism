@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Agent, AgentConfiguration, api, ModelConnectionTestResult, ModelProfile } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
@@ -23,6 +23,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const [agentName, setAgentName] = useState('');
   const [agent, setAgent] = useState<AgentDraft>(emptyAgent);
   const [message, setMessage] = useState('');
+  const [maxRevisions, setMaxRevisions] = useState(5);
   const [connectionTests, setConnectionTests] = useState<Record<string, ModelConnectionTestResult>>({});
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const config = useQuery({
@@ -78,6 +79,13 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
     },
   });
   const value = config.data;
+  useEffect(() => {
+    if (value?.maxRevisions) setMaxRevisions(value.maxRevisions);
+  }, [value?.maxRevisions]);
+  const saveSettings = useMutation({
+    mutationFn: () => api.updateExecutionSettings(systemId, { maxRevisions }),
+    onSuccess: (next) => accept(next, '执行策略保存成功'),
+  });
   const modelSection = section === 'models';
   const modelOnly = agentName === 'product';
   const openProfile = (item?: ModelProfile) => {
@@ -139,7 +147,14 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
           </tr>})}
           {value?.modelProfiles.length === 0 && <tr><td className="empty-cell" colSpan={4}>还没有模型连接</td></tr>}
         </tbody></table></div>
-      </div> : <div className="panel execution-agent-panel">
+      </div> : <div className="agent-config-stack">
+      <div className="panel execution-policy-panel">
+        <div><h2>修订策略</h2><p>代码或 MR 被人工打回后，Agent 会自动带意见修订；达到上限后交由负责人决定取消或完整重做。</p></div>
+        <label>最大修订轮次<input aria-label="最大修订轮次" type="number" min="1" max="20" value={maxRevisions} onChange={(event) => setMaxRevisions(Number(event.target.value))} /></label>
+        <button type="button" disabled={!canManageCurrentSystem || saveSettings.isPending || maxRevisions < 1 || maxRevisions > 20} onClick={() => saveSettings.mutate()}>{saveSettings.isPending ? '保存中…' : '保存策略'}</button>
+        {saveSettings.error && <div className="error-text">{errorMessage(saveSettings.error)}</div>}
+      </div>
+      <div className="panel execution-agent-panel">
         <div className="config-section-head">
           <div><h2>Agent 列表</h2><p>product 负责需求沟通；developer 通过 Claude SDK Supervisor 自动创建仓库子 Agent。</p></div>
         </div>
@@ -154,7 +169,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
             </div></td>
           </tr>)}
         </tbody></table></div>
-      </div>}
+      </div></div>}
 
     {modelSection && <dialog ref={profileDialogRef} className="confirm-dialog config-dialog" aria-labelledby="profile-dialog-title" onClose={() => { setProfileId(''); setProfile(emptyProfile); }}>
       <form onSubmit={(event) => { event.preventDefault(); saveProfile.mutate(); }}>
