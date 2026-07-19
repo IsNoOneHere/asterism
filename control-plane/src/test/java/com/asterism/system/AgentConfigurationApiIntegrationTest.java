@@ -83,7 +83,7 @@ class AgentConfigurationApiIntegrationTest {
                                 {"name":"frontend-dev","engine":"claude_sdk_team","modelProfileRef":"%s",
                                  "pathScope":["web"],"prompt":"只改前端","maxTurns":12,"timeoutSeconds":300}
                                 """.formatted(profileId)))
-                .andExpect(status().isMethodNotAllowed());
+                .andExpect(status().isNotFound());
 
         mockMvc.perform(delete("/api/v5/systems/" + systemId + "/agents/product"))
                 .andExpect(status().isMethodNotAllowed());

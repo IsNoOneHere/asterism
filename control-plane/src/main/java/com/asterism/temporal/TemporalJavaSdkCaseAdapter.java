@@ -25,6 +25,8 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
     private static final Logger log = LoggerFactory.getLogger(TemporalJavaSdkCaseAdapter.class);
     private static final TypeReference<Map<String, Object>> PAYLOAD_TYPE = new TypeReference<>() {
     };
+    private static final TypeReference<List<Map<String, Object>>> REPO_PAYLOAD_TYPE = new TypeReference<>() {
+    };
     private final WorkflowClient client;
     private final TemporalSettings settings;
     private final ObjectMapper objectMapper;
@@ -81,7 +83,8 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
         var input = new LinkedHashMap<String, Object>();
         input.put("system_id", command.systemId());
         input.put("repo_path", command.repoPath());
-        input.put("repos", list(command.repos()));
+        // Temporal 边界统一发送 snake_case，避免 Java record 字段绕过已配置的 ObjectMapper。
+        input.put("repos", objectMapper.convertValue(list(command.repos()), REPO_PAYLOAD_TYPE));
         workflow.start(input);
         log.info("Temporal 路由索引已启动 system={} workflowId={}", command.systemId(), workflowId);
         return workflowId;

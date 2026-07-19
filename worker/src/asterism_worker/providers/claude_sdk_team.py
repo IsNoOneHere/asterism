@@ -7,6 +7,7 @@ import shutil
 import stat
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +16,6 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     HookMatcher,
-    PermissionResultAllow,
-    PermissionResultDeny,
     ResultMessage,
     TERMINAL_TASK_STATUSES,
     TaskNotificationMessage,
@@ -24,7 +23,6 @@ from claude_agent_sdk import (
     TaskUpdatedMessage,
     TextBlock,
     ToolResultBlock,
-    ToolPermissionContext,
     ToolUseBlock,
     UserMessage,
     query,
@@ -43,10 +41,11 @@ from asterism_worker.repo_source import TeamWorkspace
 
 log = logging.getLogger(__name__)
 SUPERVISOR_TOOLS = ["Read", "Glob", "Grep", "Agent", "TaskOutput"]
-SUBAGENT_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
+SUBAGENT_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write"]
 # SDK 顶层工具是所有子 Agent 的能力上限；实际使用权限仍由 AgentPolicy 逐次裁决。
 TEAM_TOOLS = list(dict.fromkeys([*SUPERVISOR_TOOLS, *SUBAGENT_TOOLS]))
-DISALLOWED_TOOLS = ["WebSearch", "WebFetch"]
+# 验证命令由外层 Workflow 统一执行；Coding 会话不暴露 Bash，避免一次拒绝中断整个原生子 Agent。
+DISALLOWED_TOOLS = ["Bash", "WebSearch", "WebFetch"]
 WRITE_TOOLS = {"Edit", "Write"}
 CLAUDE_UID = 65534
 CLAUDE_GID = 65534
@@ -123,7 +122,8 @@ class ClaudeSdkTeamProvider:
         context_path = workspace.root / "CLAUDE.md"
         context_path.write_text(self._context(request, specs), encoding="utf-8")
         transcript = self._transcript_path(request)
-        transcript.write_text("", encoding="utf-8")
+        # 同一 Case 的初始执行与多轮修订共用一份轨迹，追加边界记录以保留完整审计链。
+        self._write(transcript, self._attempt_start(request))
 
         def authorize_runtime_tool(
             agent_id: str, agent_type: str, tool_name: str, tool_input: dict[str, Any],
@@ -200,26 +200,6 @@ class ClaudeSdkTeamProvider:
                 }
             }
 
-        async def resolve_permission(
-            tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext,
-        ) -> PermissionResultAllow | PermissionResultDeny:
-            # 内置后台 Agent 可能仍发起 SDK 权限请求；继续复用同一策略，避免退回交互拒绝。
-            agent_id = context.agent_id or ""
-            agent_type = agent_ids.get(agent_id, "")
-            allowed, reason = authorize_runtime_tool(agent_id, agent_type, tool_name, tool_input)
-            self._write(transcript, {
-                "type": "tool_permission",
-                "source": "sdk_permission_callback",
-                "agent": agent_type or "developer",
-                "tool": tool_name,
-                "target": self._tool_target(tool_input),
-                "allowed": allowed,
-                **({"reason": reason} if reason else {}),
-            })
-            if allowed:
-                return PermissionResultAllow()
-            return PermissionResultDeny(message=reason)
-
         hooks = {
             "PreToolUse": [HookMatcher(hooks=[pre_tool_use])],
             "SubagentStart": [HookMatcher(hooks=[subagent_start])],
@@ -236,11 +216,10 @@ class ClaudeSdkTeamProvider:
         try:
             options = ClaudeAgentOptions(
                 tools=TEAM_TOOLS,
-                # PreToolUse 是确定性门禁，can_use_tool 承接内置后台 Agent 的权限请求。
-                allowed_tools=[],
+                # 后台子 Agent 无法交互确认权限；固定工具面预授权，Hook 继续执行路径门禁。
+                allowed_tools=TEAM_TOOLS,
                 disallowed_tools=DISALLOWED_TOOLS,
-                permission_mode="default",
-                can_use_tool=resolve_permission,
+                permission_mode="dontAsk",
                 hooks=hooks,
                 agents={spec.name: self._definition(spec) for spec in specs},
                 model=self.model_profile.model or None,
@@ -374,19 +353,18 @@ class ClaudeSdkTeamProvider:
             f"你负责仓库 {spec.repo.repo_id}（目录 {repo_dir}，类型 {spec.repo.kind}）。"
             "你可以读取整个团队工作区以核对跨仓接口，但只能编辑自己负责的仓库。"
             "自主定位源码并完成目标，不要提交 Git，不要编辑生成物或忽略目录。"
-            "Bash 只允许执行下方系统预先配置的验证命令，其他定位请使用 Read/Glob/Grep。"
+            "源码定位只使用 Read/Glob/Grep；验证命令由外层 Workflow 在收集 Diff 后统一执行。"
             f"\n\n可执行验证命令：\n{tests}"
         )
-        tools = [item for item in SUBAGENT_TOOLS if item != "Bash" or spec.policy.test_commands]
         return AgentDefinition(
             description=f"负责 {spec.repo.repo_id} 仓库的代码实现",
             prompt=prompt,
-            tools=tools,
+            tools=SUBAGENT_TOOLS,
             disallowedTools=DISALLOWED_TOOLS,
             model="inherit",
             maxTurns=self.engine_options.max_turns,
-            # 子 Agent 与 Supervisor 共用同一套 Hook 与 SDK 权限回调。
-            permissionMode="default",
+            # 固定工具面适用于后台 Agent，路径隔离仍由全局 Hook 裁决。
+            permissionMode="dontAsk",
         )
 
     def _context(self, request: CodingAttemptRequest, specs: list[TeamAgentSpec]) -> str:
@@ -448,7 +426,7 @@ class ClaudeSdkTeamProvider:
         )
 
     async def _prompt_stream(self, prompt: str):
-        # can_use_tool 需要 streaming 输入；单条消息仍保持一次性 Coding Attempt 语义。
+        # 单条流式消息保持一次性 Coding Attempt 语义，并兼容 SDK 控制通道。
         yield {"type": "user", "message": {"role": "user", "content": prompt}}
 
     def _authorize(
@@ -458,8 +436,6 @@ class ClaudeSdkTeamProvider:
             return False, f"工具 {tool_name} 不在 Coding Attempt 权限内"
         if tool_name == "Agent":
             return (policy.can_delegate, "只有 Supervisor 可以继续创建子 Agent")
-        if tool_name == "Bash":
-            return self._authorize_bash(policy, tool_input)
         target = self._tool_path(tool_input, team_root)
         if target is None:
             return True, ""
@@ -476,24 +452,6 @@ class ClaudeSdkTeamProvider:
         if any(self._within(target, root) for root in policy.readable_roots):
             return True, ""
         return False, "只能读取当前 Coding Attempt 工作区"
-
-    def _authorize_bash(self, policy: AgentPolicy, tool_input: dict[str, Any]) -> tuple[bool, str]:
-        command = self._normalize_command(str(tool_input.get("command", "")))
-        if not policy.repo or not command:
-            return False, "Bash 只允许仓库 Agent 执行系统配置的验证命令"
-        repo_dir = policy.writable_roots[0].name
-        configured = {
-            candidate
-            for item in policy.test_commands
-            for candidate in (
-                self._normalize_command(item),
-                self._normalize_command(f"cd {repo_dir} && {item}"),
-            )
-            if candidate
-        }
-        if command in configured:
-            return True, ""
-        return False, "Bash 命令不在该仓库的验证命令配置中"
 
     def _repo_changes(self, workspace: TeamWorkspace, summary: str) -> list[RepoChangeResult]:
         changes: list[RepoChangeResult] = []
@@ -598,6 +556,17 @@ class ClaudeSdkTeamProvider:
         path = self.artifacts_root / safe_id / f"coding-attempt-{safe_case}.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
+
+    def _attempt_start(self, request: CodingAttemptRequest) -> dict[str, Any]:
+        revision = request.revision_context
+        return {
+            "type": "attempt_start",
+            "started_at": datetime.now(UTC).isoformat(),
+            "work_item_id": request.work_item_id,
+            "case_id": request.case_id,
+            "revision": revision.revision if revision else 0,
+            "revision_mode": revision.revision_mode if revision else "initial",
+        }
 
     def _write(self, path: Path, record: dict[str, Any]) -> None:
         with path.open("a", encoding="utf-8") as stream:

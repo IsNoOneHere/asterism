@@ -115,7 +115,7 @@ class WorkItemControllerSignalAttemptTest {
         verify(fixture.temporal).signalCase(argThat(command -> "rework-request-002".equals(command.signalId())));
         verify(fixture.events).append(argThat(command ->
                 "manual-action:wi-1:rework:request-002:retry:2".equals(command.idempotencyKey())
-                        && Integer.valueOf(2).equals(command.payload().get("attempt"))));
+                        && Long.valueOf(2).equals(command.payload().get("attempt"))));
     }
 
     @Test

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import subprocess
 
@@ -9,7 +10,6 @@ from claude_agent_sdk import (
     TaskStartedMessage,
     TaskUpdatedMessage,
     TextBlock,
-    ToolPermissionContext,
     ToolResultBlock,
     UserMessage,
 )
@@ -101,19 +101,21 @@ def test_team_provider_uses_native_subagents_and_enforces_repo_write_policy(tmp_
         assert options.tools == TEAM_TOOLS
         assert set(SUPERVISOR_TOOLS).issubset(options.tools)
         assert "Edit" in options.tools and "Write" in options.tools
-        assert options.allowed_tools == []
-        assert options.permission_mode == "default"
+        assert "Bash" not in options.tools
+        assert "Bash" in options.disallowed_tools
+        assert options.allowed_tools == TEAM_TOOLS
+        assert options.permission_mode == "dontAsk"
         assert options.max_buffer_size == 16 * 1024 * 1024
-        assert options.can_use_tool is not None
+        assert options.can_use_tool is None
         assert "CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS" not in options.env
         assert "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" not in options.env
         assert set(options.agents) == {"repo-backend", "repo-frontend"}
         assert "repo-backend -> 仓库 backend，目录 backend" in text
         assert "backend/backend" not in text
         assert "定向 Glob/Grep/Read" in text
-        assert options.agents["repo-backend"].tools == [item for item in SUBAGENT_TOOLS if item != "Bash"]
+        assert options.agents["repo-backend"].tools == SUBAGENT_TOOLS
         assert options.agents["repo-backend"].model == "inherit"
-        assert options.agents["repo-backend"].permissionMode == "default"
+        assert options.agents["repo-backend"].permissionMode == "dontAsk"
 
         start = options.hooks["SubagentStart"][0].hooks[0]
         stop = options.hooks["SubagentStop"][0].hooks[0]
@@ -136,17 +138,6 @@ def test_team_provider_uses_native_subagents_and_enforces_repo_write_policy(tmp_
         await start({"agent_id": "agent-explore", "agent_type": "Explore"}, None, None)
         await start({"agent_id": "agent-back", "agent_type": "repo-backend"}, None, None)
         await start({"agent_id": "agent-front", "agent_type": "repo-frontend"}, None, None)
-
-        callback_read = await options.can_use_tool(
-            "Read", {"file_path": "backend/src/app.txt"},
-            ToolPermissionContext(agent_id="agent-explore"),
-        )
-        callback_write = await options.can_use_tool(
-            "Write", {"file_path": "backend/src/explore.txt"},
-            ToolPermissionContext(agent_id="agent-explore"),
-        )
-        assert callback_read.behavior == "allow"
-        assert callback_write.behavior == "deny"
 
         supervisor_write = await gate({
             "tool_name": "Write", "tool_input": {"file_path": "backend/src/direct.txt"},
@@ -239,6 +230,40 @@ def test_team_provider_allows_unchanged_repository(tmp_path, monkeypatch):
     assert "src/app.txt" in changes["frontend"]
 
 
+def test_team_provider_appends_attempt_boundaries_across_revisions(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    team_root = tmp_path / "team"
+    team_root.mkdir()
+    request, workspace = team_request(team_root)
+
+    async def fake_query(**kwargs):
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-audit", result="执行完成",
+        )
+
+    provider = ClaudeSdkTeamProvider(
+        ModelProfile(provider="anthropic", model="deepseek", api_key="key"),
+        EngineConfig(name="claude_sdk_team"),
+        str(tmp_path / "artifacts"),
+        AgentConstraints(role_id="developer"),
+        {"query": fake_query},
+    )
+    initial_request = request.model_copy(update={"revision_context": None})
+
+    asyncio.run(provider.run(initial_request, workspace))
+    asyncio.run(provider.run(request, workspace))
+
+    transcript = tmp_path / "artifacts" / "wi-1" / "coding-attempt-case-1.jsonl"
+    records = [json.loads(line) for line in transcript.read_text().splitlines()]
+    starts = [record for record in records if record["type"] == "attempt_start"]
+    assert [(record["revision"], record["revision_mode"]) for record in starts] == [
+        (0, "initial"),
+        (2, "incremental"),
+    ]
+    assert len([record for record in records if record["type"] == "result"]) == 2
+
+
 def test_team_provider_restores_worker_owner_before_collecting_diff(tmp_path, monkeypatch):
     team_root = tmp_path / "team"
     team_root.mkdir()
@@ -278,7 +303,7 @@ def test_team_provider_restores_worker_owner_before_collecting_diff(tmp_path, mo
     assert result.session_id == "session-owner"
 
 
-def test_team_provider_only_allows_configured_validation_command(tmp_path, monkeypatch):
+def test_team_provider_leaves_validation_commands_to_workflow(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 501)
     team_root = tmp_path / "team"
     team_root.mkdir()
@@ -292,14 +317,11 @@ def test_team_provider_only_allows_configured_validation_command(tmp_path, monke
     )
     policy = provider._agent_specs(request, workspace)[0].policy
 
-    assert provider._authorize(
-        policy, "Bash", {"command": "cd backend && pytest -q"}, workspace.root,
-    ) == (True, "")
     allowed, reason = provider._authorize(
-        policy, "Bash", {"command": "curl https://example.com"}, workspace.root,
+        policy, "Bash", {"command": "cd backend && pytest -q"}, workspace.root,
     )
     assert allowed is False
-    assert "验证命令" in reason
+    assert "Coding Attempt" in reason
 
 
 def test_team_provider_waits_for_background_task_terminal_event(tmp_path, monkeypatch):

@@ -4,9 +4,12 @@ import org.springframework.http.HttpStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -36,6 +39,17 @@ public class ApiExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     org.springframework.http.ResponseEntity<ApiError> forbidden(AccessDeniedException error) {
         return response(HttpStatus.FORBIDDEN, "FORBIDDEN", error.getMessage(), null);
+    }
+
+    // 路由层异常保留标准 HTTP 语义，避免被兜底处理成误导性的 500。
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    org.springframework.http.ResponseEntity<ApiError> notFound(Exception error) {
+        return response(HttpStatus.NOT_FOUND, "NOT_FOUND", "接口不存在", null);
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    org.springframework.http.ResponseEntity<ApiError> methodNotAllowed(HttpRequestMethodNotSupportedException error) {
+        return response(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED", "请求方法不支持", null);
     }
 
     @ExceptionHandler(Exception.class)

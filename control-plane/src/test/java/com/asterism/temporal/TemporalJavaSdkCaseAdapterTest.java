@@ -79,4 +79,31 @@ class TemporalJavaSdkCaseAdapterTest {
         assertThat(agents.getFirst()).containsEntry("model_profile_ref", "mp-1")
                 .containsEntry("timeout_seconds", 900);
     }
+
+    @Test
+    void startRouteIndexUsesSnakeCaseRepoPayload() {
+        var client = mock(WorkflowClient.class);
+        var workflow = mock(WorkflowStub.class);
+        when(client.newUntypedWorkflowStub(eq("AsterismRouteIndexWorkflow"), any(WorkflowOptions.class)))
+                .thenReturn(workflow);
+        var adapter = new TemporalJavaSdkCaseAdapter(
+                client, new TemporalSettings("unused", "default", "queue"), new ObjectMapper());
+
+        adapter.startRouteIndex(new TemporalCasePort.RouteIndexCommand(
+                "system-1", "/tmp/repo", List.of(new TemporalCasePort.RepoSnapshot(
+                "backend", "backend", "backend", "", "main", "local", "/tmp/repo",
+                List.of("src"), List.of("target"), List.of("git diff --check")))));
+
+        @SuppressWarnings("unchecked")
+        var captor = forClass(Map.class);
+        verify(workflow).start(captor.capture());
+        @SuppressWarnings("unchecked")
+        var payload = (Map<String, Object>) captor.getValue();
+        @SuppressWarnings("unchecked")
+        var repos = (List<Map<String, Object>>) payload.get("repos");
+        assertThat(repos.getFirst())
+                .containsEntry("repo_id", "backend")
+                .containsEntry("local_path", "/tmp/repo")
+                .doesNotContainKeys("repoId", "localPath");
+    }
 }
