@@ -19,7 +19,7 @@ from asterism_worker.activities.gitlab import check_merge_requests, publish_merg
 from asterism_worker.activities.route_index import index_system_routes, send_knowledge_candidates
 from asterism_worker.config.settings import load_settings
 from asterism_worker.readiness import readiness_loop
-from asterism_worker.workflows.case_lifecycle import AsterismCaseWorkflow
+from asterism_worker.workflows.lifecycle import AsterismCaseWorkflow
 from asterism_worker.workflows.route_index import AsterismRouteIndexWorkflow
 
 app = typer.Typer()

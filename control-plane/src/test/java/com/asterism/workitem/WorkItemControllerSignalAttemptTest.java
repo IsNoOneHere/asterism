@@ -127,7 +127,7 @@ class WorkItemControllerSignalAttemptTest {
     void latestConfigurationReworkSendsFreshSnapshotWithoutApiKey() {
         var fixture = fixture(item("worker_blocked", 10));
         when(fixture.events.findByWorkItemId("wi-1")).thenReturn(List.of(event(
-                10, "WorkerBlocked", "{\"reason\":\"execution_failed\",\"failed_stage\":{\"index\":0}}")));
+                10, "WorkerBlocked", "{\"reason\":\"coding_attempt_failed\",\"failedPhase\":\"coding\"}")));
         when(fixture.access.canControl("sys-1", fixture.actor)).thenReturn(true);
         when(fixture.configurations.internal("sys-1")).thenReturn(
                 new AgentConfigurationService.InternalAgentConfiguration(

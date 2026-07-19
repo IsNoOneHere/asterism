@@ -9,7 +9,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from asterism_worker.contracts import CaseInput, PrdSpec
-from asterism_worker.workflows.case_lifecycle import AsterismCaseWorkflow
+from asterism_worker.workflows.lifecycle import AsterismCaseWorkflow
 
 
 TASK_QUEUE = "asterism-test"
@@ -150,7 +150,8 @@ async def _run_workflow(
                 task_queue=TASK_QUEUE,
             )
             for signal_name, payload in signals:
-                await handle.signal(signal_name, payload)
+                context = payload if isinstance(payload, dict) else {"signal_id": payload}
+                await handle.signal(signal_name, context)
             result = await asyncio.wait_for(handle.result(), timeout=8)
     return events, result, calls, requests
 

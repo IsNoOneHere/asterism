@@ -54,6 +54,8 @@ Provider 完成后，Worker 再按仓库收集 Git Diff、执行路径门禁和 
 
 生命周期按 `coding → patch → validation → release` 恢复。失败事件记录 `failedPhase`，恢复 runner 与 checkpoint 由注册表声明；新增阶段通过增加策略扩展，不按错误原因堆叠条件分支。
 
+Workflow 按职责拆分为四个模块：`lifecycle.py` 只保留 signal、query、主循环与 `ActionSpec` 动作分发；`coding.py` 管理 Coding Attempt 与候选上下文；`publishing.py` 管理 Patch、MR 和 Release；`validation.py` 管理验证与回滚。只有 `lifecycle.py` 注册 Temporal Workflow type，其余模块不引入第二套状态机。
+
 | 动作 | 语义 | 复用范围 |
 | --- | --- | --- |
 | `retry_current_phase` | 重试失败阶段 | 保留上下文、候选 Diff 与已完成阶段 |

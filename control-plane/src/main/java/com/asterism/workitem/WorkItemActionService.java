@@ -43,7 +43,7 @@ public class WorkItemActionService {
             Map.entry("validation_passed", List.of("release_approved", "cancel_case")),
             Map.entry("waiting_merge", List.of("check_merge_status", "rework", "cancel_case")));
     private static final Set<String> VALIDATION_ACTIONS = Set.of("validation_passed", "validation_rejected");
-    private static final Set<String> CONFIG_REFRESH_PHASES = Set.of("planning", "coding");
+    private static final Set<String> CONFIG_REFRESH_PHASES = Set.of("coding");
     private static final Predicate<RuntimeState> ALWAYS_AVAILABLE = ignored -> true;
     private static final Map<String, Predicate<RuntimeState>> ACTION_GUARDS = Map.of(
             "retry_current_phase", RuntimeState::phaseRetrySupported,
@@ -219,9 +219,7 @@ public class WorkItemActionService {
                 completedSignals.add(string(payload.get("signalId")));
             }
             if ("WorkerBlocked".equals(event.eventType())) {
-                // 旧事件只有 failed_stage，统一按 coding 阶段兼容，不污染新动作策略。
                 failedPhase = string(payload.get("failedPhase"));
-                if (failedPhase.isBlank() && payload.containsKey("failed_stage")) failedPhase = "coding";
             }
             if ("ReworkStarted".equals(event.eventType())) {
                 failedPhase = "";
@@ -231,11 +229,8 @@ public class WorkItemActionService {
             var payload = payload(event);
             if (List.of("OwnerApprovalSignalSubmitted", "TemporalSignalSubmitted").contains(event.eventType())) {
                 var signalId = string(payload.get("signalId"));
-                var requestId = string(payload.get("requestId"));
                 pending = completedSignals.contains(signalId) ? null
                         : new PendingAction(string(payload.get("signalName")), signalId, event.createdAt());
-                // 旧 workflow 没有完成事件，只能继续沿用投影序号判断。
-                if (requestId.isBlank() && event.sequence() <= item.lastAppliedSequence()) pending = null;
             } else if (pending != null && List.of("TemporalSignalFailed", "TemporalActionCompleted").contains(event.eventType())
                     && pending.signalId().equals(string(payload.get("signalId")))) {
                 pending = null;

@@ -20,6 +20,20 @@ import static org.mockito.Mockito.when;
 
 class TemporalJavaSdkCaseAdapterTest {
     @Test
+    void signalCaseAlwaysUsesObjectPayload() {
+        var client = mock(WorkflowClient.class);
+        var workflow = mock(WorkflowStub.class);
+        when(client.newUntypedWorkflowStub("case-1")).thenReturn(workflow);
+        var adapter = new TemporalJavaSdkCaseAdapter(
+                client, new TemporalSettings("unused", "default", "queue"), new ObjectMapper());
+
+        adapter.signalCase(new TemporalCasePort.SignalCaseCommand(
+                "case-1", "patch_apply_approved", "signal-1", Map.of()));
+
+        verify(workflow).signal("patch_apply_approved", Map.of("signal_id", "signal-1"));
+    }
+
+    @Test
     void startCaseToleratesNullPrdPayloadFields() {
         var client = mock(WorkflowClient.class);
         var workflow = mock(WorkflowStub.class);
