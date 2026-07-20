@@ -75,6 +75,7 @@ const responses: Record<string, unknown> = {
       actorId: 'worker',
     },
   ],
+  '/api/v5/work-items/wi-1/attachments': [],
 };
 let candidateMemories: unknown[] = [];
 let conversationMessages: unknown[] = [];

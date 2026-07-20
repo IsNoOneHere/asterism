@@ -596,6 +596,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v5/work-items/{workItemId}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["attachments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v5/systems/{systemId}/readiness": {
         parameters: {
             query?: never;
@@ -1240,6 +1256,13 @@ export interface components {
             releaseMode?: string;
             validationMode?: string;
             targets?: components["schemas"]["SuspectedTarget"][];
+        };
+        WorkItemAttachmentView: {
+            attachmentId?: string;
+            filename?: string;
+            contentType?: string;
+            /** Format: int64 */
+            sizeBytes?: number;
         };
         ReadinessIssue: {
             code?: string;
@@ -2403,6 +2426,28 @@ export interface operations {
                 };
                 content: {
                     "*/*": Record<string, never>;
+                };
+            };
+        };
+    };
+    attachments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workItemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["WorkItemAttachmentView"][];
                 };
             };
         };

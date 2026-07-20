@@ -1,5 +1,6 @@
 package com.asterism.workitem;
 
+import com.asterism.attachment.AttachmentRepository;
 import com.asterism.common.ApiException;
 import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventRecord;
@@ -39,10 +40,11 @@ public class WorkItemController {
     private final ObjectMapper objectMapper;
     private final GitIntegrationService git;
     private final GitLabClient gitLab;
+    private final AttachmentRepository attachments;
 
     public WorkItemController(WorkItemProjectionRepository workItems, DomainEventService events, WorkItemActionService actions,
                               SystemAccessService access, PrdSessionRepository prdSessions, ObjectMapper objectMapper,
-                              GitIntegrationService git, GitLabClient gitLab) {
+                              GitIntegrationService git, GitLabClient gitLab, AttachmentRepository attachments) {
         this.workItems = workItems;
         this.events = events;
         this.actions = actions;
@@ -51,6 +53,7 @@ public class WorkItemController {
         this.objectMapper = objectMapper;
         this.git = git;
         this.gitLab = gitLab;
+        this.attachments = attachments;
     }
 
     @GetMapping
@@ -98,6 +101,18 @@ public class WorkItemController {
         var item = find(workItemId);
         access.requireMember(item.systemId(), actor);
         return events.findByWorkItemId(item.workItemId());
+    }
+
+    @GetMapping("/{workItemId}/attachments")
+    List<WorkItemAttachmentView> attachments(@PathVariable String workItemId, Authentication actor) {
+        var item = find(workItemId);
+        access.requireMember(item.systemId(), actor);
+        if (item.prdId() == null) return List.of();
+        // 工作项只返回展示所需字段，不暴露附件存储路径和摘要。
+        return attachments.findByPrdIdAndSystemId(item.prdId(), item.systemId()).stream()
+                .map(attachment -> new WorkItemAttachmentView(attachment.attachmentId(), attachment.filename(),
+                        attachment.contentType(), attachment.sizeBytes()))
+                .toList();
     }
 
     @DeleteMapping("/{workItemId}")
@@ -240,5 +255,8 @@ public class WorkItemController {
                                long lastAppliedSequence, WorkItemActionService.PendingAction pendingAction,
                                String releaseMode, String validationMode,
                                List<SuspectedTarget> targets) {
+    }
+
+    public record WorkItemAttachmentView(String attachmentId, String filename, String contentType, long sizeBytes) {
     }
 }

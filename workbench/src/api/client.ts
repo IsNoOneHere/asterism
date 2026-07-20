@@ -144,6 +144,8 @@ export type Attachment = {
   contentType: string;
   sizeBytes: number;
 };
+// 详情页仅消费附件展示字段，接口不暴露系统和存储信息。
+export type WorkItemAttachment = Omit<Attachment, 'systemId'>;
 export type KnowledgeEntry = {
   entryId: string;
   systemId: string;
@@ -361,6 +363,7 @@ export const api = {
     return request<WorkItem[]>('/api/v5/work-items?' + params.toString());
   },
   workItem: (workItemId: string) => request<WorkItem>('/api/v5/work-items/' + encodeURIComponent(workItemId)),
+  workItemAttachments: (workItemId: string) => request<WorkItemAttachment[]>('/api/v5/work-items/' + encodeURIComponent(workItemId) + '/attachments'),
   deleteWorkItem: (workItemId: string) => requestVoid('/api/v5/work-items/' + encodeURIComponent(workItemId), { method: 'DELETE' }),
   // 后端主线程会补该接口；前端先固定预期契约。
   workItemEvents: (workItemId: string) => request<WorkItemEvent[]>('/api/v5/work-items/' + encodeURIComponent(workItemId) + '/events'),

@@ -513,6 +513,21 @@ test('work item detail audit tab contains all raw events without polluting the d
   expect(screen.getByText('CodingAttemptStarted')).toBeInTheDocument();
 });
 
+test('work item detail shows requirement attachments and opens image preview', async () => {
+  setApiResponse('/api/v5/work-items/wi-1/attachments', [{
+    attachmentId: 'att-screen', systemId: 'alpha-system', filename: '登录错误.png', contentType: 'image/png', sizeBytes: 2048,
+  }]);
+  renderApp('/work-items/wi-1');
+
+  expect(await screen.findByRole('heading', { name: '需求附件' })).toBeInTheDocument();
+  expect(screen.getByText('1 张')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /登录错误.png/ }));
+
+  const preview = screen.getByRole('dialog', { name: '需求附件预览' });
+  expect(preview).toHaveAttribute('open');
+  expect(within(preview).getByRole('img')).toHaveAttribute('src', '/api/v5/attachments/att-screen');
+});
+
 test('terminal work item fetches final events once before polling stops', async () => {
   setApiResponse('/api/v5/work-items/wi-1', {
     workItemId: 'wi-1', systemId: 'alpha-system', title: '发布完成', lifecycleStatus: 'completed',

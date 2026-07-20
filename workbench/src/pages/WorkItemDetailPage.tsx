@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Ban, Bot, CheckCircle2, Circle, Clock3, Code2, GitMerge, History, MinusCircle, UserRound, Workflow, XCircle,
+  Ban, Bot, CheckCircle2, Circle, Clock3, Code2, GitMerge, History, Image, MinusCircle, UserRound, Workflow, XCircle,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { api, MemoryDraft, WorkItem, WorkItemEvent } from '../api/client';
+import { api, MemoryDraft, WorkItem, WorkItemAttachment, WorkItemEvent } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { errorMessage, ErrorState, formatDateTime, StatusBadge } from '../components/Display';
 import { MemoryEditorDialog } from '../components/MemoryEditorDialog';
@@ -42,6 +42,8 @@ export function WorkItemDetailPage() {
   const [confirmAction, setConfirmAction] = useState<StageAction | null>(null);
   const [actionNote, setActionNote] = useState('');
   const [actionEvidence, setActionEvidence] = useState('');
+  const [previewAttachment, setPreviewAttachment] = useState<WorkItemAttachment | null>(null);
+  const previewDialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     setActiveTab('flow');
@@ -60,6 +62,12 @@ export function WorkItemDetailPage() {
     queryFn: () => api.workItemEvents(workItemId),
     enabled: Boolean(workItemId),
     refetchInterval: () => isTerminal(item.data?.lifecycleStatus) ? false : 3000,
+    retry: false,
+  });
+  const attachments = useQuery({
+    queryKey: ['work-item-attachments', workItemId],
+    queryFn: () => api.workItemAttachments(workItemId),
+    enabled: Boolean(workItemId),
     retry: false,
   });
   useEffect(() => {
@@ -139,6 +147,11 @@ export function WorkItemDetailPage() {
               <dd>{workItem.targets?.map((target) => `${target.title}${target.apiEndpoints?.length ? `（${target.apiEndpoints.join('、')}）` : ''}`).join('；') || '-'}</dd>
             </dl>
           </details>
+          {attachments.data?.length ? <RequirementAttachments attachments={attachments.data} onPreview={(attachment) => {
+            setPreviewAttachment(attachment);
+            if (!previewDialogRef.current?.open) previewDialogRef.current?.showModal();
+          }} /> : null}
+          {attachments.isError && <ErrorState title="需求附件加载失败" error={attachments.error} onRetry={() => attachments.refetch()} />}
           {memoryMessage && <div className="success-text">{memoryMessage}</div>}
           {flow.revisions.length > 0 && <RevisionHistory revisions={flow.revisions} />}
 
@@ -199,6 +212,10 @@ export function WorkItemDetailPage() {
 
       {item.isLoading && <div className="panel empty" role="status">工作项加载中…</div>}
       {item.isError && <ErrorState title="工作项加载失败" error={item.error} onRetry={() => item.refetch()} />}
+      <dialog ref={previewDialogRef} className="confirm-dialog image-preview-dialog" aria-label="需求附件预览" onClose={() => setPreviewAttachment(null)}>
+        {previewAttachment && <img src={api.attachmentUrl(previewAttachment.attachmentId)} alt={`${previewAttachment.filename} 预览`} />}
+        <button type="button" className="secondary" onClick={() => previewDialogRef.current?.close()}>关闭预览</button>
+      </dialog>
       <MemoryEditorDialog open={memoryOpen} title="从工作项沉淀记忆" submitLabel="加入待审批" workItemId={workItemId} pending={createMemory.isPending} error={createMemory.error} onClose={() => { setMemoryOpen(false); createMemory.reset(); }} onSubmit={(draft) => createMemory.mutate(draft)} />
       <ActionConfirmDialog
         open={Boolean(confirmAction)}
@@ -227,6 +244,34 @@ export function WorkItemDetailPage() {
       />
     </section>
   );
+}
+
+function RequirementAttachments({ attachments, onPreview }: { attachments: WorkItemAttachment[]; onPreview: (attachment: WorkItemAttachment) => void }) {
+  return (
+    <section className="panel requirement-attachments" aria-labelledby="requirement-attachments-title">
+      <header>
+        <div>
+          <h2 id="requirement-attachments-title">需求附件</h2>
+          <p>需求沟通时保留的原始截图，点击可放大查看。</p>
+        </div>
+        <span>{attachments.length} 张</span>
+      </header>
+      <div className="requirement-attachment-grid">
+        {attachments.map((attachment) => (
+          <button type="button" key={attachment.attachmentId} className="requirement-attachment-card" onClick={() => onPreview(attachment)}>
+            <img src={api.attachmentUrl(attachment.attachmentId)} alt={attachment.filename} />
+            <span><Image size={15} aria-hidden="true" /><strong title={attachment.filename}>{attachment.filename}</strong><small>{formatFileSize(attachment.sizeBytes)}</small></span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function WorkItemOverview({ workItem, flow }: { workItem: WorkItem; flow: WorkItemFlow }) {

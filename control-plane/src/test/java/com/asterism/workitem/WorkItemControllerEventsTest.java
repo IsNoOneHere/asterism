@@ -1,5 +1,7 @@
 package com.asterism.workitem;
 
+import com.asterism.attachment.Attachment;
+import com.asterism.attachment.AttachmentRepository;
 import com.asterism.event.DomainEventRecord;
 import com.asterism.event.DomainEventService;
 import com.asterism.identity.SystemAccessService;
@@ -30,7 +32,8 @@ class WorkItemControllerEventsTest {
                 false, List.of(), null, "local", "auto"));
         var controller = new WorkItemController(workItems, events, actions, access,
                 mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper(),
-                mock(com.asterism.git.GitIntegrationService.class), mock(com.asterism.git.GitLabClient.class));
+                mock(com.asterism.git.GitIntegrationService.class), mock(com.asterism.git.GitLabClient.class),
+                mock(AttachmentRepository.class));
 
         var detail = controller.detail("WI20260706001", actor);
         var timeline = controller.events("WI20260706001", actor);
@@ -50,7 +53,8 @@ class WorkItemControllerEventsTest {
         when(workItems.findByDisplayWorkItemId("WI20260706001")).thenReturn(Optional.of(item()));
         var controller = new WorkItemController(workItems, events, mock(WorkItemActionService.class), access,
                 mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper(),
-                mock(com.asterism.git.GitIntegrationService.class), mock(com.asterism.git.GitLabClient.class));
+                mock(com.asterism.git.GitIntegrationService.class), mock(com.asterism.git.GitLabClient.class),
+                mock(AttachmentRepository.class));
 
         controller.delete("WI20260706001", actor);
 
@@ -60,6 +64,28 @@ class WorkItemControllerEventsTest {
         assertThat(deleted.getValue().lifecycleStatus()).isEqualTo("activated");
         verify(access).requireMember("sys-1", actor);
         verify(access, never()).requireOwnerOrAdmin(anyString(), any());
+    }
+
+    @Test
+    void listsWorkItemAttachmentsWithoutExposingStorageMetadata() {
+        var workItems = mock(WorkItemProjectionRepository.class);
+        var events = mock(DomainEventService.class);
+        var access = mock(SystemAccessService.class);
+        var attachments = mock(AttachmentRepository.class);
+        var actor = new UsernamePasswordAuthenticationToken("requester", "n/a");
+        when(workItems.findByDisplayWorkItemId("WI20260706001")).thenReturn(Optional.of(item()));
+        when(attachments.findByPrdIdAndSystemId("prd-1", "sys-1")).thenReturn(List.of(new Attachment(
+                "att-1", "sys-1", "admin", "screen.png", "image/png", 128,
+                "sha256-secret", "ab/sha256-secret", Instant.now())));
+        var controller = new WorkItemController(workItems, events, mock(WorkItemActionService.class), access,
+                mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper(),
+                mock(com.asterism.git.GitIntegrationService.class), mock(com.asterism.git.GitLabClient.class), attachments);
+
+        var result = controller.attachments("WI20260706001", actor);
+
+        assertThat(result).containsExactly(new WorkItemController.WorkItemAttachmentView(
+                "att-1", "screen.png", "image/png", 128));
+        verify(access).requireMember("sys-1", actor);
     }
 
     private WorkItemProjection item() {

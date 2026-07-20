@@ -2,6 +2,7 @@ package com.asterism.workitem;
 
 import com.asterism.event.DomainEventRecord;
 import com.asterism.event.DomainEventService;
+import com.asterism.attachment.AttachmentRepository;
 import com.asterism.git.GitIntegrationService;
 import com.asterism.git.GitLabClient;
 import com.asterism.identity.SystemAccessService;
@@ -82,7 +83,7 @@ class WorkItemMergeStatusTest {
         var actionService = new WorkItemActionService(workItems, temporal, events, access,
                 mock(AgentConfigurationService.class), new ObjectMapper(), directTransactions());
         var controller = new WorkItemController(workItems, events, actionService, access,
-                mock(PrdSessionRepository.class), new ObjectMapper(), git, gitLab);
+                mock(PrdSessionRepository.class), new ObjectMapper(), git, gitLab, mock(AttachmentRepository.class));
         return new Fixture(controller, temporal, gitLab, actor);
     }
 

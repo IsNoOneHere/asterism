@@ -3136,6 +3136,95 @@ button.row-action-menu-item:disabled {
   margin-bottom: 0;
 }
 
+.requirement-attachments {
+  margin: 14px 0 0;
+  padding: 18px;
+}
+
+.requirement-attachments > header {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.requirement-attachments h2,
+.requirement-attachments p {
+  margin: 0;
+}
+
+.requirement-attachments h2 {
+  font-size: 17px;
+}
+
+.requirement-attachments p,
+.requirement-attachments header > span {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.requirement-attachment-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+
+button.requirement-attachment-card {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  display: grid;
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  text-align: left;
+}
+
+button.requirement-attachment-card:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: 0 6px 18px rgba(24, 28, 39, 0.08);
+  transform: translateY(-1px);
+}
+
+.requirement-attachment-card > img {
+  aspect-ratio: 16 / 9;
+  background: var(--surface-muted);
+  display: block;
+  object-fit: cover;
+  width: 100%;
+}
+
+.requirement-attachment-card > span {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 10px 12px;
+  width: 100%;
+}
+
+.requirement-attachment-card svg,
+.requirement-attachment-card small {
+  color: var(--muted);
+}
+
+.requirement-attachment-card strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.requirement-attachment-card small {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .work-item-tabs {
   margin-top: 22px;
 }
