@@ -1518,6 +1518,7 @@ pre {
 
 .execution-policy-panel label {
   font-size: 12px;
+  margin-bottom: 0;
 }
 
 .execution-policy-panel .error-text {
