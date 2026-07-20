@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -38,6 +39,8 @@ public class PrdConversationService {
     private static final String AI_UNAVAILABLE = "AI 暂时不可用，请重试";
     static final String PENDING_SENDER = "assistant_pending";
     static final long PENDING_TIMEOUT_SECONDS = 120;
+    private static final Set<String> EDITABLE_STATUSES = Set.of(
+            "waiting_input", "need_clarification", "waiting_user_confirm", "case_start_failed");
 
     private final PrdSessionRepository sessions;
     private final ConversationMessageRepository messages;
@@ -159,9 +162,7 @@ public class PrdConversationService {
                                            Authentication actor) {
         var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
         access.requireMember(current.systemId(), actor);
-        if (!List.of("need_clarification", "waiting_user_confirm").contains(current.status())) {
-            throw new ApiException(HttpStatus.CONFLICT, "PRD_DRAFT_NOT_EDITABLE", "当前状态不能编辑 PRD");
-        }
+        requireEditable(current);
         // 手工编辑与后台回合互斥，避免旧快照覆盖用户刚保存的内容。
         if (messages.findFirstByConversationIdAndSenderTypeOrderByCreatedAtAsc(
                 current.conversationId(), PENDING_SENDER).isPresent()) {
@@ -222,6 +223,7 @@ public class PrdConversationService {
             if (!current.systemId().equals(systemId)) {
                 throw new ApiException(HttpStatus.CONFLICT, "PRD_SYSTEM_MISMATCH", "PRD 所属系统不能变更");
             }
+            requireEditable(current);
         }
         var prdId = current == null ? "prd-" + UUID.randomUUID() : current.prdId();
         var conversationId = current == null ? "conv-" + prdId : current.conversationId();
@@ -316,6 +318,13 @@ public class PrdConversationService {
             }
         }
         return new AnalysisResult(observations, failed);
+    }
+
+    private void requireEditable(PrdSession session) {
+        // 工作项 ID 可能由导入流程预分配，编辑权限只看 PRD 生命周期。
+        if (!EDITABLE_STATUSES.contains(session.status())) {
+            throw new ApiException(HttpStatus.CONFLICT, "PRD_DRAFT_NOT_EDITABLE", "当前状态不能编辑 PRD");
+        }
     }
 
     private String assistantMessage(String original, boolean analysisFailed, KnowledgeMatchService.MatchResult match) {

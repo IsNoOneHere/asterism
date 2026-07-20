@@ -9,6 +9,7 @@ import { api, PrdMessageResult, SuspectedTarget, UiObservation } from '../api/cl
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { errorMessage, ErrorState, StatusBadge } from '../components/Display';
 import { SystemSelect } from '../components/SystemSelect';
+import { hasGeneratedWorkItem, isResumablePrd } from '../prd';
 import { useCurrentSystem } from '../SystemContext';
 
 const schema = z.object({
@@ -211,7 +212,8 @@ export function NewPrdPage() {
   const latestAssistantId = [...conversationMessages].reverse()
     .find((message) => message.senderType === 'assistant')?.messageId;
   const acceptanceMissing = result.missingFields?.some((field) => ['acceptanceCriteria', 'acceptance_criteria'].includes(field));
-  const draftEditable = ['need_clarification', 'waiting_user_confirm'].includes(result.status || '');
+  const draftEditable = isResumablePrd(result);
+  const workItemGenerated = hasGeneratedWorkItem(result);
 
   return (
     <section className="create-workspace">
@@ -295,7 +297,7 @@ export function NewPrdPage() {
             <StatusBadge value={result.lifecycleStatus || result.status || 'waiting_input'} />
           </div>
         </div>
-        {result.workItemId ? (
+        {workItemGenerated ? (
           <div className="prd-created-state" role="status">
             <span className="prd-created-icon" aria-hidden="true"><CheckCircle2 size={22} /></span>
             <div className="prd-created-copy">

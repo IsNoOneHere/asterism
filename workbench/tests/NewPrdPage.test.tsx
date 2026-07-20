@@ -134,6 +134,7 @@ test('prd draft list defaults to resumable sessions and can show all records', a
     if (path.startsWith('/api/v5/prd-sessions?')) {
       return jsonResponse([
         { prdId: 'prd-pending', systemId: 'alpha-system', conversationId: 'conv-pending', title: '待完善需求', status: 'need_clarification', createdBy: 'admin', canDelete: true, draft: {}, missingFields: [] },
+        { prdId: 'prd-imported', systemId: 'alpha-system', conversationId: 'conv-imported', workItemId: 'wi-imported', title: '导入待输入需求', status: 'waiting_input', createdBy: 'admin', canDelete: true, draft: {}, missingFields: [] },
         { prdId: 'prd-finished', systemId: 'alpha-system', conversationId: 'conv-finished', workItemId: 'wi-finished', title: '已生成需求', status: 'confirmed', createdBy: 'admin', canDelete: true, draft: {}, missingFields: [] },
       ]);
     }
@@ -143,13 +144,36 @@ test('prd draft list defaults to resumable sessions and can show all records', a
   renderApp('/work-items/drafts');
 
   expect(await screen.findByText('待完善需求')).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: '继续完善' })).toHaveAttribute('href', '/work-items/new/prd-pending');
+  expect(screen.getAllByRole('link', { name: '继续完善' })).toHaveLength(2);
+  expect(screen.getByText('导入待输入需求').closest('article')).toHaveTextContent('继续完善');
   expect(screen.getByRole('button', { name: '删除草稿 待完善需求' })).toBeEnabled();
   expect(screen.queryByText('已生成需求')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '全部记录' }));
   expect(await screen.findByText('已生成需求')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '查看工作项' })).toHaveAttribute('href', '/work-items/wi-finished');
   expect(screen.getByRole('button', { name: '删除草稿 已生成需求' })).toBeEnabled();
+});
+
+test('imported waiting input stays editable even with a reserved work item id', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-imported') {
+      return jsonResponse({
+        prdId: 'prd-imported', systemId: 'alpha-system', conversationId: 'conv-imported', workItemId: 'wi-imported',
+        title: '导入待输入需求', goal: '补全验收标准', status: 'waiting_input', createdBy: 'admin',
+        draft: { title: '导入待输入需求', goal: '补全验收标准', acceptanceCriteria: [] }, missingFields: [],
+      });
+    }
+    if (path === '/api/v5/conversations/conv-imported') return jsonResponse({ messages: [], pendingAssistant: false });
+    return fallback(input, init);
+  });
+
+  renderApp('/work-items/new/prd-imported');
+
+  expect(await screen.findByLabelText('PRD 标题')).toBeEnabled();
+  expect(screen.getByRole('button', { name: '添加验收标准' })).toBeEnabled();
+  expect(screen.queryByRole('heading', { name: '工作项已生成' })).not.toBeInTheDocument();
 });
 
 test('draft deletion requires confirmation and sends DELETE', async () => {

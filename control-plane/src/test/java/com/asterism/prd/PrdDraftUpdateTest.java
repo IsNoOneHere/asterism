@@ -30,7 +30,7 @@ class PrdDraftUpdateTest {
             new UsernamePasswordAuthenticationToken("user", "n/a");
 
     @Test
-    void manualAcceptanceCriteriaMovesDraftToUserConfirmation() {
+    void importedWaitingInputCanBeEditedAndMovedToUserConfirmation() {
         var sessions = mock(PrdSessionRepository.class);
         var messages = mock(ConversationMessageRepository.class);
         var access = mock(SystemAccessService.class);
@@ -38,7 +38,7 @@ class PrdDraftUpdateTest {
         var events = mock(DomainEventService.class);
         var savedSession = new AtomicReference<PrdSession>();
         var savedMessage = new AtomicReference<ConversationMessage>();
-        when(sessions.findById("prd-1")).thenReturn(Optional.of(session("need_clarification")));
+        when(sessions.findById("prd-1")).thenReturn(Optional.of(session("waiting_input")));
         when(aggregate.update(any(PrdSession.class))).thenAnswer(call -> {
             savedSession.set(call.getArgument(0));
             return call.getArgument(0);
