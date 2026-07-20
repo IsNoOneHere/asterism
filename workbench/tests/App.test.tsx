@@ -398,6 +398,31 @@ test('diff review requires a multiline note before submitting automatic revision
   });
 });
 
+test('stale patch action refreshes the completed work item and removes the old button', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.endsWith('/signals/patch_apply_approved') && init?.method === 'POST') {
+      setApiResponse('/api/v5/work-items/wi-1', {
+        workItemId: 'wi-1', systemId: 'alpha-system', title: '登录页错误提示', lifecycleStatus: 'completed',
+        currentStage: '已完成', waitingFor: '', canControl: false, availableActions: [], lastAppliedSequence: 12,
+      });
+      return jsonResponse({ code: 'STALE_WORK_ITEM', message: '工作项状态已变化' }, false, 409);
+    }
+    return fallback(input, init);
+  });
+  renderApp('/work-items/wi-1');
+
+  fireEvent.click(await screen.findByRole('button', { name: '应用 Patch' }));
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '应用 Patch' }));
+
+  const alert = await screen.findByRole('alertdialog');
+  expect(alert).toHaveTextContent('工作项已更新');
+  expect(alert).toHaveTextContent('工作项状态已更新，页面已刷新，请按当前状态继续。');
+  await waitFor(() => expect(screen.queryByRole('button', { name: '应用 Patch' })).not.toBeInTheDocument());
+  expect(fetch).toHaveBeenCalledWith('/api/v5/work-items/wi-1/events', expect.anything());
+});
+
 test('work item detail shows the active revision and revision history', async () => {
   setApiResponse('/api/v5/work-items/wi-1', {
     workItemId: 'wi-1', systemId: 'alpha-system', title: '登录页修订', lifecycleStatus: 'activated',

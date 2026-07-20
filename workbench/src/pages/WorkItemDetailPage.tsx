@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { api, MemoryDraft, WorkItem, WorkItemAttachment, WorkItemEvent } from '../api/client';
+import { api, ApiError, MemoryDraft, WorkItem, WorkItemAttachment, WorkItemEvent } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { errorMessage, ErrorState, formatDateTime, StatusBadge } from '../components/Display';
 import { MemoryEditorDialog } from '../components/MemoryEditorDialog';
@@ -92,6 +92,13 @@ export function WorkItemDetailPage() {
       setActionNote('');
       queryClient.invalidateQueries({ queryKey: ['work-item', workItemId] });
       queryClient.invalidateQueries({ queryKey: ['work-item-events', workItemId] });
+    },
+    onError: () => {
+      // 操作失败也立即刷新，避免过期按钮继续诱导用户重复提交。
+      return Promise.all([
+        queryClient.refetchQueries({ queryKey: ['work-item', workItemId], exact: true }),
+        queryClient.refetchQueries({ queryKey: ['work-item-events', workItemId], exact: true }),
+      ]);
     },
     onSettled: () => setConfirmAction(null),
   });
@@ -234,8 +241,8 @@ export function WorkItemDetailPage() {
       />
       <ActionConfirmDialog
         open={Boolean(runAction.error)}
-        title="操作失败"
-        description={errorMessage(runAction.error, '工作项操作失败')}
+        title={actionErrorTitle(runAction.error)}
+        description={actionErrorMessage(runAction.error)}
         confirmLabel="知道了"
         alert
         showCancel={false}
@@ -244,6 +251,22 @@ export function WorkItemDetailPage() {
       />
     </section>
   );
+}
+
+const REFRESHED_ACTION_ERRORS = new Set(['STALE_WORK_ITEM', 'ACTION_NOT_AVAILABLE', 'ACTION_PENDING']);
+
+function actionErrorTitle(error: unknown) {
+  return error instanceof ApiError && REFRESHED_ACTION_ERRORS.has(error.code) ? '工作项已更新' : '操作失败';
+}
+
+function actionErrorMessage(error: unknown) {
+  if (error instanceof ApiError && REFRESHED_ACTION_ERRORS.has(error.code)) {
+    return '工作项状态已更新，页面已刷新，请按当前状态继续。';
+  }
+  if (error instanceof ApiError && error.code === 'TEMPORAL_SIGNAL_FAILED') {
+    return '工作流服务暂时不可用，请稍后重试。';
+  }
+  return errorMessage(error, '工作项操作失败');
 }
 
 function RequirementAttachments({ attachments, onPreview }: { attachments: WorkItemAttachment[]; onPreview: (attachment: WorkItemAttachment) => void }) {

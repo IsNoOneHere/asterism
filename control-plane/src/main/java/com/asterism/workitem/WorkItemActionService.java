@@ -91,10 +91,36 @@ public class WorkItemActionService {
                     Map.of("signalName", action, "signalId", prepared.signalId(),
                             "reason", String.valueOf(error.getMessage())),
                     internalId, null, "signal-failed:" + prepared.submissionKey()));
-            throw new IllegalStateException("Temporal signal 提交失败", error);
+            throw classifySignalFailure(internalId, action, prepared, error);
         }
         log.info("手动动作已提交 workItem={} action={} requestId={}", internalId, action, prepared.requestId());
         return new WorkItemController.SignalResponse(prepared.displayWorkItemId(), prepared.signalId(), "submitted");
+    }
+
+    private ApiException classifySignalFailure(String workItemId, String action, PreparedSignal prepared,
+                                               RuntimeException error) {
+        var current = workItems.findById(workItemId).orElse(null);
+        if (current == null || current.deleted()
+                || !prepared.expectedStatus().equals(current.lifecycleStatus())
+                || prepared.expectedProjectionSequence() != current.lastAppliedSequence()
+                || !actionStillAvailable(action, current)) {
+            // Signal 发送与投影更新之间存在竞态，统一提示客户端刷新到当前事实。
+            log.info("Temporal 信号失败后工作项已变化 workItem={} action={} expectedStatus={} currentStatus={}",
+                    workItemId, action, prepared.expectedStatus(), current == null ? "missing" : current.lifecycleStatus());
+            return new ApiException(HttpStatus.CONFLICT, "STALE_WORK_ITEM",
+                    "工作项状态已变化，请刷新后按当前状态继续");
+        }
+        log.error("Temporal 信号提交失败 workItem={} action={} signalId={}",
+                workItemId, action, prepared.signalId(), error);
+        return new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "TEMPORAL_SIGNAL_FAILED",
+                "工作流服务暂时不可用，请稍后重试");
+    }
+
+    private boolean actionStillAvailable(String action, WorkItemProjection item) {
+        var runtime = runtime(item);
+        return runtime.pendingAction() == null
+                && ACTIONS.getOrDefault(item.lifecycleStatus(), List.of()).contains(action)
+                && actionAvailable(action, runtime);
     }
 
     public Availability availability(WorkItemProjection item, Authentication actor) {
@@ -185,8 +211,8 @@ public class WorkItemActionService {
         if (!note.isBlank()) context.put("note", note);
         if (!evidence.isBlank()) context.put("evidence", evidence);
         context.putAll(signalContext);
-        return new PreparedSignal(item.displayWorkItemId(), item.systemId(), item.prdId(), item.caseId(), requestId,
-                signalId, submissionKey, context, dispatch);
+        return new PreparedSignal(item.displayWorkItemId(), item.systemId(), item.prdId(), item.caseId(),
+                item.lifecycleStatus(), item.lastAppliedSequence(), requestId, signalId, submissionKey, context, dispatch);
     }
 
     private void requirePermission(WorkItemProjection item, RuntimeState runtime, String action, Authentication actor) {
@@ -311,6 +337,7 @@ public class WorkItemActionService {
     }
 
     private record PreparedSignal(String displayWorkItemId, String systemId, String prdId, String caseId,
+                                  String expectedStatus, long expectedProjectionSequence,
                                   String requestId, String signalId, String submissionKey,
                                   Map<String, Object> context, boolean dispatch) {
     }

@@ -11,6 +11,7 @@ import com.asterism.temporal.TemporalCasePort;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionOperations;
@@ -21,6 +22,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -116,6 +118,42 @@ class WorkItemControllerSignalAttemptTest {
         verify(fixture.events).append(argThat(command ->
                 "manual-action:wi-1:rework:request-002:retry:2".equals(command.idempotencyKey())
                         && Long.valueOf(2).equals(command.payload().get("attempt"))));
+    }
+
+    @Test
+    void temporalFailureBecomesStaleConflictWhenProjectionAlreadyAdvanced() {
+        var before = item("modification_completed", 10);
+        var fixture = fixture(before);
+        var completed = item("completed", 12);
+        when(fixture.workItems.findById("wi-1")).thenReturn(Optional.of(before), Optional.of(completed));
+        doThrow(new IllegalStateException("workflow already completed"))
+                .when(fixture.temporal).signalCase(any());
+        var request = new WorkItemActionService.ActionRequest(
+                "request-005", "modification_completed", 10L, null, null);
+
+        var error = catchThrowableOfType(() -> fixture.service.submit(
+                "wi-1", "patch_apply_approved", request, fixture.actor), ApiException.class);
+
+        assertThat(error.status()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(error.code()).isEqualTo("STALE_WORK_ITEM");
+        assertSignalFailureAudited(fixture, "patch_apply_approved-request-005");
+    }
+
+    @Test
+    void temporalFailureRemainsRetryableWhenProjectionDidNotChange() {
+        var current = item("validation_failed", 10);
+        var fixture = fixture(current);
+        doThrow(new IllegalStateException("temporal unavailable"))
+                .when(fixture.temporal).signalCase(any());
+        var request = new WorkItemActionService.ActionRequest(
+                "request-006", "validation_failed", 10L, null, null);
+
+        var error = catchThrowableOfType(() -> fixture.service.submit(
+                "wi-1", "rework", request, fixture.actor), ApiException.class);
+
+        assertThat(error.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(error.code()).isEqualTo("TEMPORAL_SIGNAL_FAILED");
+        assertSignalFailureAudited(fixture, "rework-request-006");
     }
 
     @Test
@@ -219,8 +257,15 @@ class WorkItemControllerSignalAttemptTest {
         when(events.findByWorkItemId("wi-1")).thenReturn(List.of());
         var service = new WorkItemActionService(workItems, temporal, events, access,
                 configurations, new ObjectMapper(), directTransactions());
-        return new Fixture(service, temporal, events, access, configurations,
+        return new Fixture(service, workItems, temporal, events, access, configurations,
                 new UsernamePasswordAuthenticationToken("requester", "n/a"));
+    }
+
+    private void assertSignalFailureAudited(Fixture fixture, String signalId) {
+        var captor = ArgumentCaptor.forClass(DomainEventService.AppendEvent.class);
+        verify(fixture.events, times(2)).append(captor.capture());
+        assertThat(captor.getAllValues().get(1).eventType().name()).isEqualTo("TemporalSignalFailed");
+        assertThat(captor.getAllValues().get(1).payload()).containsEntry("signalId", signalId);
     }
 
     private TransactionOperations directTransactions() {
@@ -245,7 +290,8 @@ class WorkItemControllerSignalAttemptTest {
                 "wi-1", "worker", "worker", payload, "wi-1", null, "key-" + sequence, Instant.now());
     }
 
-    private record Fixture(WorkItemActionService service, TemporalCasePort temporal, DomainEventService events,
+    private record Fixture(WorkItemActionService service, WorkItemProjectionRepository workItems,
+                           TemporalCasePort temporal, DomainEventService events,
                            SystemAccessService access, AgentConfigurationService configurations,
                            UsernamePasswordAuthenticationToken actor) {
     }
