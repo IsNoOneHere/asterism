@@ -206,7 +206,7 @@ export function UsersPage({ currentUserId }: { currentUserId: string }) {
               <td><div className="table-title" title={`${user.displayName} · ${user.userId}`}><strong>{user.displayName}</strong><span>{user.userId}</span></div></td>
               <td title={user.email || '未设置'}>{user.email || '未设置'}</td>
               <td><span className={`status-badge ${user.enabled ? 'success' : 'neutral'}`}>{user.enabled ? '已启用' : '已禁用'}</span></td>
-              <td><div className="user-row-actions">
+              <td className="table-action-cell"><div className="user-row-actions">
                 {/* 高频操作直接显示，低频和危险操作统一收进更多菜单。 */}
                 <button type="button" className="secondary icon-button" aria-label={`编辑用户 ${user.userId}`} title="编辑用户" onClick={() => openUserEditor(user)}><Pencil size={16} /></button>
                 <button type="button" className="secondary icon-button" aria-label={`重置 ${user.userId} 的密码`} title="重置密码" onClick={() => openPasswordReset(user.userId)}><KeyRound size={16} /></button>
@@ -243,7 +243,7 @@ export function UsersPage({ currentUserId }: { currentUserId: string }) {
               <td><div className="table-title" title={`${member.displayName || member.userId} · ${member.userId}`}><strong>{member.displayName || member.userId}</strong><span>{member.userId}</span></div></td>
               <td><span className="status-badge info">{roleName(member.role)}</span></td>
               <td title={systemId}>{systemId}</td>
-              <td><button type="button" className="danger-outline" onClick={() => openConfirmation({ type: 'remove-member', userId: member.userId, role: member.role })}>移除</button></td>
+              <td className="table-action-cell"><button type="button" className="danger-outline" onClick={() => openConfirmation({ type: 'remove-member', userId: member.userId, role: member.role })}>移除</button></td>
             </tr>)}
             {!filteredMembers.length && <tr><td className="empty-cell" colSpan={4}>{query ? '没有匹配的成员' : '当前系统暂无成员'}</td></tr>}
           </tbody></table></div>

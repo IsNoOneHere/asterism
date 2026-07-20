@@ -1986,12 +1986,10 @@ button.danger-action:hover:not(:disabled) {
 }
 
 .model-profile-table td:last-child {
-  text-align: right;
   width: 220px;
 }
 
 .agent-role-table td:last-child {
-  text-align: right;
   width: 120px;
 }
 
@@ -2001,10 +1999,6 @@ button.danger-action:hover:not(:disabled) {
 
 .agent-role-table th:last-child {
   width: 120px;
-}
-
-.config-action-cell .button-row {
-  justify-content: flex-end;
 }
 
 .agent-dialog {
@@ -2541,7 +2535,8 @@ button.system-select-trigger[aria-expanded="true"] {
   white-space: nowrap;
 }
 
-.table-action {
+.table-action,
+.table-action-cell {
   white-space: nowrap;
 }
 
@@ -2697,9 +2692,8 @@ button.connection-test.failed:hover:not(:disabled) {
   width: auto;
 }
 
-/* 操作按钮保持右对齐，表头沿用全局居中规则。 */
+/* 操作列只保留统一宽度，内容对齐交给共享操作单元格。 */
 .system-table td:last-child {
-  text-align: right;
   width: 224px;
 }
 
@@ -2712,15 +2706,22 @@ button.connection-test.failed:hover:not(:disabled) {
   width: 144px;
 }
 
-.users-table td:last-child {
-  text-align: right;
-}
-
 .user-row-actions {
   align-items: center;
   display: flex;
   gap: 6px;
-  justify-content: flex-end;
+}
+
+/* 所有列表操作列使用同一条水平和垂直居中基线。 */
+.data-table td.table-action-cell {
+  text-align: center;
+}
+
+.table-action-cell > .button-row,
+.table-action-cell > .row-actions,
+.table-action-cell > .user-row-actions {
+  align-items: center;
+  justify-content: center;
 }
 
 .row-action-menu {

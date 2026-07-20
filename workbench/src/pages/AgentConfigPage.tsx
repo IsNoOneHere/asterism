@@ -135,7 +135,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
             <td title={`${item.name || item.id} · ${item.baseUrl || '默认端点'}`}><strong>{item.name || item.id}</strong><small>{item.baseUrl || '默认端点'}</small></td>
             <td title={`${providerName(item.provider)} · ${item.model}`}>{providerName(item.provider)} · {item.model}</td>
             <td><span className={`key-status ${item.apiKeySet ? 'configured' : ''}`}><KeyRound size={14} aria-hidden="true" />{item.apiKeySet ? 'Key 已配置' : 'Key 未配置'}{item.supportsVision ? ' · Vision' : ''}</span></td>
-            <td className="config-action-cell"><div className="button-row compact-actions">
+            <td className="config-action-cell table-action-cell"><div className="button-row compact-actions">
               <button type="button" className={`secondary connection-test ${result ? result.connected ? 'connected' : 'failed' : ''}`}
                 aria-label={`测试 ${item.name || item.id}连通性`} aria-live="polite" title={result?.message || '测试模型连通性'}
                 disabled={!canManageCurrentSystem || testProfile.isPending} onClick={() => testProfile.mutate(item.id)}>
@@ -164,7 +164,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
             <td title={item.name}><strong>{item.name}</strong>{item.kind === 'builtin' && <span className="default-badge">内置 · {builtinPurpose[item.name]}</span>}</td>
             <td title={agentRuntimeLabel(item, value?.modelProfiles ?? [])}>{agentRuntimeLabel(item, value?.modelProfiles ?? [])}</td>
             <td title={item.pathScope.join(', ') || (item.name === 'product' ? '不执行代码' : '跟随系统')}>{item.pathScope.join(', ') || (item.name === 'product' ? '不执行代码' : '跟随系统')}</td>
-            <td className="config-action-cell"><div className="button-row compact-actions">
+            <td className="config-action-cell table-action-cell"><div className="button-row compact-actions">
               <button type="button" className="icon-button" title="编辑 Agent" aria-label={`编辑 ${item.name}`} disabled={!canManageCurrentSystem} onClick={() => openAgent(item)}><Pencil size={16} /></button>
             </div></td>
           </tr>)}

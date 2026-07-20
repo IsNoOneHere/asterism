@@ -161,7 +161,7 @@ function WorkItemRow({ item, navigationState, canAct, approvalPending, deletePen
       <td>{item.executionAllowed ? '允许' : '关闭'}</td>
       <td>{formatDateTime(item.updatedAt)}</td>
       <td className="work-item-creator">{item.createdBy || '-'}</td>
-      <td className="table-action"><div className="row-actions compact-actions table-row-actions">
+      <td className="table-action table-action-cell"><div className="row-actions compact-actions table-row-actions">
         {canAct && item.availableActions.includes('owner_approved') ? (
           <button type="button" disabled={approvalPending} onClick={onApprove}>批准</button>
         ) : <Link className="action-link" state={navigationState} to={'/work-items/' + item.workItemId}>查看详情</Link>}

@@ -168,12 +168,25 @@ test('knowledge list requests one server page instead of the full dataset', asyn
   expect(await screen.findByText('第一页知识')).toBeInTheDocument();
   expect(screen.getByText('仓库：main · 2 个文字锚点')).toBeInTheDocument();
   expect(screen.queryByText('规则设置')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '批准' }).closest('td')).toHaveClass('table-action-cell');
   expect(fetch).toHaveBeenCalledWith(firstPage, expect.anything());
   fireEvent.click(screen.getByRole('button', { name: '下一页' }));
 
   expect(await screen.findByText('第二页知识')).toBeInTheDocument();
   expect(fetch).toHaveBeenCalledWith(secondPage, expect.anything());
   expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).startsWith('/api/v5/systems/alpha-system/knowledge?'))).toBe(false);
+});
+
+test.each([
+  { path: '/systems', control: 'Git 配置' },
+  { path: '/users', control: '编辑用户 admin' },
+  { path: '/models', control: '测试 Claude 主模型连通性' },
+  { path: '/agents', control: '编辑 product' },
+])('$path keeps row actions in the shared centered cell', async ({ path, control }) => {
+  renderApp(path);
+
+  const actions = await screen.findAllByRole('button', { name: control });
+  expect(actions[0].closest('td')).toHaveClass('table-action-cell');
 });
 
 test.each([
@@ -239,6 +252,7 @@ test('user rows keep frequent actions visible and place destructive actions in t
   expect(document.querySelector('.users-table-frame')).toHaveClass('menu-open');
 
   fireEvent.click(screen.getByRole('tab', { name: /当前系统成员/ }));
+  expect(screen.getByRole('button', { name: '移除' }).closest('td')).toHaveClass('table-action-cell');
   fireEvent.click(screen.getByRole('tab', { name: /用户列表/ }));
   expect(screen.queryByRole('menuitem', { name: '删除用户 demo-user' })).not.toBeInTheDocument();
 });
@@ -270,7 +284,9 @@ test('work item table separates id and title and shows creator', async () => {
   expect(await screen.findByText('优化工作项列表')).toBeInTheDocument();
   expect(screen.getByText('优化工作项列表')).toHaveAttribute('title', '优化工作项列表');
   expect(screen.getByRole('cell', { name: 'admin' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '删除工作项 WI202607114827' })).toBeEnabled();
+  const deleteButton = screen.getByRole('button', { name: '删除工作项 WI202607114827' });
+  expect(deleteButton).toBeEnabled();
+  expect(deleteButton.closest('td')).toHaveClass('table-action-cell');
 });
 
 test('work item deletion is available regardless of lifecycle status', async () => {

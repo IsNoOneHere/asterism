@@ -164,7 +164,7 @@ export function SystemsPage() {
             <td className="path-cell" title={system.repoPath}>{system.repoPath}</td>
             <td>{ownerName(enabledUsers, system.ownerUserId)}</td>
             <td>{system.systemId === systemId ? <span className="status-badge success">当前系统</span> : <span className="status-badge neutral">可用</span>}</td>
-            <td><div className="button-row compact-actions">
+            <td className="table-action-cell"><div className="button-row compact-actions">
               {/* Git 配置保留独立可见入口，避免藏在通用编辑按钮中。 */}
               <button type="button" className="secondary icon-text-button git-config-action" title={canManage ? '配置 Git 与发布' : '只有系统 owner/admin 可以编辑'} disabled={!canManage} onClick={() => void openEditor(system, 'git')}><GitBranch size={15} />Git 配置</button>
               <button type="button" className="secondary icon-button icon-text-button" title={canManage ? undefined : '只有系统 owner/admin 可以编辑'} disabled={!canManage} onClick={() => void openEditor(system, 'system')}><Pencil size={15} />编辑</button>
