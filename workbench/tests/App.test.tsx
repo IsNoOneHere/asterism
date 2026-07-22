@@ -376,7 +376,7 @@ test('work item polling keeps the stage selected by the user', async () => {
   expect(screen.getByRole('heading', { name: '计划与执行' })).toBeInTheDocument();
 }, 7000);
 
-test('work item detail keeps full diff in the code tab', async () => {
+test('work item detail keeps long Git content inside the code tab', async () => {
   renderApp('/work-items/wi-1');
 
   expect(await screen.findByRole('heading', { name: '代码确认' })).toBeInTheDocument();
@@ -386,7 +386,9 @@ test('work item detail keeps full diff in the code tab', async () => {
   fireEvent.click(screen.getByRole('button', { name: '代码变更' }));
   expect((await screen.findAllByText('claude_sdk_team')).length).toBeGreaterThan(0);
   expect(await screen.findByText('输入 320 / 输出 80')).toBeInTheDocument();
-  expect(await screen.findByText('完整 diff')).toBeInTheDocument();
+  expect(await screen.findByText('完整 Diff')).toBeInTheDocument();
+  expect(screen.getByTitle('src/features/authentication/components/LoginErrorMessageWithResponsiveLayout.tsx')).toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'main 完整 Diff' })).toHaveAttribute('tabindex', '0');
   expect(await screen.findByText(/diff --git a\/src\/login.tsx/)).toBeInTheDocument();
 });
 

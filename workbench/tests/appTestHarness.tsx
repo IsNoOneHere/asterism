@@ -56,7 +56,7 @@ const responses: Record<string, unknown> = {
       eventType: 'AgentStageCompleted',
       payloadJson: JSON.stringify({
         stageIndex: 1, role: 'frontend', repo: 'main', engine: 'claude_sdk_team', summary: '前端修改完成',
-        changedPaths: ['src/login.tsx'], tokenUsage: { input_tokens: 100, output_tokens: 20 },
+        changedPaths: ['src/features/authentication/components/LoginErrorMessageWithResponsiveLayout.tsx'], tokenUsage: { input_tokens: 100, output_tokens: 20 },
       }),
       createdAt: '2026-07-05T12:00:30Z',
       actorId: 'worker',

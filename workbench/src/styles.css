@@ -3801,6 +3801,8 @@ button.requirement-attachment-card:hover:not(:disabled) {
 .code-change-list {
   display: grid;
   gap: 14px;
+  min-width: 0;
+  width: 100%;
 }
 
 .code-review-actions {
@@ -3860,8 +3862,10 @@ button.requirement-attachment-card:hover:not(:disabled) {
   align-items: center;
   border-bottom: 1px solid var(--border);
   display: flex;
+  gap: 16px;
   justify-content: space-between;
   margin: -2px 0 20px;
+  min-width: 0;
   padding-bottom: 15px;
 }
 
@@ -3869,14 +3873,25 @@ button.requirement-attachment-card:hover:not(:disabled) {
   align-items: center;
   display: flex;
   gap: 9px;
+  min-width: 0;
 }
 
 .repository-change h2 {
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repository-change {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .repository-change > section {
   margin-bottom: 20px;
+  min-width: 0;
 }
 
 .repository-change > section > ul:not(.changed-files) li {
@@ -3891,26 +3906,77 @@ button.requirement-attachment-card:hover:not(:disabled) {
 }
 
 .changed-files {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
 }
 
 .changed-files li {
   background: var(--surface-subtle);
   border-radius: 8px;
+  min-width: 0;
   overflow: hidden;
   padding: 8px 10px;
+}
+
+.changed-files code {
+  display: block;
+  overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .code-diff {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
   margin-bottom: 20px;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .code-diff > summary {
-  margin-bottom: 10px;
+  background: var(--surface-subtle);
+  margin: 0;
+  padding: 12px 14px;
 }
 
-.code-diff pre,
+.code-diff > summary small {
+  color: var(--muted);
+  float: right;
+  font-size: 12px;
+  font-weight: 400;
+  margin: 2px 0 0 16px;
+}
+
+.code-diff[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.code-diff-scroll {
+  max-height: 520px;
+  max-width: 100%;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.code-diff pre {
+  background: #17191e;
+  border-radius: 0;
+  color: #e6e8ec;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  min-height: 100%;
+  min-width: 100%;
+  overflow: visible;
+  padding: 15px;
+  white-space: pre;
+  width: max-content;
+}
+
+.code-diff pre code {
+  font: inherit;
+}
+
 .event-audit-list pre {
   background: #17191e;
   border-radius: 10px;
@@ -3936,6 +4002,7 @@ button.requirement-attachment-card:hover:not(:disabled) {
 .repo-release-meta > div {
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
 
 .repo-release-meta dt {
@@ -3945,6 +4012,7 @@ button.requirement-attachment-card:hover:not(:disabled) {
 
 .repo-release-meta dd {
   margin: 0;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 

@@ -546,10 +546,14 @@ function CodeChanges({ flow, actions, pending, reviewNote, onReviewNoteChange, o
         const repoAgents = agents.filter((agent) => !agent.repo || agent.repo === repo.repo);
         const repoChecks = repo.checks.length ? repo.checks : flow.checks.filter((check) => check.repo === repo.repo);
         return <article className="panel repository-change" key={repo.repo}>
-          <header><div><GitMerge size={18} aria-hidden="true" /><h2>{repo.repo}</h2></div><span className={`flow-status-label ${repo.status === 'closed' ? 'failed' : repo.status === 'merged' || repo.status === 'released' ? 'completed' : 'waiting'}`}>{repositoryStatusName(repo.status)}</span></header>
+          <header><div><GitMerge size={18} aria-hidden="true" /><h2 title={repo.repo}>{repo.repo}</h2></div><span className={`flow-status-label ${repo.status === 'closed' ? 'failed' : repo.status === 'merged' || repo.status === 'released' ? 'completed' : 'waiting'}`}>{repositoryStatusName(repo.status)}</span></header>
           {repoAgents.length > 0 && <section><h3>Agent 摘要</h3><ul>{repoAgents.map((agent) => <li key={`${agent.index}-${agent.role}`}><strong>{agent.role}</strong><span>{agent.summary || agent.engine || '-'}</span></li>)}</ul></section>}
-          <section><h3>修改文件</h3>{repo.changedPaths.length ? <ul className="changed-files">{repo.changedPaths.map((path) => <li key={path}><code>{path}</code></li>)}</ul> : <p className="empty-inline">未返回文件列表</p>}</section>
-          {repo.diffPatch && <details className="code-diff" open><summary>完整 diff</summary><pre>{repo.diffPatch}</pre></details>}
+          <section><h3>修改文件</h3>{repo.changedPaths.length ? <ul className="changed-files">{repo.changedPaths.map((path) => <li key={path}><code title={path}>{path}</code></li>)}</ul> : <p className="empty-inline">未返回文件列表</p>}</section>
+          {repo.diffPatch && <details className="code-diff" open>
+            <summary><span>完整 Diff</span><small>代码窗内滚动查看</small></summary>
+            {/* 超长代码只在独立窗口内滚动，不能继续撑宽工作项详情页。 */}
+            <div className="code-diff-scroll" role="region" aria-label={`${repo.repo} 完整 Diff`} tabIndex={0}><pre><code>{repo.diffPatch}</code></pre></div>
+          </details>}
           {repoChecks.length > 0 && <section><h3>自动检查</h3><ValidationChecks checks={repoChecks} status="completed" /></section>}
           {(repo.branch || repo.commitHash || repo.mrIid) && <dl className="repo-release-meta">
             <div><dt>分支</dt><dd>{repo.branch || '-'}</dd></div>
