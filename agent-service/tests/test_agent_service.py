@@ -51,13 +51,14 @@ def test_prd_draft_retries_json_and_asks_acceptance_in_chinese():
         "current_draft": {},
         "missing_fields": [],
         "conversation_history": [{"role": "user", "content": "先做登录页"}],
-        "approved_memories": ["只能改 src"],
+        "context_items": [{"refId": "MEM:mem-1", "type": "memory", "content": "只能改 src"}],
     })
 
     assert response.status_code == 200
     assert response.json()["missing_fields"] == ["acceptance_criteria"]
     assert "验收标准" in response.json()["assistant_message"]
     assert "只能改 src" in llm.prompts[0]
+    assert "Never invent a refId" in llm.prompts[0]
     assert llm.json_modes == [True, True]
 
 

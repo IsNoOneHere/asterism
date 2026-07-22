@@ -50,8 +50,9 @@ def team_request(root) -> tuple[CodingAttemptRequest, TeamWorkspace]:
         "goal": "同时更新前后端",
         "acceptance_criteria": ["接口和页面一致"],
         "feedback": "不要修改构建产物",
-        "context_manifest_id": "manifest-1",
-        "memories": [{"content": "部门字段来自 deptName"}],
+        "requirement_manifest_id": "manifest-1",
+        "requirement_context": [{"refId": "MEM:mem-1", "title": "字段约束", "content": "部门字段来自 deptName"}],
+        "execution_context": [{"refId": "MEM:mem-2", "title": "实现惯例", "content": "保持接口兼容"}],
         "repos": [
             {"repo_id": "backend", "name": "server", "kind": "backend", "allowed_paths": ["src"]},
             {"repo_id": "frontend", "name": "web", "kind": "frontend", "allowed_paths": ["src"]},
@@ -224,8 +225,9 @@ def test_team_provider_plans_read_only_and_can_resume_the_same_session(tmp_path,
         "repos": [repo.model_dump() for repo in coding_request.repos],
         "goal": coding_request.goal,
         "acceptance_criteria": coding_request.acceptance_criteria,
-        "memories": coding_request.memories,
-        "context_manifest_id": coding_request.context_manifest_id,
+        "requirement_context": coding_request.requirement_context,
+        "execution_context": coding_request.execution_context,
+        "requirement_manifest_id": coding_request.requirement_manifest_id,
         "plan_revision": 2,
         "feedback": "只调整前端提示",
         "resume_session_id": "11111111-1111-4111-8111-111111111111",
@@ -234,6 +236,9 @@ def test_team_provider_plans_read_only_and_can_resume_the_same_session(tmp_path,
     async def fake_query(*, prompt, options):
         messages = [item async for item in prompt]
         assert "只调整前端提示" in messages[0]["message"]["content"]
+        assert "Requirement manifest: manifest-1" in (workspace.root / "CLAUDE.md").read_text()
+        assert "已冻结需求依据" in (workspace.root / "CLAUDE.md").read_text()
+        assert "执行阶段补充经验" in (workspace.root / "CLAUDE.md").read_text()
         assert options.tools == ["Read", "Glob", "Grep"]
         assert "Agent" in options.disallowed_tools
         assert "Edit" in options.disallowed_tools

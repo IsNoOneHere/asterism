@@ -40,6 +40,7 @@ class ActionSpec:
     feedback_label: str = ""
     retry_failed_phase: bool = False
     refresh_configuration: bool = False
+    refresh_requirement_context: bool = False
     note_required_statuses: frozenset[str] = frozenset()
 
 
@@ -109,6 +110,13 @@ ACTION_SPECS = {
         retry_failed_phase=True,
         refresh_configuration=True,
     ),
+    "rework_with_latest_context": ActionSpec(
+        "_recovery_action",
+        _statuses("worker_blocked"),
+        feedback_mode="append",
+        feedback_label="上下文刷新说明",
+        refresh_requirement_context=True,
+    ),
     "check_merge_status": ActionSpec("_poll_merge_action", _statuses("waiting_merge")),
     "cancel_case": ActionSpec(
         "_cancel_action",
@@ -151,6 +159,7 @@ class AsterismCaseWorkflow(PlanningWorkflow, CodingWorkflow, PublishingWorkflow,
         self.coding_session_id = ""
         self.active_coding_activity = None
         self.coding_interrupt_requested = False
+        self.coding_attempt_running = False
 
     @workflow.run
     async def run(self, case_input: CaseInput) -> str:
@@ -209,6 +218,8 @@ class AsterismCaseWorkflow(PlanningWorkflow, CodingWorkflow, PublishingWorkflow,
 
         self._enqueue("interrupt_attempt", signal)
         handle = self.active_coding_activity
+        if self.coding_attempt_running and handle is None:
+            self.coding_interrupt_requested = True
         if handle is not None and not handle.done():
             self.coding_interrupt_requested = True
             handle.cancel()
@@ -240,6 +251,10 @@ class AsterismCaseWorkflow(PlanningWorkflow, CodingWorkflow, PublishingWorkflow,
     @workflow.signal
     async def rework_with_latest_config(self, signal: dict) -> None:
         self._enqueue("rework_with_latest_config", signal)
+
+    @workflow.signal
+    async def rework_with_latest_context(self, signal: dict) -> None:
+        self._enqueue("rework_with_latest_context", signal)
 
     @workflow.signal
     async def release_approved(self, signal: dict) -> None:

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import subprocess
 from pathlib import Path
@@ -108,7 +109,7 @@ async def run_coding_attempt(request: dict) -> dict:
             extra={"work_item_id": parsed.work_item_id, "repo_count": len(parsed.repos)},
         )
         # 总时限由 Temporal Activity 管理；不再把 Agent 配置的 15 分钟当作强制截断点。
-        result = await provider.run(parsed, workspace)
+        result = await _run_provider_until_cancelled(provider, parsed, workspace)
         by_id = {repo.repo_id: repo for repo in parsed.repos}
         for change in result.repo_changes:
             if not change.diff_patch.strip():
@@ -126,6 +127,33 @@ async def run_coding_attempt(request: dict) -> dict:
     finally:
         if not persistent:
             cleanup_repo_workspace(workspace.root)
+
+
+async def _run_provider_until_cancelled(provider, request: CodingAttemptRequest, workspace: TeamWorkspace):
+    """独立心跳接收 Temporal 取消，停止 SDK 会话后再退出 Activity。"""
+
+    if not activity.in_activity():
+        return await provider.run(request, workspace)
+
+    async def heartbeat() -> None:
+        while True:
+            activity.heartbeat({"work_item_id": request.work_item_id, "phase": "coding"})
+            await asyncio.sleep(5)
+
+    provider_task = asyncio.create_task(provider.run(request, workspace), name="claude-sdk-coding")
+    cancel_task = asyncio.create_task(activity.wait_for_cancelled(), name="temporal-cancel")
+    heartbeat_task = asyncio.create_task(heartbeat(), name="coding-heartbeat")
+    try:
+        done, _ = await asyncio.wait({provider_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED)
+        if provider_task in done:
+            return provider_task.result()
+        provider_task.cancel()
+        await asyncio.gather(provider_task, return_exceptions=True)
+        raise asyncio.CancelledError
+    finally:
+        for task in (cancel_task, heartbeat_task):
+            task.cancel()
+        await asyncio.gather(cancel_task, heartbeat_task, return_exceptions=True)
 
 
 async def _validate_plan_base(

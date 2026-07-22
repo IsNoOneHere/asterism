@@ -144,16 +144,33 @@ class CodingWorkflow:
             # 刷新配置只替换执行快照，保留候选代码和上下文。
             self.case_input = self._case_input().model_copy(update={"agent_config_snapshot": snapshot})
             configuration_refreshed = True
+        if spec.refresh_requirement_context:
+            manifest_id = str(context.get("requirement_manifest_id", "")).strip()
+            if not manifest_id:
+                workflow.logger.warning("缺少刷新后的 Requirement Manifest")
+                return False
+            case_input = self._case_input()
+            refreshed_prd = case_input.prd.model_copy(update={"requirement_manifest_id": manifest_id})
+            self.case_input = case_input.model_copy(update={"prd": refreshed_prd})
+            self.context_snapshot = None
         context.pop("resume_failed_stage", None)
         event = self.state.rework()
         await self._emit(event, signal_id, {
             "configurationRefreshed": configuration_refreshed,
             "retryPhase": phase.value,
-            "retryScope": "phase" if spec.retry_failed_phase else "full",
+            "retryScope": "context" if spec.refresh_requirement_context else "phase" if spec.retry_failed_phase else "full",
+            **({"requirementManifestId": self._case_input().prd.requirement_manifest_id}
+               if spec.refresh_requirement_context else {}),
         })
         if event is None:
             return False
         self.failed_phase = ""
+        if spec.refresh_requirement_context:
+            self.coding_plan = None
+            self.coding_session_id = ""
+            discard_candidate_checkpoint(self)
+            await self._propose_coding_plan(signal_id, new_session=True)
+            return True
         if not spec.retry_failed_phase:
             self.revision = 0
             self.revision_mode = "full"
@@ -237,7 +254,14 @@ class CodingWorkflow:
             try:
                 result_payload = await workflow.execute_activity(
                     "fetch_context",
-                    {"system_id": case_input.system_id, "work_item_id": case_input.work_item_id},
+                    {
+                        "system_id": case_input.system_id,
+                        "prd_id": case_input.prd_id,
+                        "work_item_id": case_input.work_item_id,
+                        "requirement_manifest_id": case_input.prd.requirement_manifest_id,
+                        "goal": case_input.prd.goal,
+                        "draft": case_input.prd.draft_json,
+                    },
                     start_to_close_timeout=timedelta(seconds=20),
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
@@ -245,18 +269,31 @@ class CodingWorkflow:
                 await self._block_worker(signal_id, "context_fetch_failed", error, phase=ExecutionPhase.coding)
                 return
             snapshot = ContextSnapshot.model_validate(result_payload)
+        if snapshot.stale_references:
+            await self._block_worker(
+                signal_id, "context_stale",
+                RuntimeError("需求上下文已变化: " + ",".join(snapshot.stale_references)),
+                {"staleReferences": snapshot.stale_references}, phase=ExecutionPhase.coding,
+            )
+            return
         self.context_snapshot = snapshot
         previous_candidate = workflow_previous_candidates(self) if reuse_candidate else []
         repos = case_input.effective_repos()
+        self.coding_attempt_running = True
         await self._emit("CodingAttemptStarted", signal_id, {
             "architecture": CLAUDE_SDK_TEAM_ARCHITECTURE,
             "supervisor": {"role": "developer", "engine": "claude_sdk_team"},
             "repositories": [repo.repo_id for repo in repos],
-            "contextManifestId": snapshot.manifest_id,
+            "requirementManifestId": snapshot.requirement_manifest_id,
+            "executionContextBundleId": snapshot.execution_bundle_id,
             "candidateReused": bool(previous_candidate),
             "revision": self.revision,
             "revisionMode": self.revision_mode,
         })
+        # CodingAttemptStarted 与 Activity 启动之间也可能收到停止信号；此时不再启动新进程。
+        if self.coding_interrupt_requested:
+            self.coding_attempt_running = False
+            return
         request = {
             "case_id": case_input.case_id,
             "work_item_id": case_input.work_item_id,
@@ -265,8 +302,10 @@ class CodingWorkflow:
             "goal": case_input.prd.goal,
             "acceptance_criteria": case_input.prd.acceptance_criteria,
             "feedback": self.rework_feedback,
-            "memories": snapshot.approved_memories,
-            "context_manifest_id": snapshot.manifest_id,
+            "requirement_context": snapshot.requirement_items,
+            "execution_context": snapshot.execution_items,
+            "requirement_manifest_id": snapshot.requirement_manifest_id,
+            "execution_bundle_id": snapshot.execution_bundle_id,
             "previous_candidate": previous_candidate,
         }
         request["resume_session_id"] = self.coding_session_id
@@ -292,7 +331,8 @@ class CodingWorkflow:
                 start_to_close_timeout=start_to_close_timeout,
                 heartbeat_timeout=heartbeat_timeout,
                 retry_policy=retry_policy,
-                cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+                # 人工停止必须先让 Workflow 收敛到可恢复阻塞；Activity 会在下一次 heartbeat 收到取消。
+                cancellation_type=workflow.ActivityCancellationType.TRY_CANCEL,
             )
             self.active_coding_activity = handle
             payload = await handle
@@ -324,6 +364,7 @@ class CodingWorkflow:
             return
         finally:
             self.active_coding_activity = None
+            self.coding_attempt_running = False
         if attempt.revision_mode:
             self.revision_mode = attempt.revision_mode
         if attempt.session_id:
@@ -399,7 +440,8 @@ class CodingWorkflow:
             "summary": result.summary,
             "diffPatch": result.diff_patch,
             "goal": case_input.prd.goal,
-            "contextManifestId": snapshot.manifest_id,
+            "requirementManifestId": snapshot.requirement_manifest_id,
+            "executionContextBundleId": snapshot.execution_bundle_id,
             "executionProvider": result.execution_provider,
             "turns": result.turns,
             "tokenUsage": result.token_usage,

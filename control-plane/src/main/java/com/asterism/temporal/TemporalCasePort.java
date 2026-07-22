@@ -51,7 +51,11 @@ public interface TemporalCasePort {
                          String prompt, Integer maxTurns, Integer timeoutSeconds) {
     }
 
-    record PrdPayload(String title, String goal, List<String> acceptanceCriteria, Map<String, Object> draftJson) {
+    record PrdPayload(String title, String goal, List<String> acceptanceCriteria, Map<String, Object> draftJson,
+                      String requirementManifestId) {
+        public PrdPayload(String title, String goal, List<String> acceptanceCriteria, Map<String, Object> draftJson) {
+            this(title, goal, acceptanceCriteria, draftJson, "");
+        }
     }
 
     record SignalCaseCommand(String caseId, String signalName, String signalId, Map<String, Object> context) {

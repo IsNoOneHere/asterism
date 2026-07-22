@@ -12,11 +12,18 @@ public record MemoryItem(
         @Column("system_id") String systemId,
         String content,
         String status,
+        String audience,
         @Column("source_event_id") String sourceEventId,
         @Column("approved_by") String approvedBy,
         @Column("metadata_json") String metadataJson,
         @Column("created_by") String createdBy,
         @Column("created_at") Instant createdAt,
         @Column("approved_at") Instant approvedAt) {
-}
 
+    public MemoryItem(String memoryId, String systemId, String content, String status, String sourceEventId,
+                      String approvedBy, String metadataJson, String createdBy, Instant createdAt,
+                      Instant approvedAt) {
+        this(memoryId, systemId, content, status, "both", sourceEventId, approvedBy, metadataJson,
+                createdBy, createdAt, approvedAt);
+    }
+}

@@ -22,18 +22,28 @@ class ProjectionClient:
             response.raise_for_status()
         log.info("投影回调已发送", extra={"event_type": event.eventType, "work_item_id": event.workItemId})
 
-    async def fetch_context(self, system_id: str, work_item_id: str) -> ContextSnapshot:
+    async def fetch_context(self, request: dict) -> ContextSnapshot:
         url = f"{self.control_plane_url}/api/v5/context-snapshots"
         headers = {"Authorization": f"Bearer {self.worker_callback_token}"}
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(url, json={"systemId": system_id, "workItemId": work_item_id}, headers=headers)
+            response = await client.post(url, json={
+                "systemId": request["system_id"],
+                "prdId": request["prd_id"],
+                "workItemId": request["work_item_id"],
+                "requirementManifestId": request["requirement_manifest_id"],
+                "goal": request.get("goal", ""),
+                "draft": request.get("draft", {}),
+            }, headers=headers)
             response.raise_for_status()
         data = response.json()
         # Java API 使用 camelCase，worker 内部统一转 snake_case。
         return ContextSnapshot(
             system_id=data["systemId"],
-            manifest_id=data["manifestId"],
-            approved_memories=data.get("approvedMemories", []),
+            requirement_manifest_id=data["requirementManifestId"],
+            requirement_items=data.get("requirementItems", []),
+            execution_bundle_id=data.get("executionBundleId") or "",
+            execution_items=data.get("executionItems", []),
+            stale_references=data.get("staleReferences", []),
         )
 
 
@@ -46,9 +56,10 @@ async def send_projection_event(event: dict) -> None:
 @activity.defn
 async def fetch_context(request: dict) -> dict:
     settings = load_settings()
-    snapshot = await ProjectionClient(settings.control_plane_url, settings.worker_callback_token).fetch_context(
-        request["system_id"],
-        request["work_item_id"],
-    )
-    log.info("上下文快照已获取", extra={"manifest_id": snapshot.manifest_id, "work_item_id": request["work_item_id"]})
+    snapshot = await ProjectionClient(settings.control_plane_url, settings.worker_callback_token).fetch_context(request)
+    log.info("上下文快照已获取", extra={
+        "requirement_manifest_id": snapshot.requirement_manifest_id,
+        "execution_bundle_id": snapshot.execution_bundle_id,
+        "work_item_id": request["work_item_id"],
+    })
     return snapshot.model_dump()

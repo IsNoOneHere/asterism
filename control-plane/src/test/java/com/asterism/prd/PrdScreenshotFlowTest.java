@@ -1,5 +1,8 @@
 package com.asterism.prd;
 
+import com.asterism.context.ContextBundle;
+import com.asterism.context.ContextRecallService;
+import com.asterism.context.RequirementContextManifestService;
 import com.asterism.attachment.Attachment;
 import com.asterism.attachment.AttachmentService;
 import com.asterism.event.DomainEventService;
@@ -55,8 +58,12 @@ class PrdScreenshotFlowTest {
             return value;
         });
         when(aggregate.insert(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
-        var memories = mock(MemoryItemRepository.class);
-        when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
+        var recall = mock(ContextRecallService.class);
+        when(recall.recall(any())).thenAnswer(call -> {
+            var query = (com.asterism.context.ContextRecallQuery) call.getArgument(0);
+            return new ContextBundle("bundle-1", query.systemId(), query.prdId(), query.phase(), "hash",
+                    List.of(), Instant.now());
+        });
         var attachments = mock(AttachmentService.class);
         var attachment = new Attachment("att-1", "sys-1", "user", "orders.png", "image/png", 4,
                 "hash", "ha/hash", Instant.now());
@@ -103,11 +110,15 @@ class PrdScreenshotFlowTest {
         var events = mock(DomainEventService.class);
         var access = mock(SystemAccessService.class);
         var conversations = new PrdConversationService(sessions, messages, new FakeProductAgentAdapter(), events,
-                objectMapper, new PrdDraftCodec(objectMapper), transactions, access, memories, aggregate, attachments, imageAnalysis, knowledge,
+                objectMapper, new PrdDraftCodec(objectMapper), transactions, access, recall,
+                new PrdCitationService(), aggregate, attachments, imageAnalysis, knowledge,
                 Runnable::run);
+        var manifests = mock(RequirementContextManifestService.class);
+        when(manifests.freeze(anyString(), anyString(), anyString(), any(), anyString(), anyString()))
+                .thenReturn("manifest-1");
         var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
                 new PrdDraftCodec(objectMapper), transactions, access, systems, configurations, aggregate, ids,
-                readiness, git);
+                readiness, git, manifests, new PrdCitationService());
         var controller = new PrdController(conversations, confirmations);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
 

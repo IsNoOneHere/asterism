@@ -1,5 +1,6 @@
 package com.asterism.prd;
 
+import com.asterism.context.ContextBundleStore;
 import com.asterism.identity.SystemAccessService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -22,7 +23,8 @@ class ConversationControllerTest {
         when(messages.findByConversationIdOrderByCreatedAtAsc("conv-1"))
                 .thenReturn(List.of(expired), List.of(failed));
         when(messages.completePending("msg-1", "AI 暂时不可用，请重试")).thenReturn(1);
-        var controller = new ConversationController(messages, mock(SystemAccessService.class), new ObjectMapper());
+        var controller = new ConversationController(messages, mock(SystemAccessService.class), new ObjectMapper(),
+                mock(ContextBundleStore.class));
 
         var response = controller.messages("conv-1", new UsernamePasswordAuthenticationToken("user", "n/a"));
 

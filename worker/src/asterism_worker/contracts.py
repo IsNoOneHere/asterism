@@ -204,8 +204,10 @@ class CodingPlanRequest(BaseModel):
     goal: str
     acceptance_criteria: list[str] = Field(default_factory=list)
     feedback: str = ""
-    memories: list[dict[str, Any]] = Field(default_factory=list)
-    context_manifest_id: str = ""
+    requirement_context: list[dict[str, Any]] = Field(default_factory=list)
+    execution_context: list[dict[str, Any]] = Field(default_factory=list)
+    requirement_manifest_id: str
+    execution_bundle_id: str = ""
     agent_config_snapshot: AgentConfigSnapshot | None = None
     plan_revision: int = Field(default=1, ge=1)
     previous_plan: CodingPlanDraft | None = None
@@ -222,8 +224,10 @@ class CodingAttemptRequest(BaseModel):
     goal: str
     acceptance_criteria: list[str] = Field(default_factory=list)
     feedback: str = ""
-    memories: list[dict[str, Any]] = Field(default_factory=list)
-    context_manifest_id: str = ""
+    requirement_context: list[dict[str, Any]] = Field(default_factory=list)
+    execution_context: list[dict[str, Any]] = Field(default_factory=list)
+    requirement_manifest_id: str
+    execution_bundle_id: str = ""
     agent_config_snapshot: AgentConfigSnapshot | None = None
     previous_candidate: list[RepoChangeResult] = Field(default_factory=list)
     revision_context: RevisionContext | None = None
@@ -291,12 +295,16 @@ class PrdSpec(BaseModel):
     goal: str
     acceptance_criteria: list[str] = Field(default_factory=list)
     draft_json: dict[str, Any] = Field(default_factory=dict)
+    requirement_manifest_id: str
 
 
 class ContextSnapshot(BaseModel):
     system_id: str
-    manifest_id: str
-    approved_memories: list[dict[str, Any]] = Field(default_factory=list)
+    requirement_manifest_id: str
+    requirement_items: list[dict[str, Any]] = Field(default_factory=list)
+    execution_bundle_id: str = ""
+    execution_items: list[dict[str, Any]] = Field(default_factory=list)
+    stale_references: list[str] = Field(default_factory=list)
 
 
 class RouteIndexInput(BaseModel):

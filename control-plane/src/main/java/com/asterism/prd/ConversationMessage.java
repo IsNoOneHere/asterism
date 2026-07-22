@@ -16,6 +16,16 @@ public record ConversationMessage(
         String content,
         @Column("attachment_ids") String attachmentIds,
         @Column("observations_json") String observationsJson,
+        @Column("context_bundle_id") String contextBundleId,
+        @Column("used_context_refs") String usedContextRefs,
+        @Column("citations_json") String citationsJson,
         @Column("created_by") String createdBy,
         @Column("created_at") Instant createdAt) {
+
+    public ConversationMessage(String messageId, String conversationId, String systemId, String prdId,
+                               String senderType, String content, String attachmentIds, String observationsJson,
+                               String createdBy, Instant createdAt) {
+        this(messageId, conversationId, systemId, prdId, senderType, content, attachmentIds, observationsJson,
+                null, "[]", "{}", createdBy, createdAt);
+    }
 }

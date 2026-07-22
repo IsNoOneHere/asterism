@@ -4667,12 +4667,20 @@ button.requirement-attachment-card:hover:not(:disabled) {
 .suspected-targets { margin: 18px 0; }
 .draft-editor { display: grid; gap: 16px; margin: 18px 0; }
 .draft-editor > label { margin: 0; }
+.draft-field-head { align-items: center; display: flex; gap: 8px; justify-content: space-between; }
+.citation-chips { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.citation-chip { background: var(--surface-soft); border: 1px solid var(--border); border-radius: 999px; color: var(--muted-strong); font-size: 11px; font-weight: 600; line-height: 20px; padding: 0 7px; white-space: nowrap; }
+.citation-chip.memory { background: color-mix(in srgb, var(--primary) 9%, var(--surface)); color: var(--primary); }
+.citation-chip.system_knowledge { background: color-mix(in srgb, var(--success) 10%, var(--surface)); color: var(--success); }
+.citation-chip.user_message { background: color-mix(in srgb, var(--warning) 10%, var(--surface)); color: var(--muted-strong); }
+.citation-chip.ai { font-weight: 500; }
 .draft-acceptance { background: var(--surface-subtle); border: 1px solid var(--border); border-radius: var(--radius-control); display: grid; gap: 10px; padding: 14px; }
 .draft-acceptance.missing { background: var(--surface-subtle); border-color: var(--border-strong); }
 .draft-acceptance-head { align-items: center; display: flex; gap: 8px; justify-content: space-between; }
 .draft-field-status { background: var(--accent-soft); border: 1px solid #d9deff; border-radius: 999px; color: var(--accent-text); font-size: 12px; font-weight: 600; padding: 2px 8px; }
 .draft-field-tip { color: var(--muted); font-size: 13px; }
 .draft-criterion { align-items: center; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto; }
+.draft-criterion-input { display: grid; gap: 5px; }
 .draft-add-criterion { justify-self: start; min-height: 36px; }
 .prd-preview-notice { color: var(--muted-strong); font-size: 13px; }
 .prd-preview-actions { align-items: center; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; padding-top: 16px; }

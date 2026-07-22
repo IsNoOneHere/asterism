@@ -72,7 +72,6 @@ export type WorkItemActionRequest = {
   evidence?: string;
 };
 export type UserAccount = Schemas['UserAccountView'] & { userId: string; displayName: string; enabled: boolean };
-export type ContextSnapshot = Schemas['ContextSnapshot'] & { manifestId?: string | null };
 export type MemoryCategory = 'constraint' | 'convention' | 'lesson';
 export type MemoryDraft = {
   category: MemoryCategory;
@@ -108,7 +107,21 @@ export type ConversationMessage = {
   content: string;
   attachmentIds: string[];
   observations: UiObservation[];
+  usedContextRefs: string[];
+  citations: Record<string, string[]>;
+  contextItems: ContextItem[];
   createdAt?: string;
+};
+export type ContextItem = {
+  refId: string;
+  type: 'memory' | 'system_knowledge' | 'user_message' | string;
+  audience: 'product' | 'execution' | 'both' | string;
+  title: string;
+  content: string;
+  targetRefs: string[];
+  sourceRef?: string;
+  contentHash: string;
+  relevance: number;
 };
 export type Conversation = {
   messages: ConversationMessage[];
@@ -401,8 +414,6 @@ export const api = {
   }),
   rejectMemory: (memoryId: string) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/reject', { method: 'POST' }),
   disableMemory: (memoryId: string) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/disable', { method: 'POST' }),
-  contextSnapshot: (systemId: string) =>
-    request<ContextSnapshot>('/api/v5/context-snapshots?systemId=' + encodeURIComponent(systemId)),
   knowledge: (systemId: string, status: string) =>
     request<KnowledgeEntry[]>('/api/v5/systems/' + encodeURIComponent(systemId) + '/knowledge?status=' + encodeURIComponent(status)),
   knowledgePage: (systemId: string, status: string, page: number, query: string) =>

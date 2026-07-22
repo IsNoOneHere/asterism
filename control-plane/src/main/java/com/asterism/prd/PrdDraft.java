@@ -42,6 +42,13 @@ public record PrdDraft(
                 suspectedTargets, targets, extras);
     }
 
+    public PrdDraft withCitations(Map<String, List<String>> citations, List<String> usedContextRefs) {
+        var updatedExtras = new LinkedHashMap<>(extras);
+        updatedExtras.put("citations", citations == null ? Map.of() : citations);
+        updatedExtras.put("usedContextRefs", usedContextRefs == null ? List.of() : usedContextRefs);
+        return new PrdDraft(title, goal, scope, acceptanceCriteria, suspectedTargets, targets, updatedExtras);
+    }
+
     public PrdDraft preserveTargets(PrdDraft current) {
         var mergedExtras = new LinkedHashMap<>(current.extras);
         mergedExtras.putAll(extras);

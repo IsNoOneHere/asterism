@@ -24,4 +24,14 @@ public interface ConversationMessageRepository extends CrudRepository<Conversati
             where message_id = :messageId and sender_type = 'assistant_pending'
             """)
     int completePending(String messageId, String content);
+
+    @Modifying
+    @Query("""
+            update conversation_messages
+            set context_bundle_id = :bundleId,
+                used_context_refs = cast(:usedContextRefs as jsonb),
+                citations_json = cast(:citations as jsonb)
+            where message_id = :messageId
+            """)
+    int attachContext(String messageId, String bundleId, String usedContextRefs, String citations);
 }

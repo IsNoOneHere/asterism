@@ -1,6 +1,7 @@
 package com.asterism.workitem;
 
 import com.asterism.common.ApiException;
+import com.asterism.context.RequirementContextManifestService;
 import com.asterism.event.DomainEventRecord;
 import com.asterism.event.DomainEventService;
 import com.asterism.identity.SystemAccessService;
@@ -254,6 +255,27 @@ class WorkItemControllerSignalAttemptTest {
     }
 
     @Test
+    void staleContextOffersExplicitRefreshAndSendsNewManifest() {
+        var fixture = fixture(item("worker_blocked", 10));
+        when(fixture.access.canControl("sys-1", fixture.actor)).thenReturn(true);
+        when(fixture.events.findByWorkItemId("wi-1")).thenReturn(List.of(event(
+                10, "WorkerBlocked", "{\"reason\":\"context_stale\",\"failedPhase\":\"planning\"}")));
+        when(fixture.manifests.refresh("sys-1", "prd-1", "wi-1", "requester",
+                "manual-action:wi-1:rework_with_latest_context:request-013"))
+                .thenReturn("manifest-2");
+        var request = new WorkItemActionService.ActionRequest(
+                "request-013", "worker_blocked", 10L, "确认刷新", null);
+
+        assertThat(fixture.service.availability(item("worker_blocked", 10), fixture.actor).actions())
+                .contains("rework_with_latest_context");
+        fixture.service.submit("wi-1", "rework_with_latest_context", request, fixture.actor);
+
+        verify(fixture.temporal).signalCase(argThat(command ->
+                "rework_with_latest_context".equals(command.signalName())
+                        && "manifest-2".equals(command.context().get("requirement_manifest_id"))));
+    }
+
+    @Test
     void retryCurrentPhaseSendsDedicatedSignalWithoutRefreshingConfiguration() {
         var fixture = fixture(item("worker_blocked", 10));
         when(fixture.events.findByWorkItemId("wi-1")).thenReturn(List.of(event(
@@ -276,12 +298,14 @@ class WorkItemControllerSignalAttemptTest {
         var events = mock(DomainEventService.class);
         var access = mock(SystemAccessService.class);
         var configurations = mock(AgentConfigurationService.class);
+        var manifests = mock(RequirementContextManifestService.class);
         when(workItems.findById("wi-1")).thenReturn(Optional.of(item));
         when(workItems.lockById("wi-1")).thenReturn(Optional.of(item));
         when(events.findByWorkItemId("wi-1")).thenReturn(List.of());
         var service = new WorkItemActionService(workItems, temporal, events, access,
-                configurations, new ObjectMapper(), directTransactions());
-        return new Fixture(service, workItems, temporal, events, access, configurations,
+                configurations, manifests,
+                new ObjectMapper(), directTransactions());
+        return new Fixture(service, workItems, temporal, events, access, configurations, manifests,
                 new UsernamePasswordAuthenticationToken("requester", "n/a"));
     }
 
@@ -317,6 +341,7 @@ class WorkItemControllerSignalAttemptTest {
     private record Fixture(WorkItemActionService service, WorkItemProjectionRepository workItems,
                            TemporalCasePort temporal, DomainEventService events,
                            SystemAccessService access, AgentConfigurationService configurations,
+                           RequirementContextManifestService manifests,
                            UsernamePasswordAuthenticationToken actor) {
     }
 }

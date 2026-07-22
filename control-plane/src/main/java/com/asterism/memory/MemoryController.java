@@ -6,7 +6,6 @@ import com.asterism.identity.SystemAccessService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -27,16 +26,14 @@ public class MemoryController {
     private final MemoryItemRepository memories;
     private final DomainEventService events;
     private final SystemAccessService access;
-    private final ContextManifestService manifests;
     private final JdbcAggregateTemplate aggregate;
     private final ObjectMapper objectMapper;
 
     public MemoryController(MemoryItemRepository memories, DomainEventService events, SystemAccessService access,
-                            ContextManifestService manifests, JdbcAggregateTemplate aggregate, ObjectMapper objectMapper) {
+                            JdbcAggregateTemplate aggregate, ObjectMapper objectMapper) {
         this.memories = memories;
         this.events = events;
         this.access = access;
-        this.manifests = manifests;
         this.aggregate = aggregate;
         this.objectMapper = objectMapper;
     }
@@ -56,7 +53,8 @@ public class MemoryController {
         access.requireMember(request.systemId(), actor);
         var now = Instant.now();
         var memory = new MemoryItem("mem-" + UUID.randomUUID(), request.systemId(), request.content(),
-                "candidate", null, null, metadata(request.category(), request.title(), request.workItemId()),
+                "candidate", audience(request.audience()), null, null,
+                metadata(request.category(), request.title(), request.workItemId()),
                 actor.getName(), now, null);
         aggregate.insert(memory);
         events.append(new DomainEventService.AppendEvent(
@@ -82,6 +80,7 @@ public class MemoryController {
         access.requireOwnerOrAdmin(current.systemId(), actor);
         var approved = new MemoryItem(current.memoryId(), current.systemId(),
                 request == null ? current.content() : request.content(), "approved",
+                request == null ? current.audience() : audience(request.audience()),
                 current.sourceEventId(), actor.getName(), request == null ? current.metadataJson()
                 : metadata(request.category(), request.title(), workItemId(current)), current.createdBy(),
                 current.createdAt(), Instant.now());
@@ -115,26 +114,10 @@ public class MemoryController {
         return view(changeStatus(current, "disabled", DomainEventType.MemoryDisabled, actor.getName()));
     }
 
-    @GetMapping("/context-snapshots")
-    ContextSnapshot snapshot(@RequestParam String systemId, Authentication actor) {
-        access.requireMember(systemId, actor);
-        // GET 只做 UI 预览，不写 manifest；审计只允许 worker POST 通道产生。
-        var approved = memories.findBySystemIdAndStatus(systemId, "approved");
-        return new ContextSnapshot(systemId, null, approved);
-    }
-
-    @PostMapping("/context-snapshots")
-    ContextSnapshot workerSnapshot(@RequestBody SnapshotRequest request) {
-        // worker 回调通道由 token filter 保护；这里仍只返回 approved 记忆。
-        var approved = memories.findBySystemIdAndStatus(request.systemId(), "approved");
-        var manifestId = manifests.create(request.systemId(), request.workItemId(), approved);
-        return new ContextSnapshot(request.systemId(), manifestId, approved);
-    }
-
     private MemoryItem changeStatus(MemoryItem current, String status, DomainEventType eventType, String actorId) {
         // reject/disable 不删除原始内容，只变更治理状态，避免上下文再召回。
         var changed = new MemoryItem(current.memoryId(), current.systemId(), current.content(), status,
-                current.sourceEventId(), current.approvedBy(), current.metadataJson(), current.createdBy(),
+                current.audience(), current.sourceEventId(), current.approvedBy(), current.metadataJson(), current.createdBy(),
                 current.createdAt(), current.approvedAt());
         aggregate.update(changed);
         events.append(new DomainEventService.AppendEvent(
@@ -157,8 +140,12 @@ public class MemoryController {
         var title = text(metadata.get("title"));
         if (title.isBlank()) title = fallbackTitle(memory.content());
         return new MemoryView(memory.memoryId(), memory.systemId(), text(metadata.get("category")), title,
-                memory.content(), memory.status(), workItemId(memory), memory.sourceEventId(), memory.approvedBy(),
+                memory.content(), memory.status(), memory.audience(), workItemId(memory), memory.sourceEventId(), memory.approvedBy(),
                 memory.metadataJson(), memory.createdBy(), memory.createdAt(), memory.approvedAt());
+    }
+
+    private String audience(String value) {
+        return value == null || value.isBlank() ? "both" : value;
     }
 
     private String metadata(String category, String title, String workItemId) {
@@ -199,23 +186,20 @@ public class MemoryController {
             @NotBlank @Pattern(regexp = "constraint|convention|lesson") String category,
             @NotBlank @Size(max = 80) String title,
             @NotBlank @Size(max = 1000) String content,
+            @Pattern(regexp = "product|execution|both") String audience,
             String workItemId) {
     }
 
     public record ApprovalRequest(
             @NotBlank @Pattern(regexp = "constraint|convention|lesson") String category,
             @NotBlank @Size(max = 80) String title,
-            @NotBlank @Size(max = 1000) String content) {
+            @NotBlank @Size(max = 1000) String content,
+            @Pattern(regexp = "product|execution|both") String audience) {
     }
 
     public record MemoryView(String memoryId, String systemId, String category, String title, String content,
-                             String status, String workItemId, String sourceEventId, String approvedBy,
+                             String status, String audience, String workItemId, String sourceEventId, String approvedBy,
                              String metadataJson, String createdBy, Instant createdAt, Instant approvedAt) {
     }
 
-    public record ContextSnapshot(String systemId, @Schema(nullable = true) String manifestId, Iterable<MemoryItem> approvedMemories) {
-    }
-
-    public record SnapshotRequest(@NotBlank String systemId, String workItemId) {
-    }
 }

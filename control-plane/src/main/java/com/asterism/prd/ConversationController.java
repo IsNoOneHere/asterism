@@ -1,5 +1,7 @@
 package com.asterism.prd;
 
+import com.asterism.context.ContextBundleStore;
+import com.asterism.context.ContextItem;
 import com.asterism.identity.SystemAccessService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -17,11 +19,14 @@ public class ConversationController {
     private final ConversationMessageRepository messages;
     private final SystemAccessService access;
     private final ObjectMapper objectMapper;
+    private final ContextBundleStore bundles;
 
-    public ConversationController(ConversationMessageRepository messages, SystemAccessService access, ObjectMapper objectMapper) {
+    public ConversationController(ConversationMessageRepository messages, SystemAccessService access,
+                                  ObjectMapper objectMapper, ContextBundleStore bundles) {
         this.messages = messages;
         this.access = access;
         this.objectMapper = objectMapper;
+        this.bundles = bundles;
     }
 
     @GetMapping("/{conversationId}")
@@ -44,12 +49,15 @@ public class ConversationController {
                 .filter(message -> !PrdConversationService.PENDING_SENDER.equals(message.senderType()))
                 .map(message -> new ConversationMessageView(
                 message.messageId(), message.conversationId(), message.systemId(), message.prdId(), message.senderType(),
-                message.content(), readList(message.attachmentIds()), readObjects(message.observationsJson()), message.createdAt()))
+                message.content(), readList(message.attachmentIds()), readObjects(message.observationsJson()),
+                readList(message.usedContextRefs()), readCitationMap(message.citationsJson()), contextItems(message),
+                message.createdAt()))
                 .toList();
         return new ConversationResponse(views, pending.isPresent(), pending.map(ConversationMessage::createdAt).orElse(null));
     }
 
     private List<String> readList(String json) {
+        if (json == null || json.isBlank()) return List.of();
         try {
             return objectMapper.readValue(json, new TypeReference<>() {});
         } catch (JsonProcessingException error) {
@@ -65,9 +73,25 @@ public class ConversationController {
         }
     }
 
+    private java.util.Map<String, List<String>> readCitationMap(String json) {
+        try {
+            return objectMapper.readValue(json == null ? "{}" : json, new TypeReference<>() {
+            });
+        } catch (JsonProcessingException error) {
+            return java.util.Map.of();
+        }
+    }
+
+    private List<ContextItem> contextItems(ConversationMessage message) {
+        if (message.contextBundleId() == null || message.contextBundleId().isBlank()) return List.of();
+        return bundles.find(message.contextBundleId()).map(com.asterism.context.ContextBundle::items).orElse(List.of());
+    }
+
     public record ConversationMessageView(String messageId, String conversationId, String systemId, String prdId,
                                           String senderType, String content, List<String> attachmentIds,
-                                          List<java.util.Map<String, Object>> observations, java.time.Instant createdAt) {
+                                          List<java.util.Map<String, Object>> observations, List<String> usedContextRefs,
+                                          java.util.Map<String, List<String>> citations, List<ContextItem> contextItems,
+                                          java.time.Instant createdAt) {
     }
 
     public record ConversationResponse(List<ConversationMessageView> messages, boolean pendingAssistant,

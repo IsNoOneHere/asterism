@@ -1,5 +1,4 @@
 from asterism_worker.contracts import ExecutionResult, LifecycleStatus
-from asterism_worker.context.snapshot import approved_memory_only
 from asterism_worker.workflows.state_machine import CaseState, TERMINAL_STATUSES, TRANSITIONS
 import json
 from pathlib import Path
@@ -113,13 +112,3 @@ def test_python_state_machine_matches_shared_lifecycle_contract():
 
 def test_terminal_statuses_are_derived_from_empty_transitions():
     assert {status.value for status in TERMINAL_STATUSES} == {"completed", "cancelled", "rejected"}
-
-
-def test_candidate_memory_is_not_fed_to_worker_context():
-    memories = [
-        {"memory_id": "a", "status": "candidate"},
-        {"memory_id": "b", "status": "approved"},
-        {"memory_id": "c", "status": "rejected"},
-    ]
-
-    assert approved_memory_only(memories) == [{"memory_id": "b", "status": "approved"}]

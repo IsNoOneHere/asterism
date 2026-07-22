@@ -1,5 +1,6 @@
 package com.asterism.prd;
 
+import com.asterism.context.ContextItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -21,10 +22,11 @@ class HttpProductAgentAdapterContractTest {
                 Map.of(),
                 List.of(),
                 List.of(),
-                List.of("只能修改 src 目录"));
+                List.of(new ContextItem("MEM:mem-1", "memory", "product", "路径约束",
+                        "只能修改 src 目录", List.of(), "manual", "hash", 1.0)));
 
         var json = objectMapper.writeValueAsString(request);
-        assertThat(json).contains("system_id", "current_draft", "missing_fields", "conversation_history", "approved_memories");
+        assertThat(json).contains("system_id", "current_draft", "missing_fields", "conversation_history", "context_items", "MEM:mem-1");
         assertThat(json).doesNotContain("systemId", "currentDraft", "missingFields", "conversationHistory", "approvedMemories");
     }
 

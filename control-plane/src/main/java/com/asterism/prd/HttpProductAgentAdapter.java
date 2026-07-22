@@ -1,5 +1,6 @@
 package com.asterism.prd;
 
+import com.asterism.context.ContextItem;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -22,12 +23,12 @@ public class HttpProductAgentAdapter implements ProductAgentPort {
     public DraftResult updateDraft(String systemId, String content, java.util.Map<String, Object> currentDraft,
                                    java.util.List<String> missingFields,
                                    java.util.List<ConversationMessage> conversationHistory,
-                                   java.util.List<String> approvedMemories) {
+                                   java.util.List<ContextItem> contextItems) {
         // 真实 ProductAgent 通过 HTTP adapter 接入，控制面不关心模型厂商。
         try {
             return client.post()
                     .uri(endpoint)
-                    .body(new DraftRequest(systemId, content, currentDraft, missingFields, conversationHistory, approvedMemories))
+                    .body(new DraftRequest(systemId, content, currentDraft, missingFields, conversationHistory, contextItems))
                     .retrieve()
                     .body(ProductAgentPort.DraftResult.class);
         } catch (RestClientResponseException error) {
@@ -41,6 +42,6 @@ public class HttpProductAgentAdapter implements ProductAgentPort {
             @JsonProperty("current_draft") java.util.Map<String, Object> currentDraft,
             @JsonProperty("missing_fields") java.util.List<String> missingFields,
             @JsonProperty("conversation_history") java.util.List<ConversationMessage> conversationHistory,
-            @JsonProperty("approved_memories") java.util.List<String> approvedMemories) {
+            @JsonProperty("context_items") java.util.List<ContextItem> contextItems) {
     }
 }

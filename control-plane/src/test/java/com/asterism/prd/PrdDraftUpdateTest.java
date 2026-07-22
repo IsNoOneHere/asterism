@@ -2,7 +2,7 @@ package com.asterism.prd;
 
 import com.asterism.event.DomainEventService;
 import com.asterism.identity.SystemAccessService;
-import com.asterism.memory.MemoryItemRepository;
+import com.asterism.context.ContextRecallService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
@@ -57,8 +57,9 @@ class PrdDraftUpdateTest {
         assertThat(response.draft().get("acceptanceCriteria"))
                 .isEqualTo(List.of("错误密码时显示中文提示"));
         assertThat(savedSession.get().status()).isEqualTo("waiting_user_confirm");
-        assertThat(savedMessage.get().senderType()).isEqualTo("system");
-        assertThat(savedMessage.get().content()).isEqualTo("用户手动更新了验收标准");
+        assertThat(savedMessage.get().senderType()).isEqualTo("user");
+        assertThat(savedMessage.get().content()).contains("手工更新 PRD", "错误密码时显示中文提示");
+        assertThat(response.draft().get("citations").toString()).contains("MSG:");
         verify(events).append(org.mockito.ArgumentMatchers.argThat(event ->
                 "manual_edit".equals(event.payload().get("source"))));
         verify(access).requireMember("sys-1", actor);
@@ -115,7 +116,8 @@ class PrdDraftUpdateTest {
         var objectMapper = new ObjectMapper();
         return new PrdConversationService(sessions, messages, mock(ProductAgentPort.class), events, objectMapper,
                 new PrdDraftCodec(objectMapper), mock(TransactionOperations.class), access,
-                mock(MemoryItemRepository.class), aggregate, mock(com.asterism.attachment.AttachmentService.class),
+                mock(ContextRecallService.class), new PrdCitationService(), aggregate,
+                mock(com.asterism.attachment.AttachmentService.class),
                 mock(com.asterism.vision.ImageAnalysisService.class), mock(com.asterism.knowledge.KnowledgeMatchService.class),
                 Runnable::run);
     }

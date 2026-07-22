@@ -1,5 +1,7 @@
 package com.asterism.prd;
 
+import com.asterism.context.ContextBundle;
+import com.asterism.context.ContextRecallService;
 import com.asterism.event.DomainEventService;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.memory.MemoryItemRepository;
@@ -52,7 +54,8 @@ class PrdControllerMultiTurnTest {
         var memories = mock(MemoryItemRepository.class);
         when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
         var service = new PrdConversationService(sessions, messages, new FakeProductAgentAdapter(), events,
-                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), access, memories, aggregate,
+                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), access,
+                contextRecall(), new PrdCitationService(), aggregate,
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
                 mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
         var actor = new UsernamePasswordAuthenticationToken("requester", "n/a");
@@ -86,7 +89,7 @@ class PrdControllerMultiTurnTest {
         when(sessions.findById("prd-1")).thenReturn(Optional.of(current));
         var service = new PrdConversationService(sessions, mock(ConversationMessageRepository.class), mock(ProductAgentPort.class),
                 mock(DomainEventService.class), objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class),
-                mock(MemoryItemRepository.class), mock(JdbcAggregateTemplate.class),
+                contextRecall(), new PrdCitationService(), mock(JdbcAggregateTemplate.class),
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
                 mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
 
@@ -118,8 +121,8 @@ class PrdControllerMultiTurnTest {
                 org.mockito.ArgumentMatchers.eq(attachment), org.mockito.ArgumentMatchers.any(byte[].class)))
                 .thenThrow(new IllegalStateException("vision down"));
         var service = new PrdConversationService(sessions, messages, new FakeProductAgentAdapter(),
-                mock(DomainEventService.class), objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class), memories,
-                aggregate, attachments, imageAnalysis,
+                mock(DomainEventService.class), objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class),
+                contextRecall(), new PrdCitationService(), aggregate, attachments, imageAnalysis,
                 mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
 
         var response = service.message("sys-1",
@@ -162,7 +165,8 @@ class PrdControllerMultiTurnTest {
         var memories = mock(MemoryItemRepository.class);
         when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
-                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class), memories, aggregate,
+                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class),
+                contextRecall(), new PrdCitationService(), aggregate,
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
                 mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
@@ -204,7 +208,8 @@ class PrdControllerMultiTurnTest {
         var executor = new HoldingExecutor();
         var productAgent = mock(ProductAgentPort.class);
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
-                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class), memories, aggregate,
+                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class),
+                contextRecall(), new PrdCitationService(), aggregate,
                 mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
                 mock(com.asterism.knowledge.KnowledgeMatchService.class), executor);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
@@ -242,7 +247,7 @@ class PrdControllerMultiTurnTest {
         when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
         var service = new PrdConversationService(sessions, messages, mock(ProductAgentPort.class),
                 mock(DomainEventService.class), objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class),
-                memories, aggregate, mock(com.asterism.attachment.AttachmentService.class),
+                contextRecall(), new PrdCitationService(), aggregate, mock(com.asterism.attachment.AttachmentService.class),
                 mock(com.asterism.vision.ImageAnalysisService.class), mock(com.asterism.knowledge.KnowledgeMatchService.class),
                 new HoldingExecutor());
 
@@ -260,6 +265,16 @@ class PrdControllerMultiTurnTest {
                 return action.doInTransaction(null);
             }
         };
+    }
+
+    private ContextRecallService contextRecall() {
+        var recall = mock(ContextRecallService.class);
+        when(recall.recall(any())).thenAnswer(call -> {
+            var query = (com.asterism.context.ContextRecallQuery) call.getArgument(0);
+            return new ContextBundle("bundle-test", query.systemId(), query.prdId(), query.phase(),
+                    "query-hash", List.of(), java.time.Instant.now());
+        });
+        return recall;
     }
 
     private static final class HoldingExecutor implements TaskExecutor {

@@ -81,7 +81,8 @@ class WorkItemMergeStatusTest {
         when(gitLab.mergeRequest("https://gitlab", "secret", "frozen/api", 9))
                 .thenReturn(new GitLabClient.MergeRequestStatus(9, mrState, "https://gitlab/mr/9"));
         var actionService = new WorkItemActionService(workItems, temporal, events, access,
-                mock(AgentConfigurationService.class), new ObjectMapper(), directTransactions());
+                mock(AgentConfigurationService.class), mock(com.asterism.context.RequirementContextManifestService.class),
+                new ObjectMapper(), directTransactions());
         var controller = new WorkItemController(workItems, events, actionService, access,
                 mock(PrdSessionRepository.class), new ObjectMapper(), git, gitLab, mock(AttachmentRepository.class));
         return new Fixture(controller, temporal, gitLab, actor);

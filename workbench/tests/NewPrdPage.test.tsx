@@ -255,6 +255,43 @@ test('draft editor highlights and saves missing acceptance criteria', async () =
   })));
 });
 
+test('draft fields show user memory knowledge and ai citation labels', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-citations') {
+      return jsonResponse({
+        prdId: 'prd-citations', systemId: 'alpha-system', conversationId: 'conv-citations',
+        status: 'waiting_user_confirm', createdBy: 'admin', missingFields: [],
+        draft: {
+          title: '登录页规则', goal: '保持错误提示一致', acceptanceCriteria: ['使用中文提示', '按钮可重试'],
+          citations: { title: ['MSG:msg-1'], goal: ['MEM:mem-1'], 'AC-1': ['KN:page-login'] },
+        },
+      });
+    }
+    if (path === '/api/v5/conversations/conv-citations') return jsonResponse({
+      pendingAssistant: false,
+      messages: [{
+        messageId: 'assistant-1', conversationId: 'conv-citations', senderType: 'assistant', content: '草稿已生成',
+        contextItems: [
+          { refId: 'MSG:msg-1', type: 'user_message', title: '当前用户输入', sourceRef: 'prd-citations' },
+          { refId: 'MEM:mem-1', type: 'memory', title: '登录约束', sourceRef: 'work-item:wi-1' },
+          { refId: 'KN:page-login', type: 'system_knowledge', title: '登录页', sourceRef: 'manual' },
+        ],
+      }],
+    });
+    return fallback(input, init);
+  });
+
+  renderApp('/work-items/new/prd-citations');
+
+  await waitFor(() => expect(screen.getByText('来自用户')).toHaveAttribute('title', expect.stringContaining('当前用户输入')));
+  expect(screen.getByText('已批准记忆')).toHaveAttribute('title', expect.stringContaining('登录约束'));
+  expect(screen.getAllByText('系统知识').find((item) => item.classList.contains('citation-chip')))
+    .toHaveAttribute('title', expect.stringContaining('登录页'));
+  expect(screen.getByText('AI 建议')).toBeInTheDocument();
+});
+
 test('generated work item replaces the draft editor with focused follow-up actions', async () => {
   const fallback = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

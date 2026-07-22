@@ -153,17 +153,21 @@ def resolve_model_config(settings: AgentSettings, fetch_model_config: Callable[.
 
 
 def prd_draft_prompt(request: DraftRequest) -> str:
-    # ProductAgent 只产 PRD 草稿，缺验收标准时必须中文追问。
+    # ProductAgent 只产 PRD 草稿；引用必须复用 context_items 中已有的 refId。
     return (
-        "Return strict JSON with keys title,draft,missing_fields,assistant_message.\n"
+        "Return strict JSON with keys title,draft,missing_fields,assistant_message,used_context_refs,citations,memory_candidates.\n"
         "draft must include goal, scope, acceptanceCriteria.\n"
+        "Use stable citation keys title,goal,scope,AC-1,AC-2... . citations maps each key to source refIds.\n"
+        "Only cite refId values present in context_items. Never invent a refId.\n"
+        "Content without a source must have no citation and is treated as AI_SUGGESTION.\n"
+        "memory_candidates is optional and must contain only reusable rules, never secrets, logs, diffs or one-off goals.\n"
         "If acceptance criteria are missing, set missing_fields to [\"acceptance_criteria\"] and ask in Chinese.\n"
         "If the previous round missed acceptance criteria, merge this user message into draft.acceptanceCriteria.\n"
         f"User content: {request.content}\n"
         f"Current draft: {json.dumps(request.current_draft, ensure_ascii=False)}\n"
         f"Missing fields: {request.missing_fields}\n"
         f"Conversation history: {json.dumps(request.conversation_history, ensure_ascii=False)}\n"
-        f"Approved memories as constraints: {json.dumps(request.approved_memories, ensure_ascii=False)}\n"
+        f"Structured context items: {json.dumps(request.context_items, ensure_ascii=False)}\n"
     )
 
 

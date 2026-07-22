@@ -64,7 +64,14 @@ class PlanningWorkflow:
             try:
                 payload = await workflow.execute_activity(
                     "fetch_context",
-                    {"system_id": case_input.system_id, "work_item_id": case_input.work_item_id},
+                    {
+                        "system_id": case_input.system_id,
+                        "prd_id": case_input.prd_id,
+                        "work_item_id": case_input.work_item_id,
+                        "requirement_manifest_id": case_input.prd.requirement_manifest_id,
+                        "goal": case_input.prd.goal,
+                        "draft": case_input.prd.draft_json,
+                    },
                     start_to_close_timeout=timedelta(seconds=20),
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
@@ -74,12 +81,20 @@ class PlanningWorkflow:
                 )
                 return
             snapshot = ContextSnapshot.model_validate(payload)
+        if snapshot.stale_references:
+            await self._block_worker(
+                signal_id, "context_stale",
+                RuntimeError("需求上下文已变化: " + ",".join(snapshot.stale_references)),
+                {"staleReferences": snapshot.stale_references}, phase=ExecutionPhase.planning,
+            )
+            return
         self.context_snapshot = snapshot
         self.plan_revision += 1
         await self._emit("CodingPlanStarted", signal_id, {
             "planRevision": self.plan_revision,
             "repositories": [repo.repo_id for repo in case_input.effective_repos()],
-            "contextManifestId": snapshot.manifest_id,
+            "requirementManifestId": snapshot.requirement_manifest_id,
+            "executionContextBundleId": snapshot.execution_bundle_id,
         })
         request = {
             "case_id": case_input.case_id,
@@ -89,8 +104,10 @@ class PlanningWorkflow:
             "goal": case_input.prd.goal,
             "acceptance_criteria": case_input.prd.acceptance_criteria,
             "feedback": self.rework_feedback,
-            "memories": snapshot.approved_memories,
-            "context_manifest_id": snapshot.manifest_id,
+            "requirement_context": snapshot.requirement_items,
+            "execution_context": snapshot.execution_items,
+            "requirement_manifest_id": snapshot.requirement_manifest_id,
+            "execution_bundle_id": snapshot.execution_bundle_id,
             "plan_revision": self.plan_revision,
             "resume_session_id": "" if new_session else self.coding_session_id,
             "refresh_workspace": refresh_workspace,

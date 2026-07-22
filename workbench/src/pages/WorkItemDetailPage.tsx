@@ -618,6 +618,7 @@ function stageAction(code: string, currentStageId: FlowStageId, workItem: WorkIt
     rework: { label: workItem.lifecycleStatus === 'waiting_merge' ? '打回修订' : '完整重做', stageId: currentStageId, signalName: code,
       noteRequired: workItem.lifecycleStatus === 'waiting_merge', danger: workItem.lifecycleStatus === 'waiting_merge' },
     rework_with_latest_config: { label: '刷新配置并重试失败阶段', stageId: currentStageId, signalName: code },
+    rework_with_latest_context: { label: '刷新需求上下文并重新规划', stageId: currentStageId, signalName: code },
     patch_apply_approved: { label: workItem.releaseMode === 'gitlab' ? (workItem.validationMode === 'manual' ? '创建候选 MR' : '发布 MR') : '应用 Patch', stageId: 'patch', signalName: code },
     patch_apply_rejected: { label: '打回修订', stageId: 'patch', signalName: code, noteRequired: true, danger: true },
     validation_passed: { label: workItem.validationMode === 'manual' ? '人工验证通过' : '验证通过', stageId: 'validation', signalName: code },
@@ -630,7 +631,7 @@ function stageAction(code: string, currentStageId: FlowStageId, workItem: WorkIt
 
 function actionContextKind(code: string): 'none' | 'note' | 'evidence' {
   if (['validation_passed', 'validation_rejected'].includes(code)) return 'evidence';
-  if (['owner_rejected', 'cancel_case', 'interrupt_attempt', 'rework', 'rework_with_latest_config', 'coding_plan_rejected', 'patch_apply_rejected'].includes(code)) return 'note';
+  if (['owner_rejected', 'cancel_case', 'interrupt_attempt', 'rework', 'rework_with_latest_config', 'rework_with_latest_context', 'coding_plan_rejected', 'patch_apply_rejected'].includes(code)) return 'note';
   return 'none';
 }
 
@@ -638,6 +639,7 @@ function actionLabel(code: string) {
   return ({ owner_approved: '批准执行', owner_rejected: '拒绝', cancel_case: '取消', start_modification: '生成执行计划',
     coding_plan_approved: '批准计划并执行', coding_plan_rejected: '打回重新规划', interrupt_attempt: '停止本轮',
     retry_current_phase: '重试失败阶段', rework: '完整重做', rework_with_latest_config: '刷新配置并重试失败阶段',
+    rework_with_latest_context: '刷新需求上下文并重新规划',
     patch_apply_approved: '代码确认', patch_apply_rejected: '打回修订',
     validation_passed: '验证通过', validation_rejected: '验证不通过', release_approved: '发布',
     check_merge_status: '检查合并状态' } as Record<string, string>)[code] || code;
@@ -654,6 +656,7 @@ function confirmText(action: StageAction) {
     retry_current_phase: '将复用已完成成果，只重试失败阶段，是否继续？',
     rework: '将放弃当前执行断点并完整重做，是否继续？',
     rework_with_latest_config: '将刷新 Agent 与模型配置，保留已有计划并重试失败阶段，是否继续？',
+    rework_with_latest_context: '将显式读取当前有效的需求引用，生成新的冻结清单，并重新生成执行计划；已停用的引用会被移除，是否继续？',
     patch_apply_rejected: '确认后 Agent 会带着意见自动开始增量修订，是否继续？', validation_passed: '确认验证已通过并进入下一阶段，是否继续？',
     validation_rejected: '确认后将退回修改阶段重新处理，是否继续？', release_approved: '该操作会创建发布分支和提交，是否继续？',
     check_merge_status: '后端将实时核验所有 GitLab MR，只有确实合并后才会完成工作项，是否继续？',

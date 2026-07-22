@@ -76,6 +76,7 @@ class LifecycleHappyPathIntegrationTest {
         var confirm = objectMapper.readTree(confirmed);
         var workItemId = confirm.get("workItemId").asText();
         var caseId = confirm.get("caseId").asText();
+        var requirementManifestId = confirm.get("requirementManifestId").asText();
 
         mockMvc.perform(post("/api/v5/work-items/" + workItemId + "/owner-approval")
                         .with(httpBasic("e2e-user", "asterism")))
@@ -106,10 +107,13 @@ class LifecycleHappyPathIntegrationTest {
         var snapshot = mockMvc.perform(post("/api/v5/context-snapshots")
                         .header("Authorization", "Bearer test-worker-token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"systemId\":\"" + systemId + "\",\"workItemId\":\"" + workItemId + "\"}"))
+                        .content("{\"systemId\":\"" + systemId + "\",\"prdId\":\"" + prdId
+                                + "\",\"workItemId\":\"" + workItemId + "\",\"requirementManifestId\":\""
+                                + requirementManifestId + "\",\"goal\":\"登录页错误提示\",\"draft\":{}}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
-        assertThat(objectMapper.readTree(snapshot).get("approvedMemories")).isEmpty();
+        assertThat(objectMapper.readTree(snapshot).get("requirementManifestId").asText())
+                .isEqualTo(requirementManifestId);
     }
 
     private org.springframework.test.web.servlet.ResultActions postJson(String path, String body, String user) throws Exception {

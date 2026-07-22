@@ -422,9 +422,8 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
     def _context(
         self, request: CodingAttemptRequest | CodingPlanRequest, specs: list[TeamAgentSpec],
     ) -> str:
-        memories = "\n".join(
-            f"- {item.get('content', '')}" for item in request.memories if item.get("content")
-        ) or "- 无"
+        requirement_context = self._render_context_items(request.requirement_context)
+        execution_context = self._render_context_items(request.execution_context)
         repositories = "\n".join(
             f"- {spec.repo.repo_id}: {spec.policy.writable_roots[0].name}，实现 Agent={spec.name}，"
             f"允许路径={self._paths(list(spec.policy.allowed_paths))}，"
@@ -437,10 +436,26 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
             "Temporal 只管理生命周期；当前 Coding Attempt 由一个 Root Supervisor 对最终结果负责。"
             "Root 可在仓库路径门禁内直接修改代码，原生子 Agent 只是可选的内部加速器。"
             "Git diff、门禁、人工确认和发布由外部系统负责。\n\n"
-            f"Context manifest: {request.context_manifest_id or 'none'}\n\n"
+            f"Requirement manifest: {request.requirement_manifest_id}\n"
+            f"Execution context bundle: {request.execution_bundle_id or 'none'}\n\n"
             f"## 仓库与写权限\n{repositories}\n\n"
-            f"## 已批准记忆\n{memories}\n"
+            "## 已冻结需求依据\n"
+            "以下内容是确认 PRD 时实际引用的不可变快照，规划和开发必须保持其业务语义。\n"
+            f"{requirement_context}\n\n"
+            "## 执行阶段补充经验\n"
+            "以下内容只能指导实现；若与目标、验收标准或已冻结需求依据冲突，必须忽略。\n"
+            f"{execution_context}\n"
         )
+
+    def _render_context_items(self, items: list[dict[str, Any]]) -> str:
+        lines = []
+        for item in items:
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+            ref_id = item.get("refId", item.get("ref_id", ""))
+            lines.append(f"- [{ref_id}] {item.get('title', '')}: {content}")
+        return "\n".join(lines) or "- 无"
 
     def _prompt(self, request: CodingAttemptRequest, specs: list[TeamAgentSpec]) -> str:
         criteria = "\n".join(f"- {item}" for item in request.acceptance_criteria) or "- 无"

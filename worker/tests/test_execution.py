@@ -48,6 +48,7 @@ def test_previous_candidate_is_restored_before_revision(tmp_path):
     _git_repo(repo)
     request = CodingAttemptRequest.model_validate({
         "case_id": "case-1", "work_item_id": "wi-1", "system_id": "sys-1",
+        "requirement_manifest_id": "manifest-1",
         "repos": [{"repo_id": "main", "local_path": str(repo)}],
         "goal": "修订 README",
         "previous_candidate": [{
@@ -72,6 +73,7 @@ def test_unrestorable_revision_candidate_falls_back_to_clean_full_mode(tmp_path)
     _git_repo(repo)
     request = CodingAttemptRequest.model_validate({
         "case_id": "case-1", "work_item_id": "wi-1", "system_id": "sys-1",
+        "requirement_manifest_id": "manifest-1",
         "repos": [{"repo_id": "main", "local_path": str(repo)}],
         "goal": "修订 README",
         "previous_candidate": [{
@@ -97,6 +99,7 @@ def test_partial_candidate_restore_resets_every_touched_repo_before_full_fallbac
     _git_repo(second)
     request = CodingAttemptRequest.model_validate({
         "case_id": "case-1", "work_item_id": "wi-1", "system_id": "sys-1",
+        "requirement_manifest_id": "manifest-1",
         "repos": [{"repo_id": "first"}, {"repo_id": "second"}],
         "goal": "修订多仓 README",
         "previous_candidate": [
@@ -132,6 +135,7 @@ def test_run_coding_attempt_uses_terminal_fake_baseline_and_cleans_workspace(tmp
 
     result = asyncio.run(run_coding_attempt({
         "case_id": "case-1", "work_item_id": "wi-1", "system_id": "sys-1",
+        "requirement_manifest_id": "manifest-1",
         "repos": [{"repo_id": "main", "local_path": str(repo)}],
         "goal": "规范项目名",
     }))

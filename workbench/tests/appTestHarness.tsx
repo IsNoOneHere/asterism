@@ -17,11 +17,6 @@ const responses: Record<string, unknown> = {
   '/api/v5/systems/alpha-system/members': [{ systemId: 'alpha-system', userId: 'admin', displayName: 'Admin', role: 'owner' }],
   '/api/v5/work-items?systemId=alpha-system': [],
   '/api/v5/work-items?systemId=prod-system': [],
-  '/api/v5/context-snapshots?systemId=alpha-system': {
-    systemId: 'alpha-system',
-    manifestId: null,
-    approvedMemories: [{ memoryId: 'mem-1', content: '保留登录页样式' }],
-  },
   '/api/v5/work-items/wi-1': {
     workItemId: 'wi-1',
     systemId: 'alpha-system',

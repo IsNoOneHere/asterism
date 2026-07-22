@@ -1,6 +1,7 @@
 package com.asterism.prd;
 
 import com.asterism.common.ApiException;
+import com.asterism.context.RequirementContextManifestService;
 import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventType;
 import com.asterism.identity.SystemAccessService;
@@ -38,6 +39,8 @@ public class PrdConfirmationService {
     private final WorkItemIdGenerator workItemIds;
     private final ExecutionReadinessService readiness;
     private final GitIntegrationService git;
+    private final RequirementContextManifestService manifests;
+    private final PrdCitationService citations;
 
     public PrdConfirmationService(
             PrdSessionRepository sessions,
@@ -52,7 +55,9 @@ public class PrdConfirmationService {
             JdbcAggregateTemplate aggregate,
             WorkItemIdGenerator workItemIds,
             ExecutionReadinessService readiness,
-            GitIntegrationService git) {
+            GitIntegrationService git,
+            RequirementContextManifestService manifests,
+            PrdCitationService citations) {
         this.sessions = sessions;
         this.events = events;
         this.temporal = temporal;
@@ -66,6 +71,8 @@ public class PrdConfirmationService {
         this.workItemIds = workItemIds;
         this.readiness = readiness;
         this.git = git;
+        this.manifests = manifests;
+        this.citations = citations;
     }
 
     public PrdConfirmResponse confirm(String prdId, Authentication actor) {
@@ -74,7 +81,8 @@ public class PrdConfirmationService {
         var prepared = transactions.execute(status -> prepare(prdId, actor));
         var current = prepared.session();
         if (!prepared.startTemporal()) {
-            return new PrdConfirmResponse(prdId, current.workItemId(), current.caseId(), current.status());
+            return new PrdConfirmResponse(prdId, current.workItemId(), current.caseId(), current.status(),
+                    prepared.requirementManifestId());
         }
         var workItemId = current.workItemId();
         var caseId = current.caseId();
@@ -104,7 +112,7 @@ public class PrdConfirmationService {
                         gitConfig.mrLabels(),
                         agentConfig.maxRevisions(),
                         agentConfigSnapshot(agentConfig),
-                        prdPayload(current)));
+                        prdPayload(current, prepared.requirementManifestId())));
             } catch (WorkflowExecutionAlreadyStarted error) {
                 // confirm 幂等：Temporal workflow 已存在说明上一轮启动实际成功，按成功路径收敛。
             }
@@ -128,7 +136,8 @@ public class PrdConfirmationService {
                     "TemporalCaseStartFailed:" + caseId, Map.of("caseId", caseId, "reason", String.valueOf(error.getMessage())));
             throw new IllegalStateException("Temporal case 启动失败，可重试", error);
         }
-        return new PrdConfirmResponse(prdId, workItemId, caseId, "waiting_owner_approval");
+        return new PrdConfirmResponse(prdId, workItemId, caseId, "waiting_owner_approval",
+                prepared.requirementManifestId());
     }
 
     private PreparedConfirmation prepare(String prdId, Authentication actor) {
@@ -136,7 +145,7 @@ public class PrdConfirmationService {
         // 加锁后重新读取，确保并发确认同一个 PRD 时复用首次分配的工作项编号。
         var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
         if ("waiting_owner_approval".equals(current.status()) || "case_starting".equals(current.status())) {
-            return new PreparedConfirmation(current, false);
+            return new PreparedConfirmation(current, false, manifests.requirementManifestId(prdId));
         }
         if (!List.of("waiting_user_confirm", "case_start_failed").contains(current.status())) {
             throw new IllegalStateException("PRD 还不能确认");
@@ -149,20 +158,24 @@ public class PrdConfirmationService {
         var workItemId = current.workItemId() == null ? workItemIds.nextId() : current.workItemId();
         var caseId = current.caseId() == null ? "case-" + prdId : current.caseId();
         var now = Instant.now();
+        var draft = draftCodec.read(current.draftJson());
+        var requirementManifestId = manifests.freeze(current.systemId(), prdId, workItemId,
+                citations.references(draft), current.draftJson(), actor.getName());
         var starting = new PrdSession(
                 current.prdId(), current.systemId(), current.conversationId(), workItemId, caseId,
                 current.title(), current.goal(), current.draftJson(), current.missingFields(), "case_starting",
                 current.createdBy(), actor.getName(), now, current.createdAt(), now);
         aggregate.update(starting);
         append(DomainEventType.PRDConfirmed, current.systemId(), caseId, prdId, workItemId, actor.getName(),
-                "PRDConfirmed:" + prdId, Map.of("title", current.title()));
-        return new PreparedConfirmation(starting, true);
+                "PRDConfirmed:" + prdId,
+                Map.of("title", current.title(), "requirementManifestId", requirementManifestId));
+        return new PreparedConfirmation(starting, true, requirementManifestId);
     }
 
-    private TemporalCasePort.PrdPayload prdPayload(PrdSession current) {
+    private TemporalCasePort.PrdPayload prdPayload(PrdSession current, String requirementManifestId) {
         var draft = draftCodec.read(current.draftJson());
         return new TemporalCasePort.PrdPayload(current.title(), current.goal(), draft.acceptanceCriteria(),
-                draftCodec.toMap(draft));
+                draftCodec.toMap(draft), requirementManifestId);
     }
 
     private TemporalCasePort.AgentConfigSnapshot agentConfigSnapshot(
@@ -191,9 +204,10 @@ public class PrdConfirmationService {
         }
     }
 
-    public record PrdConfirmResponse(String prdId, String workItemId, String caseId, String lifecycleStatus) {
+    public record PrdConfirmResponse(String prdId, String workItemId, String caseId, String lifecycleStatus,
+                                     String requirementManifestId) {
     }
 
-    private record PreparedConfirmation(PrdSession session, boolean startTemporal) {
+    private record PreparedConfirmation(PrdSession session, boolean startTemporal, String requirementManifestId) {
     }
 }

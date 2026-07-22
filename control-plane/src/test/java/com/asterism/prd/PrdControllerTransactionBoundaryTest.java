@@ -1,6 +1,9 @@
 package com.asterism.prd;
 
 import com.asterism.attachment.Attachment;
+import com.asterism.context.ContextBundle;
+import com.asterism.context.ContextRecallService;
+import com.asterism.context.RequirementContextManifestService;
 import com.asterism.event.DomainEventService;
 import com.asterism.git.GitIntegrationService;
 import com.asterism.identity.SystemAccessService;
@@ -41,7 +44,7 @@ class PrdControllerTransactionBoundaryTest {
         var sessions = mock(PrdSessionRepository.class);
         var messages = mock(ConversationMessageRepository.class);
         var productAgent = mock(ProductAgentPort.class);
-        var memories = mock(MemoryItemRepository.class);
+        var recall = mock(ContextRecallService.class);
         var aggregate = mock(JdbcAggregateTemplate.class);
         var attachments = mock(com.asterism.attachment.AttachmentService.class);
         var imageAnalysis = mock(ImageAnalysisService.class);
@@ -50,7 +53,13 @@ class PrdControllerTransactionBoundaryTest {
                 "hash", "ha/hash", Instant.now());
         when(messages.countByConversationIdAndSenderType(any(), any())).thenReturn(0L);
         when(messages.completePending(any(), any())).thenReturn(1);
-        when(memories.findBySystemIdAndStatus(any(), any())).thenReturn(List.of());
+        when(recall.recall(any())).thenAnswer(call -> {
+            assertThat(inTransaction).isTrue();
+            order.add("recall");
+            var query = (com.asterism.context.ContextRecallQuery) call.getArgument(0);
+            return new ContextBundle("bundle-1", query.systemId(), query.prdId(), query.phase(), "hash",
+                    List.of(), Instant.now());
+        });
         when(attachments.requireForSystem("att-1", "sys-1")).thenReturn(attachment);
         when(attachments.read(attachment)).thenAnswer(call -> {
             assertThat(inTransaction).isFalse();
@@ -94,13 +103,14 @@ class PrdControllerTransactionBoundaryTest {
             }
         };
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
-                new ObjectMapper(), new PrdDraftCodec(new ObjectMapper()), transactions, mock(SystemAccessService.class), memories, aggregate, attachments,
+                new ObjectMapper(), new PrdDraftCodec(new ObjectMapper()), transactions, mock(SystemAccessService.class),
+                recall, new PrdCitationService(), aggregate, attachments,
                 imageAnalysis, knowledge, Runnable::run);
 
         service.message("sys-1", new PrdConversationService.PrdMessageRequest(null, "登录提示", List.of("att-1")),
                 new UsernamePasswordAuthenticationToken("user", "n/a"));
 
-        assertThat(order).containsExactly("tx-start", "tx-end", "image-read", "vision", "llm", "knowledge",
+        assertThat(order).containsExactly("tx-start", "recall", "tx-end", "image-read", "vision", "llm", "knowledge",
                 "tx-start", "tx-end");
     }
 
@@ -226,6 +236,9 @@ class PrdControllerTransactionBoundaryTest {
         var workItemIds = mock(WorkItemIdGenerator.class);
         var readiness = mock(ExecutionReadinessService.class);
         var git = mock(GitIntegrationService.class);
+        var manifests = mock(RequirementContextManifestService.class);
+        when(manifests.freeze(any(), any(), any(), any(), any(), any())).thenReturn("manifest-1");
+        when(manifests.requirementManifestId("prd-1")).thenReturn("manifest-1");
         when(readiness.readiness(any())).thenReturn(new ExecutionReadinessService.SystemReadiness(
                 "sys-1", true, Instant.now(), "claude_sdk_team", List.of(), List.of()));
         when(workItemIds.nextId()).thenReturn("WI202607114827");
@@ -273,7 +286,7 @@ class PrdControllerTransactionBoundaryTest {
         var objectMapper = new ObjectMapper();
         var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
                 new PrdDraftCodec(objectMapper), tx, access, systems, configurations, aggregate, workItemIds,
-                readiness, git);
+                readiness, git, manifests, new PrdCitationService());
         return new PrdController(mock(PrdConversationService.class), confirmations);
     }
 

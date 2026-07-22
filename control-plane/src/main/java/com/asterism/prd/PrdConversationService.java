@@ -3,11 +3,13 @@ package com.asterism.prd;
 import com.asterism.attachment.Attachment;
 import com.asterism.attachment.AttachmentService;
 import com.asterism.common.ApiException;
+import com.asterism.context.ContextBundle;
+import com.asterism.context.ContextRecallQuery;
+import com.asterism.context.ContextRecallService;
 import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventType;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.knowledge.KnowledgeMatchService;
-import com.asterism.memory.MemoryItemRepository;
 import com.asterism.vision.ImageAnalysisService;
 import com.asterism.vision.UiObservation;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -50,7 +52,8 @@ public class PrdConversationService {
     private final PrdDraftCodec draftCodec;
     private final TransactionOperations transactions;
     private final SystemAccessService access;
-    private final MemoryItemRepository memories;
+    private final ContextRecallService contextRecall;
+    private final PrdCitationService citations;
     private final JdbcAggregateTemplate aggregate;
     private final AttachmentService attachments;
     private final ImageAnalysisService imageAnalysis;
@@ -66,7 +69,8 @@ public class PrdConversationService {
             PrdDraftCodec draftCodec,
             TransactionOperations transactions,
             SystemAccessService access,
-            MemoryItemRepository memories,
+            ContextRecallService contextRecall,
+            PrdCitationService citations,
             JdbcAggregateTemplate aggregate,
             AttachmentService attachments,
             ImageAnalysisService imageAnalysis,
@@ -80,7 +84,8 @@ public class PrdConversationService {
         this.draftCodec = draftCodec;
         this.transactions = transactions;
         this.access = access;
-        this.memories = memories;
+        this.contextRecall = contextRecall;
+        this.citations = citations;
         this.aggregate = aggregate;
         this.attachments = attachments;
         this.imageAnalysis = imageAnalysis;
@@ -175,7 +180,16 @@ public class PrdConversationService {
                 .map(String::trim)
                 .filter(value -> !value.isEmpty())
                 .toList();
+        var messageId = "msg-" + UUID.randomUUID();
         var draft = currentDraft.withManualChanges(updatedTitle, updatedGoal, criteria);
+        var userRef = "MSG:" + messageId;
+        var manualCitations = new LinkedHashMap<String, List<String>>();
+        manualCitations.put("title", List.of(userRef));
+        manualCitations.put("goal", List.of(userRef));
+        for (var index = 0; index < draft.acceptanceCriteria().size(); index++) {
+            manualCitations.put("AC-" + (index + 1), List.of(userRef));
+        }
+        draft = draft.withCitations(manualCitations, List.of(userRef));
         var missing = new ArrayList<>(readList(current.missingFields()));
         missing.removeIf(field -> List.of("title", "goal", "acceptanceCriteria", "acceptance_criteria").contains(field));
         if (updatedTitle == null || updatedTitle.isBlank()) missing.add("title");
@@ -183,12 +197,12 @@ public class PrdConversationService {
         if (draft.acceptanceCriteria().isEmpty()) missing.add("acceptance_criteria");
         var status = missing.isEmpty() ? "waiting_user_confirm" : "need_clarification";
         var now = Instant.now();
-        var messageId = "msg-" + UUID.randomUUID();
         aggregate.update(new PrdSession(current.prdId(), current.systemId(), current.conversationId(), current.workItemId(),
                 current.caseId(), updatedTitle, updatedGoal, draftCodec.write(draft), json(missing), status,
                 current.createdBy(), current.confirmedBy(), current.confirmedAt(), current.createdAt(), now));
         aggregate.insert(new ConversationMessage(messageId, current.conversationId(), current.systemId(), current.prdId(),
-                "system", "用户手动更新了验收标准", "[]", "[]", actor.getName(), now));
+                "user", manualEditMessage(updatedTitle, updatedGoal, draft.acceptanceCriteria()),
+                "[]", "[]", actor.getName(), now));
         append(DomainEventType.PRDUpdated, current.systemId(), current.prdId(), actor.getName(),
                 "PRDUpdated:" + current.prdId() + ":manual:" + messageId,
                 Map.of("source", "manual_edit", "status", status));
@@ -198,6 +212,11 @@ public class PrdConversationService {
 
     private String first(String preferred, String fallback) {
         return preferred == null ? fallback : preferred;
+    }
+
+    private String manualEditMessage(String title, String goal, List<String> criteria) {
+        return "手工更新 PRD\n标题：" + first(title, "") + "\n目标：" + first(goal, "")
+                + "\n验收标准：" + String.join("；", criteria);
     }
 
     private void executeTurn(PreparedTurn turn) {
@@ -235,9 +254,6 @@ public class PrdConversationService {
         var turn = messages.countByConversationIdAndSenderType(conversationId, "user") + 1;
         var history = current == null ? List.<ConversationMessage>of()
                 : messages.findByConversationIdOrderByCreatedAtAsc(conversationId);
-        var approvedMemories = memories.findBySystemIdAndStatus(systemId, "approved").stream()
-                .map(memory -> memory.content())
-                .toList();
         var validatedAttachments = attachmentIds.stream()
                 .map(attachmentId -> attachments.requireForSystem(attachmentId, systemId))
                 .toList();
@@ -252,10 +268,15 @@ public class PrdConversationService {
         var pendingMessage = new ConversationMessage("msg-" + UUID.randomUUID(), conversationId, systemId, prdId,
                 PENDING_SENDER, "", "[]", "[]", "product-agent", now.plusNanos(1_000));
         aggregate.insert(pendingMessage);
+        var currentDraft = draftCodec.read(session.draftJson());
+        var targetRefs = currentDraft.targets().stream().map(KnowledgeMatchService.SuspectedTarget::entryId).toList();
+        var bundle = contextRecall.recall(new ContextRecallQuery(
+                systemId, prdId, "product", content, userMessage.messageId(), draftCodec.toMap(currentDraft),
+                targetRefs, history, actor.getName()));
         append(DomainEventType.UserMessageReceived, systemId, prdId, actor.getName(),
                 "UserMessageReceived:" + prdId + ":" + turn, Map.of("content", content, "turn", turn));
-        return new PreparedTurn(session, current == null, userMessage, pendingMessage, turn, history, approvedMemories,
-                validatedAttachments, draftCodec.read(session.draftJson()), readList(session.missingFields()), actor.getName());
+        return new PreparedTurn(session, current == null, userMessage, pendingMessage, turn, history, bundle,
+                validatedAttachments, currentDraft, readList(session.missingFields()), actor.getName());
     }
 
     private ProcessedTurn processTurn(PreparedTurn turn) {
@@ -263,13 +284,15 @@ public class PrdConversationService {
         var agentContent = turn.userMessage().content() + (analysis.observations().isEmpty() ? "" : "\n截图观察："
                 + analysis.observations().stream().map(UiObservation::contextText).collect(Collectors.joining("\n")));
         var result = productAgent.updateDraft(turn.session().systemId(), agentContent, draftCodec.toMap(turn.currentDraft()),
-                turn.currentMissing(), turn.history(), turn.approvedMemories());
-        var draft = draftCodec.fromMap(result.draft()).withTitle(result.title()).preserveTargets(turn.currentDraft());
+                turn.currentMissing(), turn.history(), turn.contextBundle().items());
+        var citationResult = citations.validate(turn.contextBundle(), result);
+        var draft = draftCodec.fromMap(result.draft()).withTitle(result.title()).preserveTargets(turn.currentDraft())
+                .withCitations(citationResult.citations(), citationResult.usedRefs());
         var anchors = analysis.observations().stream().flatMap(observation -> observation.anchors().stream()).toList();
         var match = anchors.isEmpty() ? new KnowledgeMatchService.MatchResult(List.of(), false)
                 : knowledge.match(turn.session().systemId(), anchors);
         if (!match.targets().isEmpty()) draft = draft.withSuspectedTargets(match.targets());
-        return new ProcessedTurn(result, draft, analysis,
+        return new ProcessedTurn(result, citationResult, draft, analysis,
                 assistantMessage(result.assistantMessage(), analysis.failed(), match));
     }
 
@@ -277,6 +300,8 @@ public class PrdConversationService {
         var now = Instant.now();
         var result = processed.result();
         if (messages.completePending(turn.pendingMessage().messageId(), processed.assistantMessage()) == 0) return;
+        messages.attachContext(turn.pendingMessage().messageId(), turn.contextBundle().bundleId(),
+                json(processed.citationResult().usedRefs()), json(processed.citationResult().citations()));
         var status = result.missingFields().isEmpty() ? "waiting_user_confirm" : "need_clarification";
         var title = turn.newSession() || turn.session().title() == null ? processed.draft().title() : turn.session().title();
         var goal = turn.newSession() ? processed.draft().goal() : turn.session().goal();
@@ -288,10 +313,13 @@ public class PrdConversationService {
         aggregate.update(new ConversationMessage(turn.userMessage().messageId(), turn.userMessage().conversationId(),
                 turn.userMessage().systemId(), turn.userMessage().prdId(), turn.userMessage().senderType(),
                 turn.userMessage().content(), turn.userMessage().attachmentIds(), json(processed.analysis().observations()),
+                turn.userMessage().contextBundleId(), turn.userMessage().usedContextRefs(), turn.userMessage().citationsJson(),
                 turn.userMessage().createdBy(), turn.userMessage().createdAt()));
         append(DomainEventType.PRDUpdated, session.systemId(), session.prdId(), turn.actorId(),
                 "PRDUpdated:" + session.prdId() + ":" + turn.turn(),
-                Map.of("title", title, "status", status, "turn", turn.turn()));
+                Map.of("title", title, "status", status, "turn", turn.turn(),
+                        "contextBundleId", turn.contextBundle().bundleId(),
+                        "usedContextRefs", processed.citationResult().usedRefs()));
         if (!result.missingFields().isEmpty()) {
             append(DomainEventType.ClarificationRequested, session.systemId(), session.prdId(), "product-agent",
                     "ClarificationRequested:" + session.prdId() + ":" + turn.turn(),
@@ -379,12 +407,13 @@ public class PrdConversationService {
 
     private record PreparedTurn(PrdSession session, boolean newSession, ConversationMessage userMessage,
                                 ConversationMessage pendingMessage, long turn, List<ConversationMessage> history,
-                                List<String> approvedMemories,
+                                ContextBundle contextBundle,
                                 List<Attachment> attachments, PrdDraft currentDraft,
                                 List<String> currentMissing, String actorId) {
     }
 
-    private record ProcessedTurn(ProductAgentPort.DraftResult result, PrdDraft draft,
+    private record ProcessedTurn(ProductAgentPort.DraftResult result, PrdCitationService.CitationResult citationResult,
+                                 PrdDraft draft,
                                  AnalysisResult analysis, String assistantMessage) {
     }
 

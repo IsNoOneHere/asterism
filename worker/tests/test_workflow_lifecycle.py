@@ -289,6 +289,30 @@ def test_interrupt_attempt_stops_activity_and_preserves_recoverable_workflow():
     }
 
 
+def test_context_stale_requires_explicit_manifest_refresh_and_replans_with_one_snapshot():
+    coding_requests: list[dict] = []
+    plan_requests: list[dict] = []
+    events, result, calls, _ = asyncio.run(_run_workflow([
+        ("owner_approved", "approve-1"),
+        ("start_modification", "start-1"),
+        ("rework_with_latest_context", {
+            "signal_id": "refresh-context-1", "requirement_manifest_id": "manifest-2",
+        }),
+        ("coding_plan_approved", "plan-approve-1"),
+        ("patch_apply_approved", "patch-1"),
+        ("release_approved", "release-1"),
+    ], context_stale_once=True, coding_requests=coding_requests, plan_requests=plan_requests))
+
+    assert result == "completed"
+    assert calls["fetch_context"] == 2
+    blocked = next(event for event in events if event["eventType"] == "WorkerBlocked")
+    assert blocked["payload"]["reason"] == "context_stale"
+    assert plan_requests[0]["requirement_manifest_id"] == "manifest-2"
+    assert coding_requests[0]["requirement_manifest_id"] == "manifest-2"
+    started = next(event for event in events if event["eventType"] == "CodingAttemptStarted")
+    assert started["payload"]["requirementManifestId"] == "manifest-2"
+
+
 def test_structured_blocked_with_partial_diff_never_completes_modification_until_retry():
     requests: list[dict] = []
     blocked = {
@@ -336,6 +360,7 @@ async def _run_workflow(
     plan_requests: list[dict] | None = None,
     coding_outcomes: list[dict] | None = None,
     wait_for_coding_interrupt: bool = False,
+    context_stale_once: bool = False,
 ) -> tuple[list[dict], str, dict[str, int], list[dict]]:
     events: list[dict] = []
     calls: dict[str, int] = {}
@@ -353,9 +378,13 @@ async def _run_workflow(
     @activity.defn(name="fetch_context")
     async def fetch_context(request: dict) -> dict:
         called("fetch_context")
+        stale = ["MEM:changed"] if context_stale_once and calls["fetch_context"] == 1 else []
         return {
-            "system_id": request["system_id"], "manifest_id": "manifest-1",
-            "approved_memories": [{"content": "遵守登录页约束"}],
+            "system_id": request["system_id"],
+            "requirement_manifest_id": request["requirement_manifest_id"],
+            "requirement_items": [{"refId": "MEM:mem-1", "content": "遵守登录页约束"}],
+            "execution_bundle_id": "bundle-execution-1",
+            "execution_items": [], "stale_references": stale,
         }
 
     @activity.defn(name="run_coding_attempt")
@@ -506,6 +535,7 @@ def _case_input(execution_architecture: str, max_revisions: int, release_mode: s
         prd=PrdSpec(
             title="登录页错误提示", goal="把登录页加错误提示",
             acceptance_criteria=["错误密码时显示提示"],
+            requirement_manifest_id="manifest-1",
         ),
         repo_path="/tmp/repo",
         allowed_paths=["src"],

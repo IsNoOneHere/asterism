@@ -9,7 +9,17 @@
       "content": "先做登录页"
     }
   ],
-  "approved_memories": [
-    "只能修改 src 目录"
+  "context_items": [
+    {
+      "refId": "MEM:mem-1",
+      "type": "memory",
+      "audience": "product",
+      "title": "代码范围",
+      "content": "只能修改 src 目录",
+      "targetRefs": [],
+      "sourceRef": "manual",
+      "contentHash": "fixture-hash",
+      "relevance": 1.0
+    }
   ]
 }

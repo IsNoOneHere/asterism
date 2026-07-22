@@ -35,7 +35,8 @@ class WorkItemControllerSystemAccessTest {
         doThrow(new AccessDeniedException("非系统 owner/admin 无权操作"))
                 .when(access).requireOwnerOrAdmin("system-b", actor);
         var service = new WorkItemActionService(workItems, temporal, events, access,
-                mock(AgentConfigurationService.class), new ObjectMapper(), directTransactions());
+                mock(AgentConfigurationService.class), mock(com.asterism.context.RequirementContextManifestService.class),
+                new ObjectMapper(), directTransactions());
 
         assertThatThrownBy(() -> service.submit("wi-b", "owner_approved", null, actor))
                 .isInstanceOf(AccessDeniedException.class);

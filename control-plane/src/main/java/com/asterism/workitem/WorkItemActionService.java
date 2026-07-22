@@ -1,6 +1,7 @@
 package com.asterism.workitem;
 
 import com.asterism.common.ApiException;
+import com.asterism.context.RequirementContextManifestService;
 import com.asterism.event.DomainEventRecord;
 import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventType;
@@ -35,7 +36,8 @@ public class WorkItemActionService {
             Map.entry("activated", List.of(
                     "start_modification", "coding_plan_approved", "coding_plan_rejected", "interrupt_attempt", "cancel_case")),
             Map.entry("worker_blocked", List.of(
-                    "retry_current_phase", "rework", "rework_with_latest_config", "cancel_case")),
+                    "retry_current_phase", "rework", "rework_with_latest_config",
+                    "rework_with_latest_context", "cancel_case")),
             Map.entry("validation_failed", List.of("rework", "cancel_case")),
             Map.entry("modification_completed", List.of("patch_apply_approved", "patch_apply_rejected", "cancel_case")),
             Map.entry("patch_applied", List.of("validation_passed", "validation_rejected")),
@@ -54,25 +56,29 @@ public class WorkItemActionService {
             "coding_plan_rejected", RuntimeState::planMayBeReviewed,
             "interrupt_attempt", RuntimeState::attemptInterruptible,
             "retry_current_phase", RuntimeState::phaseRetrySupported,
-            "rework_with_latest_config", RuntimeState::configurationRefreshSupported);
+            "rework_with_latest_config", RuntimeState::configurationRefreshSupported,
+            "rework_with_latest_context", RuntimeState::contextRefreshSupported);
 
     private final WorkItemProjectionRepository workItems;
     private final TemporalCasePort temporal;
     private final DomainEventService events;
     private final SystemAccessService access;
     private final AgentConfigurationService configurations;
+    private final RequirementContextManifestService manifests;
     private final ObjectMapper objectMapper;
     private final TransactionOperations transactions;
 
     public WorkItemActionService(WorkItemProjectionRepository workItems, TemporalCasePort temporal,
                                  DomainEventService events, SystemAccessService access,
-                                 AgentConfigurationService configurations, ObjectMapper objectMapper,
+                                 AgentConfigurationService configurations, RequirementContextManifestService manifests,
+                                 ObjectMapper objectMapper,
                                  TransactionOperations transactions) {
         this.workItems = workItems;
         this.temporal = temporal;
         this.events = events;
         this.access = access;
         this.configurations = configurations;
+        this.manifests = manifests;
         this.objectMapper = objectMapper;
         this.transactions = transactions;
     }
@@ -199,12 +205,17 @@ public class WorkItemActionService {
         payload.put("attempt", attempt);
         if (!note.isBlank()) payload.put("note", note);
         if (!evidence.isBlank()) payload.put("evidence", evidence);
-        var signalContext = "rework_with_latest_config".equals(action)
-                ? Map.<String, Object>of(
-                        "agent_config_snapshot", latestAgentConfig(item.systemId()),
-                        "resume_failed_stage", true)
-                : Map.<String, Object>of();
-        if (!signalContext.isEmpty()) payload.put("refreshConfiguration", true);
+        Map<String, Object> signalContext = switch (action) {
+            case "rework_with_latest_config" -> Map.<String, Object>of(
+                    "agent_config_snapshot", latestAgentConfig(item.systemId()),
+                    "resume_failed_stage", true);
+            case "rework_with_latest_context" -> Map.<String, Object>of(
+                    "requirement_manifest_id", manifests.refresh(
+                            item.systemId(), item.prdId(), item.workItemId(), actor.getName(), requestKey));
+            default -> Map.of();
+        };
+        if ("rework_with_latest_config".equals(action)) payload.put("refreshConfiguration", true);
+        if ("rework_with_latest_context".equals(action)) payload.put("refreshContext", true);
         events.append(new DomainEventService.AppendEvent(
                 "owner_approved".equals(action) ? DomainEventType.OwnerApprovalSignalSubmitted : DomainEventType.TemporalSignalSubmitted,
                 item.systemId(), item.caseId(), item.prdId(), workItemId,
@@ -257,6 +268,7 @@ public class WorkItemActionService {
         String releaseMode = "";
         String validationMode = "";
         String failedPhase = "";
+        String failedReason = "";
         String planState = "";
         var timeline = events.findByWorkItemId(item.workItemId());
         for (var event : timeline) {
@@ -267,9 +279,11 @@ public class WorkItemActionService {
             }
             if ("WorkerBlocked".equals(event.eventType())) {
                 failedPhase = string(payload.get("failedPhase"));
+                failedReason = string(payload.get("reason"));
             }
             if ("ReworkStarted".equals(event.eventType())) {
                 failedPhase = "";
+                failedReason = "";
             }
             planState = switch (event.eventType()) {
                 case "CodingPlanStarted" -> "planning";
@@ -294,7 +308,7 @@ public class WorkItemActionService {
             }
         }
         PendingAction pending = pendingSignals.values().stream().reduce((left, right) -> right).orElse(null);
-        return new RuntimeState(releaseMode, validationMode, pending, failedPhase, planState);
+        return new RuntimeState(releaseMode, validationMode, pending, failedPhase, failedReason, planState);
     }
 
     private Map<String, Object> latestAgentConfig(String systemId) {
@@ -349,7 +363,7 @@ public class WorkItemActionService {
     }
 
     private record RuntimeState(String releaseMode, String validationMode, PendingAction pendingAction,
-                                String failedPhase, String planState) {
+                                String failedPhase, String failedReason, String planState) {
         boolean planningMayStart() {
             return planState.isBlank() || "rejected".equals(planState);
         }
@@ -364,6 +378,10 @@ public class WorkItemActionService {
 
         boolean configurationRefreshSupported() {
             return CONFIG_REFRESH_PHASES.contains(failedPhase);
+        }
+
+        boolean contextRefreshSupported() {
+            return "context_stale".equals(failedReason) && CONFIG_REFRESH_PHASES.contains(failedPhase);
         }
 
         boolean attemptInterruptible() {

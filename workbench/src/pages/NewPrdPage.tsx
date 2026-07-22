@@ -5,7 +5,7 @@ import { ArrowLeft, CheckCircle2, Plus, Trash2 } from 'lucide-react';
 import { Link, useBlocker, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
-import { api, PrdMessageResult, SuspectedTarget, UiObservation } from '../api/client';
+import { api, ContextItem, PrdMessageResult, SuspectedTarget, UiObservation } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { errorMessage, ErrorState, StatusBadge } from '../components/Display';
 import { SystemSelect } from '../components/SystemSelect';
@@ -212,6 +212,9 @@ export function NewPrdPage() {
   const latestAssistantId = [...conversationMessages].reverse()
     .find((message) => message.senderType === 'assistant')?.messageId;
   const acceptanceMissing = result.missingFields?.some((field) => ['acceptanceCriteria', 'acceptance_criteria'].includes(field));
+  const citations = citationMap(result.draft?.citations);
+  const contextItems = new Map(conversationMessages.flatMap((message) => message.contextItems || [])
+    .map((item) => [item.refId, item]));
   const draftEditable = isResumablePrd(result);
   const workItemGenerated = hasGeneratedWorkItem(result);
 
@@ -312,12 +315,12 @@ export function NewPrdPage() {
         ) : <>
           <div className="draft-editor">
             <label>
-              标题
+              <span className="draft-field-head">标题<CitationChips refs={citations.title} items={contextItems} /></span>
               <input aria-label="PRD 标题" value={draftEditor.title} disabled={!draftEditable || pendingAssistant}
                 onChange={(event) => setDraftEditor((current) => ({ ...current, title: event.target.value }))} />
             </label>
             <label>
-              目标
+              <span className="draft-field-head">目标<CitationChips refs={citations.goal} items={contextItems} /></span>
               <textarea aria-label="PRD 目标" rows={3} value={draftEditor.goal} disabled={!draftEditable || pendingAssistant}
                 onChange={(event) => setDraftEditor((current) => ({ ...current, goal: event.target.value }))} />
             </label>
@@ -329,8 +332,9 @@ export function NewPrdPage() {
               {acceptanceMissing && <div className="draft-field-tip">可以直接在这里填写，不用打字描述</div>}
               {draftEditor.acceptanceCriteria.map((criterion, index) => (
                 <div className="draft-criterion" key={index}>
-                  <input aria-label={`验收标准 ${index + 1}`} value={criterion} disabled={!draftEditable || pendingAssistant}
+                  <div className="draft-criterion-input"><input aria-label={`验收标准 ${index + 1}`} value={criterion} disabled={!draftEditable || pendingAssistant}
                     onChange={(event) => setDraftEditor((current) => ({ ...current, acceptanceCriteria: current.acceptanceCriteria.map((item, itemIndex) => itemIndex === index ? event.target.value : item) }))} />
+                    <CitationChips refs={citations[`AC-${index + 1}`]} items={contextItems} /></div>
                   <button type="button" className="icon-button danger" aria-label={`删除验收标准 ${index + 1}`} disabled={!draftEditable || pendingAssistant}
                     onClick={() => setDraftEditor((current) => ({ ...current, acceptanceCriteria: current.acceptanceCriteria.filter((_, itemIndex) => itemIndex !== index) }))}><Trash2 size={16} /></button>
                 </div>
@@ -401,6 +405,24 @@ export function NewPrdPage() {
 
 export function PendingAssistantBubble() {
   return <div className="bubble assistant pending" role="status" aria-live="polite">正在分析…</div>;
+}
+
+function CitationChips({ refs, items }: { refs?: string[]; items: Map<string, ContextItem> }) {
+  const values = refs?.length ? refs : [];
+  if (!values.length) return <span className="citation-chip ai">AI 建议</span>;
+  return <span className="citation-chips">{values.map((ref) => {
+    const item = items.get(ref);
+    const kind = item?.type || (ref.startsWith('MEM:') ? 'memory' : ref.startsWith('KN:') ? 'system_knowledge' : 'user_message');
+    const label = kind === 'memory' ? '已批准记忆' : kind === 'system_knowledge' ? '系统知识' : '来自用户';
+    const title = item ? [item.title, item.sourceRef].filter(Boolean).join(' · ') : ref;
+    return <span key={ref} className={'citation-chip ' + kind} title={title}>{label}</span>;
+  })}</span>;
+}
+
+function citationMap(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .map(([key, refs]) => [key, Array.isArray(refs) ? refs.map(String) : []]));
 }
 
 function editorValue(draft: Record<string, unknown>, title?: string, goal?: string): DraftEditorValue {
