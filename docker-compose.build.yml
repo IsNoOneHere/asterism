@@ -1,0 +1,13 @@
+services:
+  runner:
+    image: asterism-runner:local
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+  server:
+    image: asterism-server:local
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile

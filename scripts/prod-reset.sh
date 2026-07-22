@@ -8,9 +8,9 @@ if [ "${CONFIRM:-}" != "yes" ]; then
   exit 2
 fi
 
-docker compose --profile prod exec -T postgres psql -U "${V5_DB_USER:-asterism}" -d asterism <<'SQL'
+docker compose exec -T postgres psql -U "${V5_DB_USER:-asterism}" -d asterism <<'SQL'
 drop schema if exists control_plane_v5 cascade;
 create schema control_plane_v5;
 SQL
 
-echo "已重置 prod schema；重启 control-plane 后 Flyway 会重新迁移。"
+echo "已重置 prod schema；重启 server 后 Flyway 会重新迁移。"

@@ -119,3 +119,23 @@ def test_report_contains_stage_models_without_keys(monkeypatch, tmp_path):
     assert target["claudeSdkTeamReady"] is False
     assert target["configSource"] == "system"
     assert "api_key" not in json.dumps(posted)
+
+
+def test_model_readiness_sends_internal_token():
+    captured = {}
+
+    class Client:
+        async def get(self, url, **kwargs):
+            captured.update(url=url, **kwargs)
+            return Response({"ready": True})
+
+    settings = Settings(
+        agent_service_url="http://runner:8090",
+        worker_callback_token="internal-token",
+    )
+
+    result = asyncio.run(readiness._model_readiness(Client(), settings, "sys-1"))
+
+    assert result["ready"] is True
+    assert captured["headers"]["Authorization"] == "Bearer internal-token"
+    assert captured["params"] == {"system_id": "sys-1"}

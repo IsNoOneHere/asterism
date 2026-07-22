@@ -9,6 +9,9 @@ from agent_service.llm import LlmClient, ModelConfig, OpenAIChatClient
 from agent_service.settings import AgentSettings
 
 
+INTERNAL_HEADERS = {"Authorization": "Bearer dev-worker-token"}
+
+
 class FakeLlmClient(LlmClient):
     def __init__(self, responses: list[str]) -> None:
         self.responses = responses
@@ -45,7 +48,7 @@ def test_prd_draft_retries_json_and_asks_acceptance_in_chinese():
     ])
     client = TestClient(create_app(llm))
 
-    response = client.post("/prd-draft", json={
+    response = client.post("/prd-draft", headers=INTERNAL_HEADERS, json={
         "system_id": "sys-1",
         "content": "做登录页",
         "current_draft": {},
@@ -70,7 +73,7 @@ def test_prd_draft_accepts_shared_fixture():
     ])
     client = TestClient(create_app(llm))
 
-    response = client.post("/prd-draft", json=json.loads(fixture.read_text()))
+    response = client.post("/prd-draft", headers=INTERNAL_HEADERS, json=json.loads(fixture.read_text()))
 
     assert response.status_code == 200
     assert response.json()["draft"]["scope"] == "code_change"
@@ -87,7 +90,9 @@ def test_system_model_config_overrides_global_defaults(caplog):
         ),
     ))
 
-    response = client.post("/prd-draft", json={"system_id": "sys-1", "content": "g"})
+    response = client.post(
+        "/prd-draft", headers=INTERNAL_HEADERS, json={"system_id": "sys-1", "content": "g"},
+    )
 
     assert response.status_code == 200
     assert llm.configs[0].model == "system-model"
@@ -103,7 +108,9 @@ def test_missing_system_model_config_falls_back_to_global_defaults():
         model_config_fetcher=lambda *args: ModelConfig(),
     ))
 
-    response = client.post("/prd-draft", json={"system_id": "sys-1", "content": "g"})
+    response = client.post(
+        "/prd-draft", headers=INTERNAL_HEADERS, json={"system_id": "sys-1", "content": "g"},
+    )
 
     assert response.status_code == 200
     assert llm.configs[0].model == "default-model"
@@ -136,7 +143,7 @@ def test_readiness_returns_only_product_model_state_without_api_key():
         model_config_fetcher=lambda *args: ModelConfig(managed=True, model="model-1", api_key="secret-key"),
     ))
 
-    response = client.get("/readiness", params={"system_id": "sys-1"})
+    response = client.get("/readiness", headers=INTERNAL_HEADERS, params={"system_id": "sys-1"})
 
     assert response.status_code == 200
     assert response.json()["ready"] is True
@@ -243,3 +250,25 @@ def test_analyze_image_rejects_direct_unauthorized_call():
 
     assert response.status_code == 401
     assert llm.calls == 0
+
+
+def test_runner_business_endpoints_require_internal_token():
+    client = TestClient(create_app(
+        FakeLlmClient([]),
+        model_config_fetcher=lambda *args: ModelConfig(),
+    ))
+
+    assert client.post("/prd-draft", json={"system_id": "sys-1", "content": "g"}).status_code == 401
+    assert client.get("/readiness", params={"system_id": "sys-1"}).status_code == 401
+    assert client.post(
+        "/model-connection-test", params={"system_id": "sys-1", "profile_id": "mp-1"},
+    ).status_code == 401
+
+
+def test_healthz_stays_public():
+    client = TestClient(create_app(
+        FakeLlmClient([]),
+        model_config_fetcher=lambda *args: ModelConfig(),
+    ))
+
+    assert client.get("/healthz").status_code == 200

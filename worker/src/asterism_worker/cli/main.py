@@ -3,6 +3,8 @@ import contextlib
 import logging
 
 import typer
+import uvicorn
+from agent_service.app import create_app
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
@@ -33,6 +35,37 @@ def worker() -> None:
     """启动 Temporal worker。"""
 
     asyncio.run(_worker())
+
+
+@app.command()
+def runner() -> None:
+    """在同一事件循环内启动内部模型 HTTP 服务和 Temporal Worker。"""
+
+    asyncio.run(_runner())
+
+
+async def _runner() -> None:
+    server = uvicorn.Server(uvicorn.Config(
+        create_app(), host="0.0.0.0", port=8090, log_level="info", access_log=False,
+    ))
+    http_task = asyncio.create_task(server.serve(), name="runner-http")
+    worker_task = asyncio.create_task(_worker(), name="runner-temporal-worker")
+    log.info("Asterism Runner 启动", extra={"http_port": 8090})
+    try:
+        done, _ = await asyncio.wait({http_task, worker_task}, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()
+        # 任一子服务意外结束都退出 Runner，交给容器重启策略恢复整体服务。
+        if http_task in done and not server.should_exit:
+            raise RuntimeError("Runner HTTP 服务意外停止")
+        if worker_task in done and not server.should_exit:
+            raise RuntimeError("Temporal Worker 意外停止")
+    finally:
+        server.should_exit = True
+        for task in (http_task, worker_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(http_task, worker_task, return_exceptions=True)
 
 
 async def _worker() -> None:

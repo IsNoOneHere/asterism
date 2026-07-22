@@ -1,0 +1,211 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+STATE_DIR="${ASTERISM_HOME:-$ROOT/.asterism}"
+ENV_FILE="$STATE_DIR/env"
+
+info() { printf '%s\n' "$1"; }
+fail() { printf '错误: %s\n' "$1" >&2; exit 2; }
+
+detect_runtime() {
+  if [ -n "${V5_CONTAINER_RUNTIME:-}" ]; then
+    printf '%s\n' "$V5_CONTAINER_RUNTIME"
+  elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    printf 'docker\n'
+  elif command -v container >/dev/null 2>&1; then
+    printf 'apple\n'
+  else
+    fail "需要 Docker Compose 或 Apple Container"
+  fi
+}
+
+secret() {
+  command -v openssl >/dev/null 2>&1 || fail "找不到 openssl，无法生成安全密钥"
+  openssl rand -hex "$1"
+}
+
+quote_value() {
+  escaped=$(printf '%s' "$1" | sed "s/'/'\\\\''/g")
+  printf "'%s'" "$escaped"
+}
+
+write_config_value() {
+  key="$1"
+  value="$2"
+  printf '%s=%s\n' "$key" "$(quote_value "$value")"
+}
+
+create_config() {
+  source="$1"
+  runtime="$(detect_runtime)"
+  umask 077
+  mkdir -p "$STATE_DIR/repos" "$STATE_DIR/backups"
+  {
+    write_config_value ASTERISM_VERSION "0.1.4"
+    write_config_value ASTERISM_IMAGE_SOURCE "$source"
+    if [ "$source" = "build" ]; then
+      write_config_value ASTERISM_PULL_POLICY "never"
+    else
+      write_config_value ASTERISM_PULL_POLICY "missing"
+    fi
+    write_config_value V5_CONTAINER_RUNTIME "$runtime"
+    write_config_value V5_DB_USER "asterism"
+    write_config_value V5_DB_PASSWORD "$(secret 32)"
+    write_config_value V5_WORKER_CALLBACK_TOKEN "$(secret 32)"
+    write_config_value V5_ADMIN_INITIAL_PASSWORD "Asterism-$(secret 12)"
+    write_config_value V5_REPO_ROOT "$STATE_DIR/repos"
+    write_config_value V5_PUBLIC_URL "http://127.0.0.1:8080"
+    write_config_value V5_TEMPORAL_NAMESPACE "default"
+    write_config_value V5_TEMPORAL_TASK_QUEUE "asterism"
+    write_config_value V5_AGENT_MODEL "gpt-4.1-mini"
+    write_config_value V5_AGENT_BASE_URL ""
+    write_config_value V5_AGENT_API_KEY ""
+    write_config_value V5_MODEL_PROVIDER "anthropic"
+    write_config_value V5_MODEL ""
+    write_config_value V5_MODEL_BASE_URL ""
+    write_config_value V5_MODEL_API_KEY ""
+    write_config_value V5_ENGINE_MAX_TURNS "50"
+    write_config_value V5_ENGINE_TIMEOUT_SECONDS "600"
+    write_config_value V5_ENGINE_EFFORT_LEVEL ""
+    write_config_value V5_RELEASE_PUSH "false"
+    write_config_value ASTERISM_GITLAB_BASE_URL ""
+    write_config_value ASTERISM_GITLAB_TOKEN ""
+    write_config_value V5_APPLE_PROXY_URL "${V5_APPLE_PROXY_URL:-}"
+    write_config_value V5_OUTBOUND_PROXY_URL "${V5_OUTBOUND_PROXY_URL:-}"
+    write_config_value V5_NO_PROXY "localhost,127.0.0.1,host.docker.internal,host.container.internal,postgres,temporal,server,runner"
+  } > "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+  info "已生成受保护配置: $ENV_FILE"
+}
+
+load_config() {
+  [ -f "$ENV_FILE" ] || fail "尚未安装，请先运行 ./asterism install"
+  set -a
+  # 配置文件由安装器生成，权限固定为 0600。
+  . "$ENV_FILE"
+  set +a
+}
+
+compose() {
+  docker compose --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml" "$@"
+}
+
+up() {
+  rebuild="${1:-false}"
+  case "$V5_CONTAINER_RUNTIME" in
+    docker)
+      if [ "${ASTERISM_IMAGE_SOURCE:-release}" = "build" ]; then
+        if [ "$rebuild" = true ]; then
+          compose -f "$ROOT/docker-compose.build.yml" up -d --build
+        else
+          compose -f "$ROOT/docker-compose.build.yml" up -d --no-build
+        fi
+      else
+        if [ "$rebuild" = true ]; then compose up -d --pull always; else compose up -d; fi
+      fi
+      ;;
+    apple)
+      if [ "${ASTERISM_IMAGE_SOURCE:-release}" = "build" ] && [ "$rebuild" = true ]; then
+        sh "$ROOT/scripts/apple-container.sh" build
+      fi
+      sh "$ROOT/scripts/apple-container.sh" up
+      ;;
+    *) fail "不支持的运行时: $V5_CONTAINER_RUNTIME" ;;
+  esac
+}
+
+install() {
+  source=release
+  [ "${1:-}" = "--build" ] && source=build
+  if [ ! -f "$ENV_FILE" ]; then
+    runtime="$(detect_runtime)"
+    if [ "$runtime" = "apple" ] && container inspect control-plane >/dev/null 2>&1; then
+      sh "$ROOT/scripts/migrate-legacy-apple-env.sh" "$ENV_FILE" "$source"
+    else
+      create_config "$source"
+    fi
+  else
+    info "复用已有配置与数据目录: $STATE_DIR"
+  fi
+  load_config
+  up true
+  sh "$ROOT/scripts/doctor.sh" basic
+  info "Asterism 已就绪: ${V5_PUBLIC_URL:-http://127.0.0.1:8080}"
+  if [ -n "${V5_ADMIN_INITIAL_PASSWORD:-}" ]; then
+    info "首次管理员: admin / $V5_ADMIN_INITIAL_PASSWORD"
+  else
+    info "现有管理员账号保持不变"
+  fi
+}
+
+upgrade() {
+  load_config
+  case "$V5_CONTAINER_RUNTIME" in
+    docker)
+      if [ "${ASTERISM_IMAGE_SOURCE:-release}" = "build" ]; then
+        compose -f "$ROOT/docker-compose.build.yml" build server runner
+        compose -f "$ROOT/docker-compose.build.yml" up -d --no-deps --no-build runner server
+      else
+        compose pull server runner
+        compose up -d --no-deps runner server
+      fi
+      ;;
+    apple) sh "$ROOT/scripts/apple-container.sh" upgrade ;;
+  esac
+  sh "$ROOT/scripts/doctor.sh" basic
+  info "无状态服务升级完成，数据卷未变更"
+}
+
+open_workbench() {
+  url="http://127.0.0.1:8080"
+  # macOS 与 Linux 分别使用系统默认的浏览器启动命令。
+  if command -v open >/dev/null 2>&1; then
+    open "$url"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url"
+  else
+    info "请在浏览器打开: $url"
+  fi
+}
+
+command="${1:-}"
+[ "$#" -eq 0 ] || shift
+case "$command" in
+  install) install "${1:-}" ;;
+  up) load_config; up false; sh "$ROOT/scripts/doctor.sh" basic ;;
+  down)
+    load_config
+    if [ "$V5_CONTAINER_RUNTIME" = docker ]; then compose stop; else sh "$ROOT/scripts/apple-container.sh" stop; fi
+    ;;
+  status)
+    load_config
+    if [ "$V5_CONTAINER_RUNTIME" = docker ]; then compose ps; else sh "$ROOT/scripts/apple-container.sh" status; fi
+    ;;
+  doctor) load_config; sh "$ROOT/scripts/doctor.sh" "${1:-full}" ;;
+  logs)
+    load_config
+    if [ "$V5_CONTAINER_RUNTIME" = docker ]; then compose logs "$@"; else sh "$ROOT/scripts/apple-container.sh" logs "$@"; fi
+    ;;
+  upgrade) upgrade ;;
+  backup) load_config; sh "$ROOT/scripts/backup.sh" "${1:-}" ;;
+  restore) load_config; [ -n "${1:-}" ] || fail "用法: ./asterism restore <备份目录>"; sh "$ROOT/scripts/restore.sh" "$1" ;;
+  open) open_workbench ;;
+  *)
+    cat <<'USAGE'
+用法: ./asterism <命令>
+
+  install [--build]  初始化配置并启动；--build 用于源码开发
+  up                 启动并检查基础服务
+  down               停止服务但保留数据
+  status             查看四个服务状态
+  doctor [basic|full]检查基础服务或完整业务配置
+  logs [service]     查看日志
+  upgrade            仅升级 server 与 runner
+  backup [目录]      备份数据库、Temporal、附件和 artifacts
+  restore <目录>     从备份恢复
+  open                打开本地页面
+USAGE
+    exit 2
+    ;;
+esac

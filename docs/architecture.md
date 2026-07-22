@@ -1,10 +1,21 @@
 # 架构
 
+## 四服务部署边界
+
+发布包只运行四个业务容器：
+
+- `server`：Spring Boot Control Plane，同时托管 Workbench 静态资源并对外提供 `8080`。
+- `runner`：在一个 asyncio 生命周期内运行 agent-service HTTP 接口和 Temporal Worker；源码模块保持独立。
+- `postgres`：业务数据、配置、附件元数据和投影。
+- `temporal`：生命周期、人工等待、重试与恢复。
+
+Runner 的 `8090` 只在容器网络内使用，所有业务接口通过内部 Token 鉴权；`/healthz` 仅用于容器健康检查。PostgreSQL、Temporal、附件和 Worker artifacts 均使用独立持久卷，`upgrade` 只能替换 server 与 runner。
+
 ## 当前版本边界
 
 生命周期只注册一个 Temporal workflow type：`AsterismCaseWorkflow`。仓库不保留 V5/V6 Workflow 类、旧 Planner 执行链或 replay 分支。`/api/v5` 与 PostgreSQL schema `control_plane_v5` 是现有接口和存储命名，不代表存在多套 Workflow 实现。
 
-当前系统尚未上线，升级时直接清理测试 Case 与 Temporal history 后重建，不提供旧 Workflow 恢复入口。正式上线后，任何 replay 可见的修改都必须先建立 Worker Versioning 或 `workflow.patched` 迁移方案。
+Temporal history 与业务数据库一样持久化，升级不得清理。任何 replay 可见的修改都必须先建立 Worker Versioning 或 `workflow.patched` 迁移方案，普通发布只替换无状态 Server 与 Runner。
 
 ## 两层配置模型
 

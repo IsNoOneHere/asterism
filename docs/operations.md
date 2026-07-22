@@ -3,19 +3,29 @@
 ## 启动
 
 ```bash
-cp .env.example .env
-make prod-up
-make doctor
+./asterism install
 ```
 
-`.env` 至少设置随机 `V5_WORKER_CALLBACK_TOKEN` 和 `V5_DB_PASSWORD`。可设置 `V5_ADMIN_INITIAL_PASSWORD`；留空时 control-plane 只在首次创建 admin 时打印随机密码。生产不创建演示用户、演示系统或固定默认密码。
+首次安装执行 `./asterism install`。安装器会在 `.asterism/env` 生成数据库密码、内部 Token 和管理员初始密码，文件权限固定为 `0600`；重复执行不会覆盖已有配置和数据。生产不创建演示用户、演示系统或固定默认密码。
 
-入口：Workbench `http://127.0.0.1:8080`，control-plane `:8085`，agent-service `:8090`，Temporal UI `:8233`。Docker Compose 生产 profile 只将 Workbench 绑定到所有网卡，其余入口绑定 `127.0.0.1`。
+唯一用户入口是 `http://127.0.0.1:8080`。Server 容器内部使用 `8085`，Runner 内部使用 `8090`；Runner 端口不发布到宿主机。Temporal UI `8233`、Temporal gRPC `7233` 和 PostgreSQL `55432` 只绑定回环地址用于排障。
+
+基础运维命令：
+
+```bash
+./asterism up                  # 幂等启动，不清数据
+./asterism down                # 停止但保留容器与卷
+./asterism doctor basic        # 首次安装基础检查
+./asterism doctor full         # 包含模型与 GitLab 检查
+./asterism upgrade             # 只替换 server/runner
+./asterism backup              # 备份四类持久数据
+./asterism restore <备份目录>  # 显式恢复
+```
 
 ## 常用命令
 
 ```bash
-make doctor
+./asterism doctor full
 make smoke-real
 make smoke-gitlab
 CONFIRM=yes make prod-reset
@@ -25,7 +35,9 @@ make test-web
 
 `make smoke-real` 需要 `V5_AGENT_API_KEY`、`V5_MODEL_API_KEY` 和 `V5_SMOKE_ADMIN_PASSWORD`，缺失会明确失败，不会退回 fake。Java 验证使用 `make test-java`；该目标需要 Docker/Testcontainers。
 
-当前系统尚未上线，不保留旧 Workflow history。切换执行架构或修改 Workflow type 后，使用 `CONFIRM=yes make prod-reset` 清理本地测试数据库与 Temporal 数据，再部署终态 Worker。正式上线后禁止采用该方式升级。
+`./asterism backup` 会短暂停止写入端以生成 PostgreSQL、Temporal、附件和 artifacts 的一致快照；Apple Container 因卷不能多挂载，会重建三个非数据库容器，期间有短暂不可用。备份含模型密钥等敏感数据库内容，目录权限为 `0700`，仍应放入加密存储。恢复是显式覆盖操作，执行前先保留当前备份。
+
+Temporal history 是正式持久数据。普通升级只执行 `./asterism upgrade` 替换 Server 与 Runner；Workflow 不兼容变更必须使用 Worker Versioning 或 `workflow.patched` 迁移。`prod-reset` 只允许用于明确可丢弃的本地测试环境，不能作为升级手段。
 
 ## 修订闭环验收
 
@@ -48,9 +60,9 @@ Planning Activity 最长 45 分钟，Coding Activity 的 24 小时仅是失控�
 ## GitLab 集成部署
 
 1. 在 GitLab 创建专用的 Project/Group Access Token，限定到业务项目或组，角色至少为 Developer。单 token 同时执行 clone、push 和 MR REST API 时使用 `api` scope；不要把 token 写进仓库 URL。
-2. 设置 `ASTERISM_GITLAB_BASE_URL`、`ASTERISM_GITLAB_TOKEN` 和用户可访问的 `V5_PUBLIC_URL`，然后重建 control-plane 与 Worker。也可在系统“Git 与发布”配置中覆盖连接，读取接口只返回 `tokenSet`。
+2. 设置 `ASTERISM_GITLAB_BASE_URL`、`ASTERISM_GITLAB_TOKEN` 和用户可访问的 `V5_PUBLIC_URL`，然后执行 `./asterism upgrade` 重建 Server 与 Runner。也可在系统“Git 与发布”配置中覆盖连接，读取接口只返回 `tokenSet`。
 3. 系统配置选择 `releaseMode=gitlab`，逐仓填写 GitLab project、默认分支、路径门禁和测试命令。`validationMode=auto` 在 push 前运行测试，`skip` 把测试留给 MR CI 与人工。
-4. 运行 `make doctor`，确认 Worker 镜像含 Git、GitLab API 可达且系统 readiness 通过。
+4. 运行 `./asterism doctor full`，确认 Runner 镜像含 Git、GitLab API 可达且系统 readiness 通过。
 
 合并状态由 Temporal Workflow 每 60 秒轮询 GitLab。网络只需允许 Asterism 到 GitLab；部分仓已合并时继续等待，全部合并后完成，MR 未合并而关闭时转为阻塞。
 
@@ -60,14 +72,18 @@ Planning Activity 最长 45 分钟，Coding Activity 的 24 小时仅是失控�
 
 | doctor 项 | 排查 |
 | --- | --- |
-| DB / Flyway | PostgreSQL 容器、`V5_DB_*`、control-plane 迁移日志 |
+| DB / Flyway | PostgreSQL 容器、`V5_DB_*`、Server 迁移日志 |
 | Temporal | 7233 端口、Temporal 容器、`asterism` task queue poller |
-| control-plane | `/healthz`、Worker Token、数据库连接 |
-| agent-service | `/healthz`、`product` Profile 或 `V5_AGENT_*` 环境回落 |
+| server | `/healthz`、Workbench 首页、Worker Token、数据库连接 |
+| runner | 内部 `/healthz`、`product` Profile 或 `V5_AGENT_*` 环境回落、Temporal poller |
 | Worker | task queue、repo 挂载、`developer` Profile、Claude SDK 依赖 |
 | GitLab | Worker 出站路由、`V5_NO_PROXY`、GitLab 地址、Token 和项目权限 |
 
-macOS Apple Container 可在当前 shell 设置 `V5_CONTAINER_RUNTIME=apple`，再运行同一组 Make 目标。Apple Container 的 `make prod-up` 只替换无状态应用容器，保留 PostgreSQL volume 与 Temporal 容器；需要清除测试 history 时显式运行 `prod-reset`。
+macOS Apple Container 通过 `V5_CONTAINER_RUNTIME=apple ./asterism install` 使用同一四服务拓扑。安装器会继承旧六服务环境的现有密钥，并把旧 Temporal 容器内的 SQLite history 一次性迁入持久卷；迁移前归档保存在 `.asterism/backups/legacy-temporal-pre-four.tgz`。后续 `up/upgrade` 只替换无状态 server 与 runner。需要清除测试 history 时仍必须显式运行破坏性重置命令。
+
+## 发布镜像
+
+推送 `v*` tag 后，GitHub Actions 会构建 `linux/amd64`、`linux/arm64` 的 `asterism-server` 和 `asterism-runner` 固定版本镜像。首次发布后必须在 GHCR 中把两个 package 设为 Public，确认未登录用户可以拉取；部署配置只使用版本号，不使用 `latest`。
 
 ## DeepSeek 与 Claude SDK
 

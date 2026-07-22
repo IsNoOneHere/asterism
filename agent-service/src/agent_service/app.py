@@ -3,7 +3,7 @@ import logging
 from collections.abc import Callable
 from hmac import compare_digest
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 import httpx
 from pydantic import ValidationError
 
@@ -25,19 +25,21 @@ def create_app(
     fetch_model_config = model_config_fetcher or control_plane_model_config(settings)
     app = FastAPI(title="Asterism agent-service")
 
-    @app.post("/prd-draft")
-    def prd_draft(request: DraftRequest) -> DraftResult:
-        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "product")
-        return _strict_json(llm, prd_draft_prompt(request), model_config, DraftResult, "prd draft did not return valid DraftResult JSON")
-
-    @app.post("/analyze-image")
-    async def analyze_image(system_id: str, request: Request) -> UiObservation:
-        # 视觉调用只能由控制面转发，避免绕过成员鉴权直接消耗模型额度。
+    def require_internal_token(request: Request) -> None:
+        # Runner 业务接口只允许携带共享内部 Token 的 Server 或 Worker 调用。
         if not compare_digest(
             request.headers.get("authorization", ""),
             f"Bearer {settings.worker_callback_token}",
         ):
             raise HTTPException(status_code=401, detail="invalid internal token")
+
+    @app.post("/prd-draft", dependencies=[Depends(require_internal_token)])
+    def prd_draft(request: DraftRequest) -> DraftResult:
+        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "product")
+        return _strict_json(llm, prd_draft_prompt(request), model_config, DraftResult, "prd draft did not return valid DraftResult JSON")
+
+    @app.post("/analyze-image", dependencies=[Depends(require_internal_token)])
+    async def analyze_image(system_id: str, request: Request) -> UiObservation:
         model_config = resolve_model_config(settings, fetch_model_config, system_id, "vision")
         if not model_config.supports_vision or not model_config.model or not model_config.api_key:
             raise HTTPException(status_code=422, detail="请先为该系统配置支持 Vision 的模型 Profile")
@@ -56,7 +58,7 @@ def create_app(
         config = resolve_model_config(settings, fetch_model_config, "healthz", "product")
         return {"ok": True, "model_config_available": bool(config.model and config.api_key)}
 
-    @app.get("/readiness")
+    @app.get("/readiness", dependencies=[Depends(require_internal_token)])
     def readiness(system_id: str) -> dict:
         # 仅返回配置状态，禁止把 API key 暴露给 Worker 或页面。
         stages = {"prd": resolve_model_config(settings, fetch_model_config, system_id, "product")}
@@ -76,13 +78,8 @@ def create_app(
             },
         }
 
-    @app.post("/model-connection-test")
-    def model_connection_test(system_id: str, profile_id: str, request: Request) -> dict:
-        if not compare_digest(
-            request.headers.get("authorization", ""),
-            f"Bearer {settings.worker_callback_token}",
-        ):
-            raise HTTPException(status_code=401, detail="invalid internal token")
+    @app.post("/model-connection-test", dependencies=[Depends(require_internal_token)])
+    def model_connection_test(system_id: str, profile_id: str) -> dict:
         return _test_model_connection(fetch_model_config(system_id, "developer", profile_id))
 
     return app

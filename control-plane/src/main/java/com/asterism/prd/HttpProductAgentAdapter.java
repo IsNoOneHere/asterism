@@ -4,6 +4,7 @@ import com.asterism.context.ContextItem;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestClient;
@@ -13,10 +14,14 @@ import org.springframework.web.client.RestClient;
 public class HttpProductAgentAdapter implements ProductAgentPort {
     private final RestClient client;
     private final String endpoint;
+    private final String workerToken;
 
-    public HttpProductAgentAdapter(RestClient.Builder builder, @Value("${asterism.product-agent.url}") String endpoint) {
+    public HttpProductAgentAdapter(RestClient.Builder builder,
+                                   @Value("${asterism.product-agent.url}") String endpoint,
+                                   @Value("${asterism.worker-callback.token:dev-worker-token}") String workerToken) {
         this.client = builder.build();
         this.endpoint = endpoint;
+        this.workerToken = workerToken;
     }
 
     @Override
@@ -28,6 +33,7 @@ public class HttpProductAgentAdapter implements ProductAgentPort {
         try {
             return client.post()
                     .uri(endpoint)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + workerToken)
                     .body(new DraftRequest(systemId, content, currentDraft, missingFields, conversationHistory, contextItems))
                     .retrieve()
                     .body(ProductAgentPort.DraftResult.class);

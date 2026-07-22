@@ -1,12 +1,14 @@
+name: asterism
+
 services:
   postgres:
-    profiles: ["docker-db", "prod"]
     image: postgres:16
     restart: unless-stopped
     environment:
       POSTGRES_DB: asterism
-      POSTGRES_USER: asterism
+      POSTGRES_USER: ${V5_DB_USER:-asterism}
       POSTGRES_PASSWORD: ${V5_DB_PASSWORD:?必须设置 V5_DB_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "127.0.0.1:55432:5432"
     volumes:
@@ -18,16 +20,9 @@ services:
       retries: 20
 
   temporal:
-    profiles: ["prod"]
     image: temporalio/temporal@sha256:906f9765cde508333ef191aab908bc724657b5f736cb5ead13921d9a45b33622
     restart: unless-stopped
-    command:
-      - server
-      - start-dev
-      - --ip
-      - 0.0.0.0
-      - --db-filename
-      - /home/temporal/temporal.db
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--db-filename", "/home/temporal/temporal.db"]
     ports:
       - "127.0.0.1:7233:7233"
       - "127.0.0.1:8233:8233"
@@ -39,31 +34,57 @@ services:
       timeout: 3s
       retries: 20
 
-  agent-service:
-    profiles: ["llm", "prod"]
-    build:
-      context: ./agent-service
+  runner:
+    image: ghcr.io/isnoonehere/asterism-runner:${ASTERISM_VERSION:-0.1.4}
+    pull_policy: ${ASTERISM_PULL_POLICY:-always}
     restart: unless-stopped
     environment:
+      V5_PROFILE: prod
+      V5_TEMPORAL_TARGET: temporal:7233
+      V5_TEMPORAL_NAMESPACE: ${V5_TEMPORAL_NAMESPACE:-default}
+      V5_TEMPORAL_TASK_QUEUE: ${V5_TEMPORAL_TASK_QUEUE:-asterism}
+      V5_CONTROL_PLANE_URL: http://server:8085
+      V5_WORKER_CALLBACK_TOKEN: ${V5_WORKER_CALLBACK_TOKEN:?必须设置 V5_WORKER_CALLBACK_TOKEN}
+      V5_EXECUTION_ENGINE: claude_sdk_team
+      V5_MODEL_PROVIDER: ${V5_MODEL_PROVIDER:-anthropic}
+      V5_MODEL_API_KEY: ${V5_MODEL_API_KEY:-}
+      V5_MODEL_BASE_URL: ${V5_MODEL_BASE_URL:-}
+      V5_MODEL: ${V5_MODEL:-}
+      V5_ENGINE_MAX_TURNS: ${V5_ENGINE_MAX_TURNS:-50}
+      V5_ENGINE_TIMEOUT_SECONDS: ${V5_ENGINE_TIMEOUT_SECONDS:-600}
+      V5_ENGINE_EFFORT_LEVEL: ${V5_ENGINE_EFFORT_LEVEL:-}
+      V5_ARTIFACTS_ROOT: /app/runtime/artifacts
+      V5_AGENT_SERVICE_URL: http://127.0.0.1:8090
       V5_AGENT_MODEL: ${V5_AGENT_MODEL:-gpt-4.1-mini}
       V5_AGENT_BASE_URL: ${V5_AGENT_BASE_URL:-}
       V5_AGENT_API_KEY: ${V5_AGENT_API_KEY:-}
-      V5_AGENT_CONTROL_PLANE_URL: ${V5_AGENT_CONTROL_PLANE_URL:-http://host.docker.internal:8085}
+      V5_AGENT_CONTROL_PLANE_URL: http://server:8085
       V5_AGENT_WORKER_CALLBACK_TOKEN: ${V5_WORKER_CALLBACK_TOKEN:?必须设置 V5_WORKER_CALLBACK_TOKEN}
-      # 仅外网模型请求走可选代理，容器内服务保持直连。
+      V5_RELEASE_PUSH: ${V5_RELEASE_PUSH:-false}
+      V5_WORKSPACE_ROOT: /tmp/asterism-workspaces
+      V5_PUBLIC_URL: ${V5_PUBLIC_URL:-http://127.0.0.1:8080}
       HTTP_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
       HTTPS_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
       http_proxy: ${V5_OUTBOUND_PROXY_URL:-}
       https_proxy: ${V5_OUTBOUND_PROXY_URL:-}
-      NO_PROXY: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,postgres,temporal,agent-service,control-plane}
-      no_proxy: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,postgres,temporal,agent-service,control-plane}
-    ports:
-      - "127.0.0.1:8090:8090"
+      NO_PROXY: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,host.container.internal,postgres,temporal,server,runner}
+      no_proxy: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,host.container.internal,postgres,temporal,server,runner}
+    volumes:
+      - ${V5_REPO_ROOT:?必须设置 V5_REPO_ROOT}:/repos
+      - ${V5_REPO_ROOT:?必须设置 V5_REPO_ROOT}:${V5_REPO_ROOT:?必须设置 V5_REPO_ROOT}
+      - worker-artifacts:/app/runtime/artifacts
+    depends_on:
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=3).close()"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
 
-  control-plane:
-    profiles: ["prod"]
-    build:
-      context: ./control-plane
+  server:
+    image: ghcr.io/isnoonehere/asterism-server:${ASTERISM_VERSION:-0.1.4}
+    pull_policy: ${ASTERISM_PULL_POLICY:-always}
     restart: unless-stopped
     environment:
       SPRING_PROFILES_ACTIVE: temporal,llm
@@ -75,8 +96,8 @@ services:
       V5_TEMPORAL_TARGET: temporal:7233
       V5_TEMPORAL_NAMESPACE: ${V5_TEMPORAL_NAMESPACE:-default}
       V5_TEMPORAL_TASK_QUEUE: ${V5_TEMPORAL_TASK_QUEUE:-asterism}
-      V5_PRODUCT_AGENT_URL: http://agent-service:8090/prd-draft
-      V5_IMAGE_ANALYSIS_URL: http://agent-service:8090/analyze-image
+      V5_PRODUCT_AGENT_URL: http://runner:8090/prd-draft
+      V5_IMAGE_ANALYSIS_URL: http://runner:8090/analyze-image
       V5_ATTACHMENT_ROOT: /app/runtime/attachments
       V5_PROFILE: prod
       ASTERISM_GITLAB_BASE_URL: ${ASTERISM_GITLAB_BASE_URL:-}
@@ -86,65 +107,17 @@ services:
         condition: service_healthy
       temporal:
         condition: service_healthy
-      agent-service:
-        condition: service_started
+      runner:
+        condition: service_healthy
     ports:
-      - "127.0.0.1:8085:8085"
+      - "8080:8085"
     volumes:
       - control-plane-attachments:/app/runtime/attachments
-
-  worker:
-    profiles: ["prod"]
-    build:
-      context: ./worker
-    restart: unless-stopped
-    environment:
-      V5_PROFILE: prod
-      V5_TEMPORAL_TARGET: temporal:7233
-      V5_TEMPORAL_NAMESPACE: ${V5_TEMPORAL_NAMESPACE:-default}
-      V5_TEMPORAL_TASK_QUEUE: ${V5_TEMPORAL_TASK_QUEUE:-asterism}
-      V5_CONTROL_PLANE_URL: http://control-plane:8085
-      V5_WORKER_CALLBACK_TOKEN: ${V5_WORKER_CALLBACK_TOKEN:?必须设置 V5_WORKER_CALLBACK_TOKEN}
-      V5_EXECUTION_ENGINE: claude_sdk_team
-      V5_MODEL_PROVIDER: ${V5_MODEL_PROVIDER:-anthropic}
-      V5_MODEL_API_KEY: ${V5_MODEL_API_KEY:-}
-      V5_MODEL_BASE_URL: ${V5_MODEL_BASE_URL:-}
-      V5_MODEL: ${V5_MODEL:-}
-      V5_ENGINE_MAX_TURNS: ${V5_ENGINE_MAX_TURNS:-50}
-      V5_ENGINE_TIMEOUT_SECONDS: ${V5_ENGINE_TIMEOUT_SECONDS:-600}
-      V5_ENGINE_EFFORT_LEVEL: ${V5_ENGINE_EFFORT_LEVEL:-}
-      V5_ARTIFACTS_ROOT: /app/runtime/artifacts
-      V5_AGENT_SERVICE_URL: http://agent-service:8090
-      V5_RELEASE_PUSH: ${V5_RELEASE_PUSH:-false}
-      V5_WORKSPACE_ROOT: /tmp/asterism-workspaces
-      V5_PUBLIC_URL: ${V5_PUBLIC_URL:-http://127.0.0.1:8080}
-      # Claude SDK 与 PRD 模型共用同一出站代理设置。
-      HTTP_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
-      HTTPS_PROXY: ${V5_OUTBOUND_PROXY_URL:-}
-      http_proxy: ${V5_OUTBOUND_PROXY_URL:-}
-      https_proxy: ${V5_OUTBOUND_PROXY_URL:-}
-      NO_PROXY: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,postgres,temporal,agent-service,control-plane}
-      no_proxy: ${V5_NO_PROXY:-localhost,127.0.0.1,host.docker.internal,postgres,temporal,agent-service,control-plane}
-    volumes:
-      - ${V5_REPO_ROOT:-/tmp}:/repos
-      - ${V5_REPO_ROOT:-/tmp}:${V5_REPO_ROOT:-/tmp}
-      - worker-artifacts:/app/runtime/artifacts
-    depends_on:
-      - control-plane
-      - temporal
-      - agent-service
-
-  workbench:
-    profiles: ["prod"]
-    build:
-      context: ./workbench
-    restart: unless-stopped
-    environment:
-      V5_CONTROL_PLANE_HOST: control-plane
-    depends_on:
-      - control-plane
-    ports:
-      - "8080:80"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8085/healthz"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
 
 volumes:
   postgres-data:

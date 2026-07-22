@@ -3,6 +3,7 @@ name = "asterism-worker"
 version = "0.1.4"
 requires-python = ">=3.12"
 dependencies = [
+  "asterism-agent-service",
   "claude-agent-sdk>=0.2.115",
   "httpx>=0.27",
   "pydantic>=2.8",
@@ -23,3 +24,6 @@ pythonpath = ["src"]
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+asterism-agent-service = { path = "../agent-service" }

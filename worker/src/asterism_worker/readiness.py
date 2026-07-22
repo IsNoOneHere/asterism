@@ -78,6 +78,7 @@ async def _model_readiness(client: httpx.AsyncClient, settings: Settings, system
     try:
         response = await client.get(
             settings.agent_service_url.rstrip("/") + "/readiness",
+            headers={"Authorization": f"Bearer {settings.worker_callback_token}"},
             params={"system_id": system_id},
         )
         response.raise_for_status()

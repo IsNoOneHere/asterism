@@ -14,22 +14,22 @@
 - GitHub 当前 DNS 解析失败；Docker Hub 直连超时。Docker 已配置多个镜像加速地址，其中部分可达，但正式部署前仍需做一次实际镜像拉取验证。
 - 本地运行环境是 Apple Container arm64，服务器是 x86_64，不能直接复制本地镜像到服务器。
 - 当前本地数据包括：7 个系统、10 个用户、37 个工作项、467 条已批准知识、1 个附件。
-- 当前分支为 `bug/20260713-160143`，HEAD 为 `fb80d49`，代理修复和知识库分页仍在工作区中，尚未形成可发布版本。
+- 当前分支为 `bug/20260713-160143`，四容器与业务改造仍在工作区中，发布前必须重新记录准确 commit。
 
 ## 推荐首期部署形态
 
 - 应用目录：`/opt/asterism`，只保存 Compose、发布代码和 `.env`。
 - Agent 可操作仓库目录：`/srv/asterism/repos`，设置 `V5_REPO_ROOT=/srv/asterism/repos`。
 - 首期入口：`http://10.96.230.211:8080`。
-- 只向宿主机发布 Workbench 的 8080 端口；PostgreSQL、Temporal、control-plane、agent-service 只走 Compose 内部网络。Temporal UI 如需排障，仅绑定 `127.0.0.1`。
+- 业务容器固定为 `server`、`runner`、`postgres`、`temporal`。只向宿主机公开 Server 的 8080；Runner 的 8090 不发布，Temporal UI 如需排障仅绑定 `127.0.0.1`。
 - 暂不改动现有 Seafile Caddy。需要域名和 TLS 时，再把 Workbench 接入现有 Caddy 的 `seafile-net`，并配置内网 DNS。
 - 使用全新的生产 PostgreSQL；重建系统和管理员账号，重新录入生产模型密钥，只迁移已批准知识。不要直接整库迁移本地开发数据。
 
 ## 上线前必须处理
 
-- Temporal 当前使用 `start-dev`，数据库文件位于容器 `/tmp`，重建容器会丢失生命周期状态。首期至少改为固定版本并挂载持久化目录；正式长期运行应迁移到 PostgreSQL 持久化的 Temporal。
-- 当前 Compose 会把 PostgreSQL、Temporal、control-plane 和 agent-service 端口发布到所有网卡。服务器版 Compose 需收紧端口。
-- 当前 Compose 没有健康检查和重启策略。需补 `healthcheck`、就绪依赖和 `restart: unless-stopped`。
+- 当前四容器模板已固定 Temporal 镜像摘要并挂载独立持久卷；正式长期运行时仍建议把 Temporal 从 SQLite `start-dev` 迁移到独立 PostgreSQL。
+- 当前 Compose 只把 Server 的 8080 发布到所有网卡；数据库和 Temporal 排障端口只绑定回环地址，Runner 不发布端口。
+- 当前 Compose 已配置核心健康检查、就绪依赖和 `restart: unless-stopped`，上线前需在目标服务器实测。
 - `.env` 必须生成独立的数据库密码、Worker 回调 Token 和管理员初始密码，权限设为 `600`，不得提交 Git。
 - Model Profile 的 API Key 存储在数据库配置中，数据库备份必须按敏感文件加密和限制访问。
 - 必须设置专用 `V5_REPO_ROOT`，不能沿用示例中的 `/tmp`。所有系统的 `repoPath` 必须改成服务器可见的绝对路径。
@@ -58,11 +58,11 @@
 
 ### 2. Compose 生产化
 
-- [ ] 固定 Temporal 镜像版本，增加 Temporal 数据卷。
-- [ ] PostgreSQL、Temporal、control-plane、agent-service 取消公网卡端口发布。
-- [ ] Workbench 保留 `8080:80`，作为首期唯一入口。
-- [ ] 为核心服务增加健康检查、就绪依赖和自动重启策略。
-- [ ] 设置 `COMPOSE_PROJECT_NAME=asterism`，避免影响现有 Compose 项目。
+- [x] 固定 Temporal 镜像版本，增加 Temporal 数据卷。
+- [x] PostgreSQL、Temporal 和 Runner 取消公网卡端口发布。
+- [x] Server 保留 `8080:8085`，作为首期唯一入口。
+- [x] 为核心服务增加健康检查、就绪依赖和自动重启策略。
+- [x] 固定 Compose 项目名为 `asterism`，避免影响现有 Compose 项目。
 - [ ] 设置 `V5_REPO_ROOT=/srv/asterism/repos`。
 - [ ] 核对 Worker 在宿主仓库中产生文件的属主，避免生成 root 属主文件。
 
@@ -92,9 +92,9 @@
 
 ### 6. 部署与验收
 
-- [ ] 在服务器构建镜像并执行 `docker compose --profile prod up -d`。
+- [ ] 执行 `./asterism install`，拉取 Release 固定版本镜像并完成基础健康检查。
 - [ ] 检查所有容器状态和启动日志，确认 Flyway 迁移成功。
-- [ ] 执行 `make doctor`，确认数据库、Temporal、control-plane、agent-service 和 Worker poller 正常。
+- [ ] 执行 `./asterism doctor full`，确认数据库、Temporal、Server、Runner 和 poller 正常。
 - [ ] 验证 `http://10.96.230.211:8080` 可登录，模型配置和 Agent 配置可读取。
 - [ ] 发起一次真实需求沟通，确认 PRD 模型调用成功。
 - [ ] 发起一个最小工作项，确认 Coding Supervisor、仓库子 Agent、Git 提交和结果回传完整。

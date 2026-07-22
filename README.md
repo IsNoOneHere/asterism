@@ -6,9 +6,9 @@ Asterism 是一个以 Temporal 为生命周期权威、以 Claude SDK Supervisor
 
 ```mermaid
 flowchart LR
-  UI[Workbench] --> CP[Control Plane]
-  CP --> T[Temporal]
-  T --> W[Worker]
+  UI["asterism-server\nWorkbench + Control Plane"] --> DB[PostgreSQL]
+  UI --> T[Temporal]
+  T --> W["asterism-runner\nAgent Service + Worker"]
   W --> S[Claude SDK Supervisor]
   S --> A[Repository Subagents]
   A --> G[Git diff / branch / MR]
@@ -16,16 +16,34 @@ flowchart LR
 
 ## Quickstart
 
-要求 Docker Compose、Java 21/Maven 3.9（开发编译）、Python 3.12 和 Node.js 20。
+普通部署只需要 Docker Compose，macOS 也可以使用 Apple Container。Java、Maven、Python 和 Node.js 只用于源码开发，不是安装依赖。
 
 ```bash
-cp .env.example .env
-# 编辑 .env：至少设置随机 V5_WORKER_CALLBACK_TOKEN 和 V5_DB_PASSWORD
-make prod-up
-make doctor
+./asterism install
 ```
 
-打开 `http://127.0.0.1:8080`。若未设置初始密码，从 control-plane 首次启动日志读取随机 admin 密码；登录后立即修改。
+安装器会检测容器运行时、生成受保护的随机密钥、拉取固定版本镜像、启动并完成基础健康检查，最后打印 `http://127.0.0.1:8080` 和首次管理员密码。
+
+从源码构建四服务栈：
+
+```bash
+V5_CONTAINER_RUNTIME=apple ./asterism install --build  # macOS Apple Container
+# 或
+V5_CONTAINER_RUNTIME=docker ./asterism install --build
+```
+
+日常运维统一使用：
+
+```bash
+./asterism up
+./asterism status
+./asterism doctor
+./asterism logs server
+./asterism upgrade
+./asterism backup
+```
+
+部署固定为四个业务容器：`server`、`runner`、`postgres`、`temporal`。只有 `8080` 是用户入口；Runner 的 `8090` 不发布到宿主机。
 
 ## 配置模型
 

@@ -2,12 +2,17 @@ package com.asterism.prd;
 
 import com.asterism.context.ContextItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.client.RestClient;
 
+import java.net.InetSocketAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,5 +43,32 @@ class HttpProductAgentAdapterContractTest {
 
         assertThat(result.missingFields()).containsExactly("acceptance_criteria");
         assertThat(result.assistantMessage()).contains("验收标准");
+    }
+
+    @Test
+    void sendsInternalTokenToAgentService() throws Exception {
+        var authorization = new AtomicReference<String>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/prd-draft", exchange -> {
+            authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            var response = Files.readString(Path.of("../docs/fixtures/prd-draft-response.json"))
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var adapter = new HttpProductAgentAdapter(
+                    RestClient.builder(),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/prd-draft",
+                    "internal-token");
+
+            adapter.updateDraft("sys-1", "做登录页", Map.of(), List.of(), List.of(), List.of());
+
+            assertThat(authorization.get()).isEqualTo("Bearer internal-token");
+        } finally {
+            server.stop(0);
+        }
     }
 }

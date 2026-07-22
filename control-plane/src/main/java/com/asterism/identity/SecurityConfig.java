@@ -42,7 +42,11 @@ public class SecurityConfig {
         return http
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/healthz", "/api/v5/auth/login", "/api/v5/openapi.json", "/swagger-ui/**").permitAll()
+                        .requestMatchers(
+                                "/", "/index.html", "/assets/**", "/favicon.ico",
+                                "/work-items/**", "/new", "/systems", "/models", "/agents", "/memory", "/knowledge", "/users",
+                                "/healthz", "/api/v5/auth/login", "/api/v5/openapi.json", "/swagger-ui/**")
+                        .permitAll()
                         .anyRequest().authenticated())
                 .httpBasic(withDefaults())
                 .exceptionHandling(errors -> errors.authenticationEntryPoint((request, response, exception) ->

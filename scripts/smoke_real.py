@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 
-CONTROL_URL = os.getenv("V5_SMOKE_CONTROL_URL", "http://127.0.0.1:8085").rstrip("/")
+CONTROL_URL = os.getenv("V5_SMOKE_CONTROL_URL", "http://127.0.0.1:8080").rstrip("/")
 ADMIN_USER = os.getenv("V5_SMOKE_ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("V5_SMOKE_ADMIN_PASSWORD", "")
 HOST_REPO_ROOT = Path(os.getenv("V5_SMOKE_REPO_ROOT", os.getenv("V5_REPO_ROOT", "/tmp"))).expanduser()
