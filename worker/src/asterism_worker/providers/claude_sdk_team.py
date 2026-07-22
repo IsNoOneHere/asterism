@@ -1,4 +1,3 @@
-import hashlib
 import json
 import logging
 import os
@@ -33,14 +32,18 @@ from asterism_worker.agent_config import AgentConstraints, EngineConfig, ModelPr
 from asterism_worker.contracts import (
     CodingAttemptRequest,
     CodingAttemptResult,
+    CodingPlanRequest,
+    ExecutionOutcome,
     RepoChangeResult,
     RepoSnapshot,
     SubagentRun,
 )
-from asterism_worker.repo_source import TeamWorkspace
+from asterism_worker.providers.claude_sdk_planning import ClaudeSdkPlanningMixin
+from asterism_worker.providers.session_store import JsonlSessionStore
+from asterism_worker.repo_source import TeamWorkspace, reset_team_workspace
 
 log = logging.getLogger(__name__)
-SUPERVISOR_TOOLS = ["Read", "Glob", "Grep", "Agent", "TaskOutput"]
+SUPERVISOR_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Agent", "TaskOutput"]
 SUBAGENT_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write"]
 # SDK 顶层工具是所有子 Agent 的能力上限；实际使用权限仍由 AgentPolicy 逐次裁决。
 TEAM_TOOLS = list(dict.fromkeys([*SUPERVISOR_TOOLS, *SUBAGENT_TOOLS]))
@@ -70,8 +73,8 @@ class TeamAgentSpec:
     policy: AgentPolicy
 
 
-class ClaudeSdkTeamProvider:
-    """一个 Claude SDK Supervisor 会话内调度按仓库隔离的原生子 Agent。"""
+class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
+    """单一 Claude SDK Root Supervisor；原生子 Agent 仅作可选内部协作。"""
 
     def __init__(
         self,
@@ -89,7 +92,10 @@ class ClaudeSdkTeamProvider:
         self.artifacts_root = Path(artifacts_root)
         self.supervisor = supervisor
         self.event_callback = callbacks.get("event")
+        self.candidate_callback = callbacks.get("candidate_checkpoint")
+        self.write_guard = callbacks.get("write_guard")
         self.query = callbacks.get("query") or query
+        self.session_store = JsonlSessionStore(self.artifacts_root / "sdk-sessions")
         model = model_profile.model.strip()
         self.model_env = {
             key: model
@@ -106,6 +112,7 @@ class ClaudeSdkTeamProvider:
             self.model_env["CLAUDE_CODE_EFFORT_LEVEL"] = engine_options.effort_level
 
     async def run(self, request: CodingAttemptRequest, workspace: TeamWorkspace) -> CodingAttemptResult:
+        self._guard_write()
         specs = self._agent_specs(request, workspace)
         policies = {spec.name: spec.policy for spec in specs}
         supervisor_policy = AgentPolicy("developer", "", (workspace.root,), (), can_delegate=True)
@@ -113,10 +120,7 @@ class ClaudeSdkTeamProvider:
         agent_ids: dict[str, str] = {}
         runs: dict[str, SubagentRun] = {}
         active_tasks: set[str] = set()
-        dispatched_tasks: set[str] = set()
-        runtime_dir = workspace.root.parent / f".{workspace.root.name}-claude-runtime"
-        for name in ("home", "config", "cache", "data", "state"):
-            (runtime_dir / name).mkdir(parents=True, exist_ok=True)
+        runtime_dir = self._runtime_dir(workspace)
         settings_path = runtime_dir / "settings.json"
         settings_path.write_text("{}\n", encoding="utf-8")
         context_path = workspace.root / "CLAUDE.md"
@@ -131,16 +135,20 @@ class ClaudeSdkTeamProvider:
             is_supervisor = not agent_id and (
                 not agent_type or agent_type in {"developer", self.supervisor.role_id}
             )
+            if is_supervisor and tool_name in WRITE_TOOLS:
+                target = self._tool_path(tool_input, workspace.root)
+                if target is None:
+                    return False, "写操作缺少目标路径"
+                repo_policy = next(
+                    (spec.policy for spec in specs if self._within(target, spec.policy.writable_roots[0])),
+                    None,
+                )
+                if repo_policy is None:
+                    return False, "Root Supervisor 只能修改当前 Coding Attempt 的仓库"
+                # Root 直接写仍复用仓库级 allowedPaths/forbiddenPaths 门禁。
+                return self._authorize(repo_policy, tool_name, tool_input, workspace.root)
             policy = supervisor_policy if is_supervisor else policies.get(agent_type, readonly_policy)
-            allowed, reason = self._authorize(policy, tool_name, tool_input, workspace.root)
-            if not allowed or tool_name != "Agent":
-                return allowed, reason
-            fingerprint = self._dispatch_fingerprint(tool_input)
-            if fingerprint and fingerprint in dispatched_tasks:
-                return False, "相同子任务已经派发，请等待或使用已有结果"
-            if fingerprint:
-                dispatched_tasks.add(fingerprint)
-            return True, ""
+            return self._authorize(policy, tool_name, tool_input, workspace.root)
 
         async def subagent_start(data: dict, _tool_use_id: str | None, _context: object) -> dict:
             agent_id = str(data.get("agent_id", ""))
@@ -162,7 +170,8 @@ class ClaudeSdkTeamProvider:
             agent_id = str(data.get("agent_id", ""))
             current = runs.get(agent_id)
             if current:
-                runs[agent_id] = current.model_copy(update={"status": "completed"})
+                # Stop 只是 SDK 遥测，不能代替 Root Supervisor 的顶层完成声明。
+                runs[agent_id] = current.model_copy(update={"status": "stopped"})
                 self._write(transcript, {"type": "subagent_stop", **runs[agent_id].model_dump()})
                 self._heartbeat("SubagentStop", current.agent_type)
             return {}
@@ -172,6 +181,8 @@ class ClaudeSdkTeamProvider:
             agent_type = str(data.get("agent_type", "")) or agent_ids.get(agent_id, "")
             tool_name = str(data.get("tool_name", ""))
             tool_input = dict(data.get("tool_input") or {})
+            if tool_name in WRITE_TOOLS:
+                self._guard_write()
             allowed, reason = authorize_runtime_tool(agent_id, agent_type, tool_name, tool_input)
             permission_record = {
                 "type": "tool_permission",
@@ -213,7 +224,12 @@ class ClaudeSdkTeamProvider:
         token_usage: dict[str, Any] = {}
         session_id = ""
         result_error = ""
+        structured_outcome: ExecutionOutcome | None = None
+        sdk_blockers: list[str] = []
         try:
+            resume_session_id, session_store = self._resolve_session(
+                request.resume_session_id, runtime_dir, transcript, "coding",
+            )
             options = ClaudeAgentOptions(
                 tools=TEAM_TOOLS,
                 # 后台子 Agent 无法交互确认权限；固定工具面预授权，Hook 继续执行路径门禁。
@@ -233,7 +249,11 @@ class ClaudeSdkTeamProvider:
                 skills=[],
                 env=self._sdk_env(runtime_dir),
                 user=sdk_user,
-                enable_file_checkpointing=True,
+                resume=resume_session_id,
+                session_store=session_store,
+                session_store_flush="eager",
+                enable_file_checkpointing=False,
+                output_format={"type": "json_schema", "schema": ExecutionOutcome.model_json_schema()},
                 stderr=lambda line: self._write(transcript, {"type": "sdk_stderr", "message": line}),
             )
             async for message in self.query(prompt=self._prompt_stream(self._prompt(request, specs)), options=options):
@@ -271,7 +291,7 @@ class ClaudeSdkTeamProvider:
                     })
                 elif isinstance(message, TaskNotificationMessage):
                     active_tasks.discard(message.task_id)
-                    self._complete_task_run(message.task_id, message.status, runs)
+                    self._update_task_run(message.task_id, message.status, runs)
                     self._write(transcript, {
                         "type": "task_completed",
                         "task_id": message.task_id,
@@ -282,7 +302,7 @@ class ClaudeSdkTeamProvider:
                     status = message.status or str(message.patch.get("status", ""))
                     if status in TERMINAL_TASK_STATUSES:
                         active_tasks.discard(message.task_id)
-                        self._complete_task_run(message.task_id, status, runs)
+                        self._update_task_run(message.task_id, status, runs)
                     self._write(transcript, {
                         "type": "task_updated",
                         "task_id": message.task_id,
@@ -293,23 +313,45 @@ class ClaudeSdkTeamProvider:
                     turns = message.num_turns
                     token_usage = dict(message.usage or {})
                     session_id = message.session_id
+                    if message.permission_denials:
+                        sdk_blockers.append(
+                            f"SDK permission_denials: {len(message.permission_denials)} 个工具请求被拒绝"
+                        )
+                    if message.deferred_tool_use is not None:
+                        sdk_blockers.append("SDK deferred_tool_use: 存在未执行的工具请求")
+                    if message.structured_output is not None:
+                        try:
+                            structured_outcome = ExecutionOutcome.model_validate(message.structured_output)
+                        except Exception as error:
+                            sdk_blockers.append(f"structured_output 无效: {type(error).__name__}")
+                    self._write(transcript, {
+                        "type": "sdk_result_metadata",
+                        "stop_reason": message.stop_reason or "",
+                        "permission_denial_count": len(message.permission_denials or []),
+                        "deferred_tool_use": message.deferred_tool_use is not None,
+                        "structured_output": message.structured_output is not None,
+                    })
                     if message.is_error:
                         detail = "; ".join(message.errors or [])
                         result_error = f"{message.subtype}: {detail}".rstrip(": ")
             if result_error:
                 raise RuntimeError(f"Claude SDK Supervisor execution failed: {result_error}")
-            unfinished = sorted({item.agent_type for item in runs.values() if item.status != "completed"})
-            if unfinished:
-                raise RuntimeError(f"Claude SDK Supervisor 提前结束，子 Agent 尚未完成: {', '.join(unfinished)}")
             if active_tasks:
-                raise RuntimeError(f"Claude SDK Supervisor 提前结束，后台任务尚未完成: {', '.join(sorted(active_tasks))}")
+                self._write(transcript, {
+                    "type": "subagent_tasks_still_running",
+                    "task_ids": sorted(active_tasks),
+                })
             # SDK 以低权限用户写工作区；收集 Diff 前恢复 Worker 身份，避免 Git 拒绝非当前用户仓库。
             self._restore_service_owner(workspace.root, runtime_dir, sdk_user, service_owner)
             ownership_restored = True
             repo_changes = self._repo_changes(workspace, summary)
-            self._complete_missing_runs(specs, repo_changes, runs)
+            outcome = self._finalize_outcome(
+                structured_outcome, request, repo_changes, session_id, sdk_blockers,
+            )
             result = CodingAttemptResult(
+                attempt_id=request.attempt_id,
                 summary=summary,
+                outcome=outcome,
                 repo_changes=repo_changes,
                 subagent_runs=list(runs.values()),
                 token_usage=token_usage,
@@ -317,9 +359,16 @@ class ClaudeSdkTeamProvider:
                 turns=turns,
             )
             self._write(transcript, {"type": "result", **result.model_dump()})
+            # Activity 注入的 callback 必须先原子持久化候选，之后才能破坏性清理工作区。
+            if self.candidate_callback:
+                self._guard_write()
+                self.candidate_callback(result)
+            self._guard_write()
+            reset_team_workspace(workspace)
             log.info(
-                "Claude SDK Supervisor 执行完成 work_item=%s subagents=%s changed_repos=%s",
+                "Claude SDK Supervisor 执行结束 work_item=%s status=%s subagents=%s changed_repos=%s",
                 request.work_item_id,
+                result.outcome.status,
                 len(result.subagent_runs),
                 len([item for item in result.repo_changes if item.diff_patch.strip()]),
             )
@@ -328,9 +377,12 @@ class ClaudeSdkTeamProvider:
             context_path.unlink(missing_ok=True)
             if not ownership_restored:
                 self._restore_service_owner(workspace.root, runtime_dir, sdk_user, service_owner)
-            shutil.rmtree(runtime_dir, ignore_errors=True)
+            if not workspace.persistent:
+                shutil.rmtree(runtime_dir, ignore_errors=True)
 
-    def _agent_specs(self, request: CodingAttemptRequest, workspace: TeamWorkspace) -> list[TeamAgentSpec]:
+    def _agent_specs(
+        self, request: CodingAttemptRequest | CodingPlanRequest, workspace: TeamWorkspace,
+    ) -> list[TeamAgentSpec]:
         specs: list[TeamAgentSpec] = []
         for repo in request.repos:
             name = self._unique_agent_name(f"repo-{repo.repo_id}", {item.name for item in specs})
@@ -367,7 +419,9 @@ class ClaudeSdkTeamProvider:
             permissionMode="dontAsk",
         )
 
-    def _context(self, request: CodingAttemptRequest, specs: list[TeamAgentSpec]) -> str:
+    def _context(
+        self, request: CodingAttemptRequest | CodingPlanRequest, specs: list[TeamAgentSpec],
+    ) -> str:
         memories = "\n".join(
             f"- {item.get('content', '')}" for item in request.memories if item.get("content")
         ) or "- 无"
@@ -380,7 +434,8 @@ class ClaudeSdkTeamProvider:
         )
         return (
             "# Asterism Claude SDK 团队上下文\n\n"
-            "Temporal 只管理生命周期；当前会话由一个只读 Supervisor 调度原生子 Agent。"
+            "Temporal 只管理生命周期；当前 Coding Attempt 由一个 Root Supervisor 对最终结果负责。"
+            "Root 可在仓库路径门禁内直接修改代码，原生子 Agent 只是可选的内部加速器。"
             "Git diff、门禁、人工确认和发布由外部系统负责。\n\n"
             f"Context manifest: {request.context_manifest_id or 'none'}\n\n"
             f"## 仓库与写权限\n{repositories}\n\n"
@@ -405,23 +460,30 @@ class ClaudeSdkTeamProvider:
         revision = json.dumps(
             request.revision_context.model_dump() if request.revision_context else {}, ensure_ascii=False,
         )
+        approved_plan = json.dumps(
+            request.approved_plan.model_dump(exclude={"session_id"}) if request.approved_plan else {},
+            ensure_ascii=False,
+        )
         return (
-            "你是 Coding Supervisor。先理解跨仓需求，再自主使用 Claude Code 原生 Agent 完成工作。"
-            "Explore、Plan 等内置 Agent 可自由用于只读探索和方案分析；需要修改代码时，调用下方自动生成的仓库 Agent。"
-            "你自己没有 Edit/Write 权限，其他未绑定仓库的子 Agent 也只有只读权限。"
+            "你是本次 Coding Attempt 唯一的 Root Supervisor。当前计划已经过人工批准；优先承接原会话完成工作。"
+            "若原会话不可恢复，以当前持久工作区、已批准计划、候选摘要和人工反馈为权威继续，不得从业务目标外扩。"
+            "你可以在系统仓库路径门禁内直接 Edit/Write；原生 Agent 仅是可选的内部加速器，不是必经 handoff。"
+            "Explore、Plan 等内置 Agent 只用于探索和分析；自动生成的仓库 Agent 可按需协助实现。"
             "团队工作区下的仓库目录就是映射中给出的单层目录，不要再次拼接仓库名。"
             "探索时围绕目标目录和关键符号做定向 Glob/Grep/Read，避开 .git 与构建产物，并返回精炼结论。"
-            "不要猜文件名，不要提交 Git，不要重复派发完全相同的子任务。"
-            "可以按需并行运行后台 Agent，但在总结前必须使用 TaskOutput 等待全部任务结束。"
-            "已有代码变更覆盖验收标准后立即收尾，不要反复启动 Agent 重做同一修改。\n\n"
+            "不要猜文件名，不要提交 Git。已有代码变更覆盖验收标准后立即收尾。"
+            "最终必须通过结构化输出逐项报告已批准 task_id；未完成时返回 blocked 并写明 blockers，"
+            "不得用自然语言总结冒充完成。每个 taskOutcome.changed_paths 必须如实覆盖该任务产生的变更；"
+            "它只用于和系统真实 Diff 核对任务覆盖，不作为权限来源。\n\n"
             "上一版候选只是待修订基线，不代表已批准；修订时必须逐条落实人工反馈，"
             "人工反馈与候选说明冲突时以人工反馈为准。\n\n"
             f"目标：\n{request.goal}\n\n"
             f"验收标准：\n{criteria}\n\n"
             f"人工反馈：\n{request.feedback or '无'}\n\n"
+            f"已批准计划（任务路径只是证据，不是权限边界）：\n{approved_plan}\n\n"
             f"结构化修订上下文：\n{revision}\n\n"
             f"上一版候选摘要（代码已恢复到当前工作区；重做时直接按反馈修订，可能为空）：\n{previous}\n\n"
-            f"可用子 Agent 与仓库：\n{mappings}\n\n"
+            f"可选子 Agent 与仓库：\n{mappings}\n\n"
             f"Supervisor 补充约束：\n{self.supervisor.prompt or '无'}\n"
         )
 
@@ -454,12 +516,11 @@ class ClaudeSdkTeamProvider:
         return False, "只能读取当前 Coding Attempt 工作区"
 
     def _repo_changes(self, workspace: TeamWorkspace, summary: str) -> list[RepoChangeResult]:
+        self._guard_write()
         changes: list[RepoChangeResult] = []
         for repo_id, repo_path in workspace.repos.items():
             self._git(repo_path, "add", "-N", ".")
             diff_patch = self._git(repo_path, "diff", "--no-ext-diff", "--binary").stdout
-            self._git(repo_path, "reset", "--hard", "HEAD")
-            self._git(repo_path, "clean", "-fd")
             changes.append(RepoChangeResult(
                 repo=repo_id,
                 diff_patch=diff_patch,
@@ -468,38 +529,108 @@ class ClaudeSdkTeamProvider:
             ))
         return changes
 
+    def _guard_write(self) -> None:
+        if self.write_guard:
+            self.write_guard()
+
     def _git(self, repo_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
         try:
+            # 仅信任本次命令的精确工作区，兼容 Worker 中断后持久卷仍保留 SDK 用户 ownership。
             return subprocess.run(
-                ["git", *args], cwd=repo_path, check=True, capture_output=True, text=True,
+                ["git", "-c", f"safe.directory={repo_path.resolve()}", *args],
+                cwd=repo_path, check=True, capture_output=True, text=True,
             )
         except subprocess.CalledProcessError as error:
             detail = (error.stderr or error.stdout or "").strip() or f"exit {error.returncode}"
             log.error("Claude SDK 工作区 Git 操作失败 repo=%s command=%s detail=%s", repo_path.name, args[0], detail)
             raise RuntimeError(f"{repo_path.name}: git {' '.join(args)} 失败: {detail}") from error
 
-    def _complete_missing_runs(
-        self, specs: list[TeamAgentSpec], changes: list[RepoChangeResult], runs: dict[str, SubagentRun],
-    ) -> None:
-        changed_repos = {item.repo for item in changes if item.diff_patch.strip()}
-        recorded_repos = {item.repo for item in runs.values()}
-        for spec in specs:
-            if spec.repo.repo_id in changed_repos and spec.repo.repo_id not in recorded_repos:
-                agent_id = f"synthetic:{spec.name}"
-                runs[agent_id] = SubagentRun(
-                    agent_id=agent_id,
-                    agent_type=spec.name,
-                    repo=spec.repo.repo_id,
-                    status="completed",
-                )
+    def _finalize_outcome(
+        self,
+        outcome: ExecutionOutcome | None,
+        request: CodingAttemptRequest,
+        changes: list[RepoChangeResult],
+        session_id: str,
+        sdk_blockers: list[str],
+    ) -> ExecutionOutcome:
+        """只用结构化结果和系统事实收敛 Attempt 终态。"""
 
-    def _complete_task_run(
+        blockers = list(sdk_blockers)
+        if outcome is None:
+            outcome = ExecutionOutcome(status="blocked")
+            blockers.append("Claude SDK 未返回 structured_output")
+        blockers.extend(outcome.blockers)
+        approved_ids = {
+            task.task_id for task in (request.approved_plan.tasks if request.approved_plan else [])
+            if task.task_id
+        }
+        reported_ids = {item.task_id for item in outcome.task_outcomes}
+        missing_ids = sorted(approved_ids - reported_ids)
+        if missing_ids:
+            blockers.append(f"已批准任务未覆盖: {', '.join(missing_ids)}")
+        blocked_ids = [item.task_id for item in outcome.task_outcomes if item.status == "blocked"]
+        if blocked_ids:
+            blockers.append(f"任务执行受阻: {', '.join(blocked_ids)}")
+        task_repos = {
+            task.task_id: task.repo for task in (request.approved_plan.tasks if request.approved_plan else [])
+            if task.task_id and task.repo
+        }
+        reported_changes: set[tuple[str, str]] = set()
+        task_reported_changes: dict[str, set[tuple[str, str]]] = {}
+        for item in outcome.task_outcomes:
+            repo = task_repos.get(item.task_id)
+            if not repo:
+                continue
+            task_changes = task_reported_changes.setdefault(item.task_id, set())
+            for path in item.changed_paths:
+                normalized = path[2:] if path.startswith("./") else path
+                repo_prefix = f"{repo}/"
+                if normalized.startswith(repo_prefix):
+                    normalized = normalized[len(repo_prefix):]
+                if normalized:
+                    change = (repo, normalized)
+                    reported_changes.add(change)
+                    task_changes.add(change)
+        actual_changes = {
+            (change.repo, path) for change in changes for path in change.changed_paths
+        }
+        if task_repos:
+            unreported_changes = sorted(actual_changes - reported_changes)
+            if unreported_changes:
+                detail = ", ".join(f"{repo}:{path}" for repo, path in unreported_changes)
+                blockers.append(f"真实变更未被任务结果声明: {detail}")
+            # 模型声明只作为完成证据，必须能在系统收集的真实 Git Diff 中反向验证。
+            nonexistent_changes = sorted(reported_changes - actual_changes)
+            if nonexistent_changes:
+                detail = ", ".join(f"{repo}:{path}" for repo, path in nonexistent_changes)
+                blockers.append(f"任务结果声明了不存在的变更: {detail}")
+            unsupported_tasks = sorted(
+                task_id for task_id in approved_ids & reported_ids
+                if not task_reported_changes.get(task_id, set()) & actual_changes
+            )
+            if unsupported_tasks:
+                blockers.append(f"任务结果没有真实变更支撑: {', '.join(unsupported_tasks)}")
+        actual_paths = sorted({path for change in changes for path in change.changed_paths})
+        if not any(change.diff_patch.strip() for change in changes):
+            blockers.append("Coding Attempt 未生成有效代码变更")
+        if outcome.status == "blocked" and not blockers:
+            blockers.append("Root Supervisor 报告执行受阻")
+        blockers = list(dict.fromkeys(item for item in blockers if item))
+        return outcome.model_copy(update={
+            "status": "blocked" if blockers or outcome.status == "blocked" else "completed",
+            "blockers": blockers,
+            # 模型生成路径不是权限来源，最终只保留真实 Diff 路径。
+            "changed_paths": actual_paths,
+            "session_id": session_id,
+        })
+
+    def _update_task_run(
         self, task_id: str, status: str, runs: dict[str, SubagentRun],
     ) -> None:
-        # SDK 内置 Agent 可能只发送 Task 终态而不发送 SubagentStop。
+        # 子 Agent 状态只供审计，原样保留 SDK 终态。
         current = runs.get(task_id)
         if current and status in TERMINAL_TASK_STATUSES:
-            runs[task_id] = current.model_copy(update={"status": "completed"})
+            runs[task_id] = current.model_copy(update={"status": status})
 
     def _sdk_env(self, runtime_dir: Path) -> dict[str, str]:
         env = {
@@ -518,6 +649,65 @@ class ClaudeSdkTeamProvider:
         else:
             env["ANTHROPIC_API_KEY"] = self.model_profile.api_key
         return env
+
+    def _runtime_dir(self, workspace: TeamWorkspace) -> Path:
+        runtime_dir = workspace.root.parent / f".{workspace.root.name}-claude-runtime"
+        if not workspace.persistent:
+            shutil.rmtree(runtime_dir, ignore_errors=True)
+        for name in ("home", "config", "cache", "data", "state"):
+            (runtime_dir / name).mkdir(parents=True, exist_ok=True)
+        return runtime_dir
+
+    def _resolve_session(
+        self,
+        requested_session_id: str,
+        runtime_dir: Path,
+        transcript: Path,
+        phase: str,
+    ) -> tuple[str | None, JsonlSessionStore | None]:
+        """Session 是恢复加速项；缺失时由持久执行上下文重建，不阻塞业务流程。"""
+
+        if not requested_session_id:
+            return None, self.session_store
+        if self._local_session_exists(runtime_dir, requested_session_id):
+            # 低权限 Claude CLI 直接读取 Artifact volume 中的原生 runtime。
+            mode = "local_runtime"
+            resume_session_id = requested_session_id
+            session_store = None
+        elif self.session_store.contains(requested_session_id):
+            # SDK Store 会物化到父进程私有临时目录，降权 CLI 无法读取；改由持久上下文重建。
+            mode = "rebuilt_from_context"
+            resume_session_id = None
+            session_store = self.session_store
+        else:
+            mode = "rebuilt"
+            resume_session_id = None
+            session_store = self.session_store
+        self._write(transcript, {
+            "type": "session_recovery",
+            "phase": phase,
+            "mode": mode,
+            "requested_session_id": requested_session_id,
+        })
+        if resume_session_id:
+            log.info(
+                "Claude SDK Session 从本地 runtime 恢复 phase=%s session_id=%s",
+                phase, requested_session_id,
+            )
+        else:
+            log.warning(
+                "Claude SDK Session 不可直接恢复，基于持久执行上下文重建 phase=%s mode=%s session_id=%s",
+                phase, mode, requested_session_id,
+            )
+        return resume_session_id, session_store
+
+    def _local_session_exists(self, runtime_dir: Path, session_id: str) -> bool:
+        projects = runtime_dir / "projects"
+        return projects.is_dir() and any(
+            (project / f"{session_id}.jsonl").is_file()
+            for project in projects.iterdir()
+            if project.is_dir()
+        )
 
     def _prepare_sdk_user(self, team_root: Path, runtime_dir: Path) -> int | None:
         if os.geteuid() != 0:
@@ -618,20 +808,6 @@ class ClaudeSdkTeamProvider:
 
     def _paths(self, paths: list[str]) -> str:
         return ", ".join(paths) if paths else "未限制"
-
-    def _dispatch_fingerprint(self, tool_input: dict[str, Any]) -> str:
-        identity = {
-            field: self._normalize_command(str(tool_input.get(field, ""))).lower()
-            for field in ("subagent_type", "description", "prompt")
-        }
-        if not any(identity.values()):
-            return ""
-        # 内容寻址避免分隔符碰撞；前后台执行方式不改变任务本身身份。
-        payload = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(payload.encode()).hexdigest()
-
-    def _normalize_command(self, value: str) -> str:
-        return " ".join(value.split())
 
     def _result_excerpt(self, content: object) -> str:
         if content is None:

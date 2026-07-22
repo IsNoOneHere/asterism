@@ -29,7 +29,7 @@ class WorkItemControllerEventsTest {
         when(events.findByWorkItemId("wi-1")).thenReturn(List.of(event));
         var actions = mock(WorkItemActionService.class);
         when(actions.availability(any(), eq(actor))).thenReturn(new WorkItemActionService.Availability(
-                false, List.of(), null, "local", "auto"));
+                false, List.of(), null, "local", "auto", "Worker 已激活", "worker"));
         var controller = new WorkItemController(workItems, events, actions, access,
                 mock(com.asterism.prd.PrdSessionRepository.class), new com.fasterxml.jackson.databind.ObjectMapper(),
                 mock(com.asterism.git.GitIntegrationService.class), mock(com.asterism.git.GitLabClient.class),

@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     agent_service_url: str = Field(default="http://127.0.0.1:8090")
     worker_id: str = Field(default_factory=socket.gethostname)
     readiness_interval_seconds: int = Field(default=30)
+    activity_heartbeat_interval_seconds: int = Field(default=30)
     validation_timeout_seconds: int = Field(default=120)
     release_push: bool = Field(default=False)
 

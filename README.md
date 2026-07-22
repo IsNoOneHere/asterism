@@ -39,12 +39,15 @@ make doctor
 
 ## 人工审查与自动修订
 
-1. 提交需求并完成负责人审批，启动 Agent 开发。
-2. `ModificationCompleted` 后打开“代码变更”，审查完整 Diff。
-3. 发现问题时填写必填修订意见，点击“打回修订”。系统会自动进入第 N 轮修订，不需要再点“开始执行”。
-4. Agent 优先在上一版候选 Diff 上增量修订；候选无法恢复时自动降级为带意见的全量修订。
-5. 审查新 Diff；通过后继续验证和发布，仍有问题可继续打回。
-6. GitLab MR 审查期间也可“打回修订”，新 commit 会推送到原分支并更新同一 MR。
+1. 提交需求并完成负责人审批，点击“生成执行计划”。
+2. Supervisor 只读检查真实仓库后展示 Coding Plan；计划正确则批准并优先恢复对应 Session，偏移时填写意见打回，系统会在新 Planning Session 中重规划。
+3. 计划批准后仓库 Agent 才获得各自范围内的 Edit/Write 权限；人工等待期间 Claude 进程已退出，由 Temporal 长期等待。
+4. `ModificationCompleted` 后打开“代码变更”，审查完整 Diff。
+5. 发现问题时填写必填修订意见，点击“打回修订”。系统会自动进入第 N 轮修订，不需要再点“开始执行”。
+6. Agent 优先在上一版候选 Diff 上增量修订；候选无法恢复时自动降级为带意见的全量修订。
+
+Claude Session 只是上下文加速项，不是工作项恢复的唯一依据。Session 丢失时，系统会使用已批准计划、Case workspace、候选 Diff 和人工意见创建新 Session 继续。
+7. 审查新 Diff；通过后继续验证和发布，仍有问题可继续打回。GitLab MR 审查期间也可打回，新 commit 会更新同一 MR。
 
 达到修订上限时，工作项以 `revision_limit_reached` 进入阻塞；负责人可取消，或选择“完整重做”并重置轮次。
 

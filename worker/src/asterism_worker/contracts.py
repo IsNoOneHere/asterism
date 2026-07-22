@@ -3,6 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+PLAN_BASE_CHANGED_ERROR = "PlanBaseChanged"
+
 
 class LifecycleStatus(StrEnum):
     allocated = "allocated"
@@ -172,7 +174,47 @@ class RevisionContext(BaseModel):
     instruction: str = "只修订人工意见涉及的部分，不推翻已通过的改动"
 
 
+class CodingPlanTask(BaseModel):
+    """Supervisor 基于真实仓库证据给出的单仓任务。"""
+
+    task_id: str = ""
+    repo: str
+    objective: str
+    acceptance_criteria_refs: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+
+
+class CodingPlanDraft(BaseModel):
+    """可供人工审批的轻量执行计划；路径证据不参与权限裁决。"""
+
+    summary: str
+    tasks: list[CodingPlanTask] = Field(min_length=1)
+    risks: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    revision: int = Field(default=1, ge=1)
+    session_id: str = ""
+    base_revisions: dict[str, str] = Field(default_factory=dict)
+
+
+class CodingPlanRequest(BaseModel):
+    case_id: str
+    work_item_id: str
+    system_id: str
+    repos: list[RepoSnapshot]
+    goal: str
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    feedback: str = ""
+    memories: list[dict[str, Any]] = Field(default_factory=list)
+    context_manifest_id: str = ""
+    agent_config_snapshot: AgentConfigSnapshot | None = None
+    plan_revision: int = Field(default=1, ge=1)
+    previous_plan: CodingPlanDraft | None = None
+    resume_session_id: str = ""
+    refresh_workspace: bool = False
+
+
 class CodingAttemptRequest(BaseModel):
+    attempt_id: str = ""
     case_id: str
     work_item_id: str
     system_id: str
@@ -185,10 +227,34 @@ class CodingAttemptRequest(BaseModel):
     agent_config_snapshot: AgentConfigSnapshot | None = None
     previous_candidate: list[RepoChangeResult] = Field(default_factory=list)
     revision_context: RevisionContext | None = None
+    approved_plan: CodingPlanDraft | None = None
+    resume_session_id: str = ""
+
+
+class ExecutionTaskOutcome(BaseModel):
+    """已批准计划中单个任务的顶层执行结果，不映射为子 Agent Stage。"""
+
+    task_id: str
+    status: Literal["completed", "blocked"]
+    summary: str = ""
+    changed_paths: list[str] = Field(default_factory=list)
+
+
+class ExecutionOutcome(BaseModel):
+    """Root Supervisor 对整个 Coding Attempt 一次性负责的结构化终态。"""
+
+    status: Literal["completed", "blocked"]
+    task_outcomes: list[ExecutionTaskOutcome] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    changed_paths: list[str] = Field(default_factory=list)
+    session_id: str = ""
 
 
 class CodingAttemptResult(BaseModel):
+    attempt_id: str = ""
     summary: str
+    # 仅允许旧 Temporal Activity history 缺失；新 Provider 必须返回结构化 outcome。
+    outcome: ExecutionOutcome | None = None
     repo_changes: list[RepoChangeResult] = Field(default_factory=list)
     subagent_runs: list[SubagentRun] = Field(default_factory=list)
     token_usage: dict[str, Any] = Field(default_factory=dict)

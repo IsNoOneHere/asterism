@@ -9,7 +9,7 @@ import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { errorMessage, ErrorState, formatDateTime, StatusBadge } from '../components/Display';
 import { MemoryEditorDialog } from '../components/MemoryEditorDialog';
 import {
-  AgentStageView, buildWorkItemFlow, eventName, eventPayload, failureReason, FlowAttempt, FlowStage, FlowStageId,
+  AgentStageView, buildWorkItemFlow, CodingPlanView, eventName, eventPayload, failureReason, FlowAttempt, FlowStage, FlowStageId,
   FlowStageStatus, RepositoryFlowView, ValidationCheckView, WorkItemFlow,
 } from '../workItemFlow';
 import { WorkItemNavigationState } from '../workItemListState';
@@ -302,7 +302,9 @@ function WorkItemOverview({ workItem, flow }: { workItem: WorkItem; flow: WorkIt
   return (
     <div className="work-item-overview panel" aria-label="工作项摘要">
       <div><span>当前状态</span><StatusBadge value={workItem.lifecycleStatus} /></div>
-      <div><span>当前阶段</span><strong>{flow.activeRevision ? `第 ${flow.activeRevision.revision} 轮修订中` : current.label}</strong></div>
+      <div><span>当前阶段</span><strong>{flow.activeRevision ? `第 ${flow.activeRevision.revision} 轮修订中`
+        : flow.codingPlan?.status === 'proposed' ? '等待计划审批'
+          : flow.codingPlan?.status === 'planning' ? 'Supervisor 正在规划' : current.label}</strong></div>
       <div><span>等待角色</span><strong>{current.waitingFor || waitingRoleName(workItem.waitingFor)}</strong></div>
       <div><span>创建时间</span><strong>{formatDateTime(workItem.createdAt)}</strong></div>
       <div><span>已用时</span><strong>{elapsedTime(workItem.createdAt, isTerminal(workItem.lifecycleStatus) ? workItem.updatedAt : undefined)}</strong></div>
@@ -386,7 +388,10 @@ function StageDetail({ stage, flow, workItem, actions, pending, pendingAction, o
         <div><dt>参与角色</dt><dd>{stageParticipants(stage, workItem)}</dd></div>
       </dl>
 
-      {stage.id === 'execution' && <ExecutionDetail agents={stage.agents ?? []} />}
+      {stage.id === 'execution' && <>
+        {flow.codingPlan && <CodingPlanDetail plan={flow.codingPlan} />}
+        <ExecutionDetail agents={stage.agents ?? []} plan={flow.codingPlan} />
+      </>}
       {stage.id === 'patch' && <PatchDetail flow={flow} />}
       {stage.id === 'validation' && <ValidationChecks checks={stage.checks ?? []} status={stage.status} />}
       {stage.id === 'release' && <RepositoryLanes repositories={stage.repositories ?? []} />}
@@ -429,8 +434,25 @@ function StageDetail({ stage, flow, workItem, actions, pending, pendingAction, o
   );
 }
 
-function ExecutionDetail({ agents }: { agents: AgentStageView[] }) {
-  if (agents.length === 0) return <div className="empty stage-empty">等待 Coding Supervisor 启动。</div>;
+function CodingPlanDetail({ plan }: { plan: CodingPlanView }) {
+  return <section className={`coding-plan ${plan.status}`} aria-labelledby="coding-plan-title">
+    <header><div><h3 id="coding-plan-title">Coding Plan · 第 {plan.revision} 版</h3><p>{plan.summary}</p></div><span>{planStatusName(plan.status)}</span></header>
+    {plan.tasks.length > 0 && <ol>{plan.tasks.map((task, index) => <li key={task.taskId || `${task.repo}-${index}`}>
+      <div><strong>{task.repo}</strong><p>{task.objective}</p></div>
+      {task.taskId && <small>任务：{task.taskId}</small>}
+      {task.acceptanceCriteriaRefs.length > 0 && <small>验收：{task.acceptanceCriteriaRefs.join('、')}</small>}
+      {task.evidence.length > 0 && <ul>{task.evidence.map((item) => <li key={item}><code>{item}</code></li>)}</ul>}
+    </li>)}</ol>}
+    {(plan.risks.length > 0 || plan.openQuestions.length > 0) && <div className="coding-plan-notes">
+      {plan.risks.length > 0 && <div><strong>风险</strong><ul>{plan.risks.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+      {plan.openQuestions.length > 0 && <div><strong>待确认</strong><ul>{plan.openQuestions.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+    </div>}
+    <p className="coding-plan-boundary">计划中的文件位置只作为证据，实际写权限仍以仓库允许/禁止路径为准。</p>
+  </section>;
+}
+
+function ExecutionDetail({ agents, plan }: { agents: AgentStageView[]; plan: CodingPlanView | null }) {
+  if (agents.length === 0) return <div className="empty stage-empty">{plan?.status === 'proposed' ? '等待负责人审批计划。' : '等待 Coding Supervisor 启动。'}</div>;
   return (
     <div className="execution-detail">
       <ol className="agent-lane" aria-label="Agent 执行进度">
@@ -584,7 +606,10 @@ function stageAction(code: string, currentStageId: FlowStageId, workItem: WorkIt
     owner_approved: { label: '批准执行', stageId: 'approval', ownerApproval: true },
     owner_rejected: { label: '拒绝', stageId: 'approval', signalName: code, danger: true },
     cancel_case: { label: '取消', stageId: currentStageId, signalName: code, danger: true },
-    start_modification: { label: '开始执行', stageId: 'execution', signalName: code },
+    start_modification: { label: '生成执行计划', stageId: 'execution', signalName: code },
+    coding_plan_approved: { label: '批准计划并执行', stageId: 'execution', signalName: code },
+    coding_plan_rejected: { label: '打回重新规划', stageId: 'execution', signalName: code, noteRequired: true, danger: true },
+    interrupt_attempt: { label: '停止本轮', stageId: 'execution', signalName: code, danger: true },
     retry_current_phase: { label: '重试失败阶段', stageId: currentStageId, signalName: code },
     rework: { label: workItem.lifecycleStatus === 'waiting_merge' ? '打回修订' : '完整重做', stageId: currentStageId, signalName: code,
       noteRequired: workItem.lifecycleStatus === 'waiting_merge', danger: workItem.lifecycleStatus === 'waiting_merge' },
@@ -601,12 +626,13 @@ function stageAction(code: string, currentStageId: FlowStageId, workItem: WorkIt
 
 function actionContextKind(code: string): 'none' | 'note' | 'evidence' {
   if (['validation_passed', 'validation_rejected'].includes(code)) return 'evidence';
-  if (['owner_rejected', 'cancel_case', 'rework', 'rework_with_latest_config', 'patch_apply_rejected'].includes(code)) return 'note';
+  if (['owner_rejected', 'cancel_case', 'interrupt_attempt', 'rework', 'rework_with_latest_config', 'coding_plan_rejected', 'patch_apply_rejected'].includes(code)) return 'note';
   return 'none';
 }
 
 function actionLabel(code: string) {
-  return ({ owner_approved: '批准执行', owner_rejected: '拒绝', cancel_case: '取消', start_modification: '开始执行',
+  return ({ owner_approved: '批准执行', owner_rejected: '拒绝', cancel_case: '取消', start_modification: '生成执行计划',
+    coding_plan_approved: '批准计划并执行', coding_plan_rejected: '打回重新规划', interrupt_attempt: '停止本轮',
     retry_current_phase: '重试失败阶段', rework: '完整重做', rework_with_latest_config: '刷新配置并重试失败阶段',
     patch_apply_approved: '代码确认', patch_apply_rejected: '打回修订',
     validation_passed: '验证通过', validation_rejected: '验证不通过', release_approved: '发布',
@@ -617,7 +643,10 @@ function confirmText(action: StageAction) {
   return ({
     owner_approved: '批准后工作项将进入可执行状态，是否继续？', owner_rejected: '拒绝后工作项将结束，是否继续？',
     cancel_case: '取消后工作项将结束，是否继续？', patch_apply_approved: '该操作会修改真实仓库，是否继续？',
-    start_modification: '确认后 Agent 将开始修改真实仓库，是否继续？',
+    start_modification: '确认后 Supervisor 会先只读检查真实仓库并生成计划，不会修改代码，是否继续？',
+    coding_plan_approved: '批准后 Supervisor 会恢复同一 Claude Session 并启动仓库 Agent，是否继续？',
+    coding_plan_rejected: '提交意见后 Supervisor 会自动恢复同一 Session 重新规划，是否继续？',
+    interrupt_attempt: '将停止当前 Claude SDK Coding Attempt，保留现场并进入可恢复阻塞，是否继续？',
     retry_current_phase: '将复用已完成成果，只重试失败阶段，是否继续？',
     rework: '将放弃当前执行断点并完整重做，是否继续？',
     rework_with_latest_config: '将刷新 Agent 与模型配置，保留已有计划并重试失败阶段，是否继续？',
@@ -632,6 +661,9 @@ function stageSummary(stage: FlowStage, workItem: WorkItem, flow: WorkItemFlow) 
   if (stage.id === 'created') return `${workItem.createdBy || '系统'} 创建了“${workItem.title}”。`;
   if (stage.id === 'approval') return stage.status === 'waiting' ? '等待系统负责人确认是否进入执行。' : '负责人审批结果已记录。';
   if (stage.id === 'execution') {
+    if (flow.codingPlan?.status === 'planning') return 'Supervisor 正在只读检查真实仓库并生成可审批计划。';
+    if (flow.codingPlan?.status === 'proposed') return `第 ${flow.codingPlan.revision} 版计划已生成，等待负责人批准或带意见打回。`;
+    if (flow.codingPlan?.status === 'approved' && !stage.agents?.length) return '计划已批准，正在恢复 Claude Session。';
     if (stage.agents?.length) return `Claude SDK Supervisor 正在调度 ${Math.max(0, stage.agents.length - 1)} 个仓库子 Agent。`;
     return '等待 Coding Supervisor 启动。';
   }
@@ -679,6 +711,10 @@ function attemptStatusName(status: FlowAttempt['status']) {
 
 function revisionStatusName(status: WorkItemFlow['revisions'][number]['status']) {
   return ({ running: '修订中', completed: '已完成', failed: '已阻塞' } as const)[status];
+}
+
+function planStatusName(status: CodingPlanView['status']) {
+  return ({ planning: '规划中', proposed: '等待审批', approved: '已批准', rejected: '已打回' } as const)[status];
 }
 
 function waitingRoleName(role?: string) {

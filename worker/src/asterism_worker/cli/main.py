@@ -9,6 +9,7 @@ from temporalio.worker import Worker
 
 from asterism_worker.activities.execution import (
     apply_patch_to_repo,
+    generate_coding_plan,
     revert_patch,
     run_coding_attempt,
     run_release,
@@ -48,6 +49,7 @@ async def _worker() -> None:
         workflows=[AsterismCaseWorkflow, AsterismRouteIndexWorkflow],
         activities=[
             fetch_context,
+            generate_coding_plan,
             run_coding_attempt,
             apply_patch_to_repo,
             run_release,

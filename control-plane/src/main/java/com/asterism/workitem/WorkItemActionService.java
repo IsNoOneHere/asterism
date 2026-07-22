@@ -20,7 +20,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Instant;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,7 +32,8 @@ public class WorkItemActionService {
     private static final Logger log = LoggerFactory.getLogger(WorkItemActionService.class);
     private static final Map<String, List<String>> ACTIONS = Map.ofEntries(
             Map.entry("waiting_owner_approval", List.of("owner_approved", "owner_rejected", "cancel_case")),
-            Map.entry("activated", List.of("start_modification", "cancel_case")),
+            Map.entry("activated", List.of(
+                    "start_modification", "coding_plan_approved", "coding_plan_rejected", "interrupt_attempt", "cancel_case")),
             Map.entry("worker_blocked", List.of(
                     "retry_current_phase", "rework", "rework_with_latest_config", "cancel_case")),
             Map.entry("validation_failed", List.of("rework", "cancel_case")),
@@ -42,12 +42,17 @@ public class WorkItemActionService {
             Map.entry("validation_passed", List.of("release_approved", "cancel_case")),
             Map.entry("waiting_merge", List.of("check_merge_status", "rework", "cancel_case")));
     private static final Set<String> VALIDATION_ACTIONS = Set.of("validation_passed", "validation_rejected");
-    private static final Set<String> CONFIG_REFRESH_PHASES = Set.of("coding");
+    private static final Set<String> CONFIG_REFRESH_PHASES = Set.of("planning", "coding");
     private static final Map<String, Set<String>> NOTE_REQUIRED_STATUSES = Map.of(
+            "coding_plan_rejected", Set.of("activated"),
             "patch_apply_rejected", Set.of("modification_completed"),
             "rework", Set.of("waiting_merge"));
     private static final Predicate<RuntimeState> ALWAYS_AVAILABLE = ignored -> true;
     private static final Map<String, Predicate<RuntimeState>> ACTION_GUARDS = Map.of(
+            "start_modification", RuntimeState::planningMayStart,
+            "coding_plan_approved", RuntimeState::planMayBeReviewed,
+            "coding_plan_rejected", RuntimeState::planMayBeReviewed,
+            "interrupt_attempt", RuntimeState::attemptInterruptible,
             "retry_current_phase", RuntimeState::phaseRetrySupported,
             "rework_with_latest_config", RuntimeState::configurationRefreshSupported);
 
@@ -118,7 +123,7 @@ public class WorkItemActionService {
 
     private boolean actionStillAvailable(String action, WorkItemProjection item) {
         var runtime = runtime(item);
-        return runtime.pendingAction() == null
+        return pendingActionAllows(action, runtime)
                 && ACTIONS.getOrDefault(item.lifecycleStatus(), List.of()).contains(action)
                 && actionAvailable(action, runtime);
     }
@@ -131,9 +136,15 @@ public class WorkItemActionService {
                 .filter(action -> requesterMayValidate(item, runtime, action, actor))
                 .toList();
         available = available.stream().filter(action -> actionAvailable(action, runtime)).toList();
-        if (runtime.pendingAction() != null) available = List.of();
+        if (runtime.pendingAction() != null) {
+            available = canControl && runtime.attemptInterruptible()
+                    ? available.stream().filter("interrupt_attempt"::equals).toList()
+                    : List.of();
+        }
         return new Availability(canControl || !available.isEmpty(), available, runtime.pendingAction(),
-                runtime.releaseMode(), runtime.validationMode());
+                runtime.releaseMode(), runtime.validationMode(),
+                runtime.currentStage(item.lifecycleStatus(), item.currentStage()),
+                runtime.waitingFor(item.lifecycleStatus(), item.waitingFor()));
     }
 
     private PreparedSignal prepare(String workItemId, String action, ActionRequest rawRequest, Authentication actor) {
@@ -160,7 +171,7 @@ public class WorkItemActionService {
             return prepared(item, requestId, signalId, requestKey, note, evidence, Map.of(),
                     actor.getName(), false);
         }
-        if (runtime.pendingAction() != null && !signalId.equals(runtime.pendingAction().signalId())) {
+        if (!pendingActionAllows(action, runtime) && !signalId.equals(runtime.pendingAction().signalId())) {
             throw new ApiException(HttpStatus.CONFLICT, "ACTION_PENDING", "已有手动动作正在执行");
         }
         if (request.expectedStatus() != null && !request.expectedStatus().equals(item.lifecycleStatus())) {
@@ -233,6 +244,11 @@ public class WorkItemActionService {
         return ACTION_GUARDS.getOrDefault(action, ALWAYS_AVAILABLE).test(runtime);
     }
 
+    private boolean pendingActionAllows(String action, RuntimeState runtime) {
+        return runtime.pendingAction() == null
+                || ("interrupt_attempt".equals(action) && runtime.attemptInterruptible());
+    }
+
     private boolean noteRequired(String action, String status) {
         return NOTE_REQUIRED_STATUSES.getOrDefault(action, Set.of()).contains(status);
     }
@@ -241,17 +257,13 @@ public class WorkItemActionService {
         String releaseMode = "";
         String validationMode = "";
         String failedPhase = "";
-        PendingAction pending = null;
+        String planState = "";
         var timeline = events.findByWorkItemId(item.workItemId());
-        var completedSignals = new HashSet<String>();
         for (var event : timeline) {
             var payload = payload(event);
             if ("OwnerApprovalRequested".equals(event.eventType())) {
                 releaseMode = string(payload.get("releaseMode"));
                 validationMode = string(payload.get("validationMode"));
-            }
-            if ("TemporalActionCompleted".equals(event.eventType())) {
-                completedSignals.add(string(payload.get("signalId")));
             }
             if ("WorkerBlocked".equals(event.eventType())) {
                 failedPhase = string(payload.get("failedPhase"));
@@ -259,19 +271,30 @@ public class WorkItemActionService {
             if ("ReworkStarted".equals(event.eventType())) {
                 failedPhase = "";
             }
+            planState = switch (event.eventType()) {
+                case "CodingPlanStarted" -> "planning";
+                case "CodingPlanProposed" -> "proposed";
+                case "CodingPlanApproved" -> "approved";
+                case "CodingPlanRejected" -> "rejected";
+                case "CodingPlanInvalidated" -> "invalidated";
+                case "CodingAttemptStarted" -> "executing";
+                default -> planState;
+            };
         }
+        // 中断动作可以与原执行动作短暂并存，按 signalId 分别结算，不能互相覆盖。
+        var pendingSignals = new LinkedHashMap<String, PendingAction>();
         for (var event : timeline) {
             var payload = payload(event);
             if (List.of("OwnerApprovalSignalSubmitted", "TemporalSignalSubmitted").contains(event.eventType())) {
                 var signalId = string(payload.get("signalId"));
-                pending = completedSignals.contains(signalId) ? null
-                        : new PendingAction(string(payload.get("signalName")), signalId, event.createdAt());
-            } else if (pending != null && List.of("TemporalSignalFailed", "TemporalActionCompleted").contains(event.eventType())
-                    && pending.signalId().equals(string(payload.get("signalId")))) {
-                pending = null;
+                pendingSignals.put(signalId,
+                        new PendingAction(string(payload.get("signalName")), signalId, event.createdAt()));
+            } else if (List.of("TemporalSignalFailed", "TemporalActionCompleted").contains(event.eventType())) {
+                pendingSignals.remove(string(payload.get("signalId")));
             }
         }
-        return new RuntimeState(releaseMode, validationMode, pending, failedPhase);
+        PendingAction pending = pendingSignals.values().stream().reduce((left, right) -> right).orElse(null);
+        return new RuntimeState(releaseMode, validationMode, pending, failedPhase, planState);
     }
 
     private Map<String, Object> latestAgentConfig(String systemId) {
@@ -322,17 +345,45 @@ public class WorkItemActionService {
     }
 
     public record Availability(boolean canAct, List<String> actions, PendingAction pendingAction,
-                               String releaseMode, String validationMode) {
+                               String releaseMode, String validationMode, String currentStage, String waitingFor) {
     }
 
     private record RuntimeState(String releaseMode, String validationMode, PendingAction pendingAction,
-                                String failedPhase) {
+                                String failedPhase, String planState) {
+        boolean planningMayStart() {
+            return planState.isBlank() || "rejected".equals(planState);
+        }
+
+        boolean planMayBeReviewed() {
+            return "proposed".equals(planState);
+        }
+
         boolean phaseRetrySupported() {
             return !failedPhase.isBlank();
         }
 
         boolean configurationRefreshSupported() {
             return CONFIG_REFRESH_PHASES.contains(failedPhase);
+        }
+
+        boolean attemptInterruptible() {
+            return "executing".equals(planState)
+                    && pendingAction != null
+                    && !"interrupt_attempt".equals(pendingAction.action());
+        }
+
+        String currentStage(String lifecycleStatus, String fallback) {
+            if (!"activated".equals(lifecycleStatus)) return fallback;
+            return switch (planState) {
+                case "planning" -> "Supervisor 正在生成计划";
+                case "proposed" -> "等待计划审批";
+                case "approved", "executing" -> "Agent 正在执行已批准计划";
+                default -> fallback;
+            };
+        }
+
+        String waitingFor(String lifecycleStatus, String fallback) {
+            return "activated".equals(lifecycleStatus) && "proposed".equals(planState) ? "owner" : fallback;
         }
     }
 

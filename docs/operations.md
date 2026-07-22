@@ -29,12 +29,15 @@ make test-web
 
 ## 修订闭环验收
 
-1. 创建需求，负责人审批并启动开发。
-2. 等待代码修改完成，进入“代码变更”审查 Diff。
-3. 在“修订意见（必填）”中写明问题，点击“打回修订”。
-4. 确认页面立即显示“第 1 轮修订中”，无需再提交“开始执行”。
-5. 在“修订历史”核对意见、提交人、时间、Diff 摘要和 `incremental | full`。
-6. 第二轮 Diff 通过后继续验证与发布。GitLab 模式另外在 `waiting_merge` 打回一次，确认原 MR 的 source branch 不变且 commit 已更新。
+1. 创建需求，负责人审批并点击“生成执行计划”。
+2. 核对计划中的仓库任务、验收标准引用、代码证据和风险；带意见打回一次，确认下一版计划自动生成，再批准计划。
+3. 等待代码修改完成，进入“代码变更”审查 Diff。
+4. 在“修订意见（必填）”中写明问题，点击“打回修订”。
+5. 确认页面立即显示“第 1 轮修订中”，无需再提交“开始执行”。
+6. 在“修订历史”核对意见、提交人、时间、Diff 摘要和 `incremental | full`。
+7. 第二轮 Diff 通过后继续验证与发布。GitLab 模式另外在 `waiting_merge` 打回一次，确认原 MR 的 source branch 不变且 commit 已更新。
+
+Planning Activity 最长 45 分钟，Coding Activity 的 24 小时仅是失控保护，不是 15 分钟业务截止时间。人工审批期间没有 Activity 在运行，Temporal Workflow 可持续等待。`worker-artifacts` 持久卷同时保存 Claude 原生 runtime、Session 镜像和 `cases/<caseId>/workspace`；不要把该卷改成容器临时目录，否则 Worker 重启后会丢失会话加速上下文与未回传的局部代码。本地 Worker 优先从原生 runtime 恢复；runtime 丢失或 Worker 工作区路径变化时，系统根据已批准计划、Case workspace、候选 Diff 和人工意见重建新 Session。多 Worker 的共享 Session 物化需要独立 Artifact Store 适配器，不在单 Worker 部署中假装支持。Session 与工作区的保留周期应覆盖工作项生命周期，终态清理由后续运维策略统一处理。
 
 管理员在“Agent”页设置 `maxRevisions`，取值 1–20，默认 5。该值只对之后创建的 Case 生效。达到上限时事件应为 `WorkerBlocked(reason=revision_limit_reached)`；选择“完整重做”后轮次从 0 重新计算。
 

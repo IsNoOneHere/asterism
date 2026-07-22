@@ -13,7 +13,7 @@ flowchart LR
     P["ModelProfile\nprovider/baseUrl/apiKey/model"] --> U["product\nPRD 对话"]
     P --> D["developer\nCoding Supervisor"]
     D --> E["claude_sdk_team"]
-    E --> R["per-repo subagents"]
+    E --> R["Root Supervisor\n直接写 + 可选 subagents"]
 ```
 
 - **ModelProfile**：模型接入点，只描述 `name/provider/baseUrl/apiKey/model`；公开 API 只返回 `apiKeySet`。
@@ -26,41 +26,45 @@ flowchart LR
 
 | Engine | 用途 | 行为 |
 | --- | --- | --- |
-| `claude_sdk_team` | 生产代码执行 | 一个 Claude SDK Supervisor 调度按仓库隔离的原生子 Agent |
+| `claude_sdk_team` | 生产代码执行 | 一个 Claude SDK Root Supervisor 对整个 Coding Attempt 负责，原生子 Agent 仅作可选加速 |
 | `fake` | 测试基线 | 返回确定性结果，不允许用于业务工作项 |
 
-Worker 内部保留 `ExecutionProvider` 协议作为开源扩展点。新执行内核应实现统一的 `CodingAttemptRequest → CodingAttemptResult` 协议并在 factory 注册；生命周期 Workflow 不感知厂商协议，也不为新 Provider 增加一套 Planner 或状态机。
+Worker 内部保留 `ExecutionProvider` 协议作为开源扩展点。新执行内核应实现统一的 `CodingPlanRequest → CodingPlanDraft` 与 `CodingAttemptRequest → CodingAttemptResult` 协议并在 factory 注册；生命周期 Workflow 不感知厂商协议，也不为新 Provider 增加一套 Planner 或状态机。
 
 ## Coding Attempt
 
 ```mermaid
 flowchart LR
-    T["Temporal 生命周期"] --> S["Claude SDK Supervisor\n只读与调度"]
-    S --> R["Explore / Plan\n工作区只读"]
-    S --> A["仓库子 Agent\n只写所属仓库"]
-    R --> A
-    A --> D["按仓库收集 Git Diff"]
+    T["Temporal 生命周期"] --> P["Claude SDK Planning Turn\n真实仓库只读"]
+    P --> H["人工批准 / 带意见打回"]
+    H -->|"批准"| S["优先恢复计划 Session\n不可用则重建"]
+    H -->|"打回，新 Session"| P
+    S --> A["Root Supervisor\n路径门禁内直接写"]
+    A --> O["ExecutionOutcome\ncompleted / blocked"]
+    O --> D["按仓库收集 Git Diff"]
     D --> G["路径门禁 + git apply --check"]
     G --> H["人工代码确认 / 验证 / 发布"]
 ```
 
-Workflow 固定执行 `fetch_context → run_coding_attempt → ModificationCompleted`，不生成独立执行计划，不让模型提供 `target_files/scope_paths` 作为权限依据。每个仓库自动生成一个可写 SDK 原生子 Agent，统一继承 `developer` 的模型、端点、API Key 和执行预算。
+Workflow 固定执行 `fetch_context → generate_coding_plan → 人工等待 → run_coding_attempt → ModificationCompleted | WorkerBlocked`。Planning Turn 属于同一个 `claude_sdk_team` Provider，不恢复旧 `/plan`、assignments 或独立 Planner Profile。计划只包含稳定 `taskId`、仓库目标、验收标准引用和真实代码证据；模型生成的文件路径不能成为 `target_files/scope_paths` 权限依据。Root Supervisor 可在仓库门禁内直接写；每仓原生子 Agent 只继承同一模型和受限路径，是否使用由 Root 决定，不形成外部 Stage 或 handoff。
 
-SDK 顶层工具列表是所有子 Agent 的能力上限。Supervisor 只有 `Read/Glob/Grep/Agent/TaskOutput`；未绑定仓库的内置 Agent 默认只读；仓库 Agent 可读取团队工作区，但 Edit/Write 按 `agent_id → repo/allowedPaths/forbiddenPaths` 硬约束。Bash 只允许系统预配置的仓库验证命令。
+Planning Activity 正常结束后 Claude 进程退出，Temporal Workflow 可长期等待人工信号。恢复的权威来源是持久执行上下文：已批准计划与 `baseRevisions`、Case workspace、候选 Diff、人工反馈和轮次；Claude Session 只是优先复用的上下文加速项。本地单 Worker 直接恢复 artifacts 持久卷中的原生 Claude runtime，Session transcript 同时镜像到 Store 供审计和未来共享存储适配器使用。如果本机 runtime 不存在，Provider 会从持久执行上下文创建新 Session，不让工作项卡死，也不会为了读取父进程私有物化目录而取消 Claude CLI 的低权限隔离。计划打回或仓库基线失效时，系统把上一版计划与意见传入一个新的 Planning Session，避免连续打回造成上下文无限膨胀。执行阶段不再读取 Agent 的 15 分钟 `timeoutSeconds` 作为总时限，Temporal 仅保留 24 小时 Activity 失控保护，并通过心跳和一次自动重试恢复 Worker 中断。
 
-Provider 完成后，Worker 再按仓库收集 Git Diff、执行路径门禁和 `git apply --check`。模型输出、工具调用结果或被 Git 忽略的路径都不能放宽门禁。
+SDK 顶层工具列表是整个 Attempt 的能力上限。Root Supervisor 的 Edit/Write 会先按目标文件定位所属仓库，再应用该仓库 `allowedPaths/forbiddenPaths`；未绑定仓库的内置 Agent 默认只读；仓库 Agent 也只能写自己负责的仓库。验证命令由外层 Workflow 执行，Coding 会话不开放 Bash。
+
+Provider 使用 Claude Agent SDK 原生 `output_format/structured_output` 返回顶层 `ExecutionOutcome(status, taskOutcomes, blockers, changedPaths, sessionId)`。`SubagentStart/Stop` 和后台任务终态只作遥测，不参与完成判定。`permission_denials`、`deferred_tool_use`、结构化 blocked、批准任务未覆盖或没有有效 Diff 都会进入 `WorkerBlocked`，并保留 Session、工作区和局部候选。只有结构化 completed、真实 Diff、路径门禁和 `git apply --check` 同时通过才产生 `ModificationCompleted`；模型摘要和模型生成路径都不能放宽门禁。
 
 ## 阶段恢复
 
-生命周期按 `coding → patch → validation → release` 恢复。失败事件记录 `failedPhase`，恢复 runner 与 checkpoint 由注册表声明；新增阶段通过增加策略扩展，不按错误原因堆叠条件分支。
+生命周期按 `planning → coding → patch → validation → release` 恢复。失败事件记录 `failedPhase`，恢复 runner 与 checkpoint 由注册表声明；新增阶段通过增加策略扩展，不按错误原因堆叠条件分支。
 
 Workflow 按职责拆分为四个模块：`lifecycle.py` 只保留 signal、query、主循环与 `ActionSpec` 动作分发；`coding.py` 管理 Coding Attempt 与候选上下文；`publishing.py` 管理 Patch、MR 和 Release；`validation.py` 管理验证与回滚。只有 `lifecycle.py` 注册 Temporal Workflow type，其余模块不引入第二套状态机。
 
 | 动作 | 语义 | 复用范围 |
 | --- | --- | --- |
 | `retry_current_phase` | 重试失败阶段 | 保留上下文、候选 Diff 与已完成阶段 |
-| `rework` | 完整重做 | 从 Coding Attempt 重新执行，保留人工反馈但不恢复旧候选 |
-| `rework_with_latest_config` | 刷新配置后重试 Coding | 替换 Agent 配置快照，保留候选与上下文 |
+| `rework` | 完整重做 | 回到 Planning Turn 生成新计划，保留人工反馈但不恢复旧候选 |
+| `rework_with_latest_config` | 刷新配置后重试 Planning/Coding | 替换 Agent 配置快照，保留 Session、候选与上下文 |
 
 Patch 恢复会复用 `ModificationCompleted`；Validation 额外恢复 `PatchApplied`；Release 再额外恢复 `ValidationPassed`。GitLab 临时 clone 目录属于 Activity 资源，不写入 Workflow history。
 

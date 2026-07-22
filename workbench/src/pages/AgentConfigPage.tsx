@@ -189,15 +189,14 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
 
     {!modelSection && <dialog ref={agentDialogRef} className="confirm-dialog config-dialog agent-dialog" aria-labelledby="agent-dialog-title" onClose={resetAgent}>
       <form onSubmit={(event) => { event.preventDefault(); saveAgent.mutate(); }}>
-        <div className="config-section-head compact"><div><h2 id="agent-dialog-title">编辑 {agentName}</h2><p>{modelOnly ? '内置沟通 Agent 只选择 Model Profile。' : '执行参数在 Case 启动时固定。'}</p></div></div>
+        <div className="config-section-head compact"><div><h2 id="agent-dialog-title">编辑 {agentName}</h2><p>{modelOnly ? '内置沟通 Agent 只选择 Model Profile。' : '执行使用计划审批和 Temporal 恢复，不再按秒强制截断。'}</p></div></div>
         <div className="agent-role-fields">
           <label>Agent 名称<input required disabled value={agent.name} /></label>
           {!modelOnly && <label>执行内核<select value={agent.engine} onChange={(event) => setAgent({ ...agent, engine: event.target.value })}>{agentEngineOptions(value?.engines).map((engine) => <option key={engine} value={engine}>{engine}</option>)}</select></label>}
           <label>Model Profile<select value={agent.modelProfileRef} onChange={(event) => setAgent({ ...agent, modelProfileRef: event.target.value })}><option value="">回落部署默认</option>{profileOptions(value?.modelProfiles)}</select></label>
           {!modelOnly && <><label>Path Scope（每行一条）<textarea value={agent.pathScope} onChange={(event) => setAgent({ ...agent, pathScope: event.target.value })} /></label>
             <label className="wide-field">Supervisor 提示词<textarea value={agent.prompt} onChange={(event) => setAgent({ ...agent, prompt: event.target.value })} /></label>
-            <label>最大轮次<input type="number" min="1" value={agent.maxTurns} onChange={(event) => setAgent({ ...agent, maxTurns: Number(event.target.value) })} /></label>
-            <label>超时（秒）<input type="number" min="1" value={agent.timeoutSeconds} onChange={(event) => setAgent({ ...agent, timeoutSeconds: Number(event.target.value) })} /></label></>}
+            <label>最大轮次<input type="number" min="1" value={agent.maxTurns} onChange={(event) => setAgent({ ...agent, maxTurns: Number(event.target.value) })} /></label></>}
         </div>
         {saveAgent.error && <div className="error-text">{errorMessage(saveAgent.error)}</div>}
         <div className="button-row"><button type="button" className="secondary" onClick={() => agentDialogRef.current?.close()}>取消</button><button type="submit" disabled={!canManageCurrentSystem || saveAgent.isPending}>保存 Agent</button></div>

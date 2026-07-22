@@ -84,6 +84,24 @@ export type RevisionHistoryView = {
   status: 'running' | 'completed' | 'failed';
 };
 
+export type CodingPlanTaskView = {
+  taskId: string;
+  repo: string;
+  objective: string;
+  acceptanceCriteriaRefs: string[];
+  evidence: string[];
+};
+
+export type CodingPlanView = {
+  revision: number;
+  summary: string;
+  tasks: CodingPlanTaskView[];
+  risks: string[];
+  openQuestions: string[];
+  baseRevisions: Record<string, string>;
+  status: 'planning' | 'proposed' | 'approved' | 'rejected';
+};
+
 export type WorkItemFlow = {
   currentStageId: FlowStageId;
   stages: FlowStage[];
@@ -94,6 +112,7 @@ export type WorkItemFlow = {
   checks: ValidationCheckView[];
   revisions: RevisionHistoryView[];
   activeRevision: RevisionHistoryView | null;
+  codingPlan: CodingPlanView | null;
 };
 
 export const FLOW_STAGES: ReadonlyArray<{ id: FlowStageId; label: string }> = [
@@ -110,7 +129,10 @@ const STAGE_INDEX = new Map(FLOW_STAGES.map((stage, index) => [stage.id, index])
 const FAILURE_EVENTS = new Set(['WorkerBlocked', 'PatchApplyBlocked', 'PatchRejected', 'ValidationFailed', 'MergeRequestClosed']);
 const FAILURE_REASON_LABELS: Record<string, string> = {
   context_fetch_failed: '获取执行上下文失败',
+  coding_plan_failed: 'Claude SDK 规划失败',
   coding_attempt_failed: 'Claude SDK Coding Attempt 执行失败',
+  coding_attempt_blocked: 'Coding Attempt 尚未完成，已保留现场等待继续',
+  attempt_interrupted: '本轮 Coding Attempt 已由负责人停止，现场已保留',
   execution_failed: 'Agent 执行失败',
   role_scope_violation: 'Agent 修改超出允许范围',
   unknown_repo: '未找到目标仓库',
@@ -122,7 +144,8 @@ const FAILURE_REASON_LABELS: Record<string, string> = {
   revision_limit_reached: '已达到最大修订轮次，等待负责人决定取消或完整重做',
 };
 const ATTEMPT_EVENTS = new Set([
-  'WorkItemActivated', 'ReworkStarted', 'RevisionRequested', 'CodingAttemptStarted', 'AgentStageCompleted', 'ModificationCompleted',
+  'WorkItemActivated', 'ReworkStarted', 'CodingPlanStarted', 'CodingPlanProposed', 'CodingPlanApproved',
+  'CodingPlanRejected', 'CodingPlanInvalidated', 'RevisionRequested', 'CodingAttemptStarted', 'AgentStageCompleted', 'ModificationCompleted',
   'WorkerBlocked', 'PatchApplied', 'PatchApplyBlocked', 'PatchRejected', 'ValidationPassed', 'ValidationFailed',
   'RepositoryReleasePrepared', 'MergeRequestCreated', 'MergeRequestMerged', 'MergeRequestClosed', 'ReleaseCompleted', 'CaseCancelled',
 ]);
@@ -144,6 +167,7 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
   let latestMrRoot = '';
   let validationSkipped = false;
   const revisions: RevisionHistoryView[] = [];
+  let codingPlan: CodingPlanView | null = null;
 
   const addAttemptEvent = (event: WorkItemEvent, stageIds: FlowStageId[]) => {
     if (!ATTEMPT_EVENTS.has(event.eventType)) return;
@@ -221,6 +245,25 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
         break;
       case 'WorkItemRejected':
         stageById.get('approval')!.failureReason = failureReason(event) || '负责人已拒绝';
+        break;
+      case 'CodingPlanStarted':
+        codingPlan = {
+          revision: numberValue(payload?.planRevision ?? payload?.plan_revision) ?? 1,
+          summary: 'Supervisor 正在检查真实仓库并生成计划',
+          tasks: [], risks: [], openQuestions: [], baseRevisions: {}, status: 'planning',
+        };
+        break;
+      case 'CodingPlanProposed':
+        codingPlan = parseCodingPlan(payload);
+        break;
+      case 'CodingPlanApproved':
+        codingPlan = updatePlanStatus(codingPlan, 'approved');
+        break;
+      case 'CodingPlanRejected':
+        codingPlan = updatePlanStatus(codingPlan, 'rejected');
+        break;
+      case 'CodingPlanInvalidated':
+        codingPlan = updatePlanStatus(codingPlan, 'rejected');
         break;
       case 'CodingAttemptStarted': {
         const supervisor = recordValue(payload?.supervisor);
@@ -355,13 +398,16 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
 
   const activeRevision = [...revisions].reverse().find((revision) => revision.status === 'running') ?? null;
   return { currentStageId, stages, attempts, events, modification, repositories: repositoryViews, checks,
-    revisions, activeRevision };
+    revisions, activeRevision, codingPlan };
 }
 
 export function eventName(eventType: string) {
   return ({
     OwnerApprovalRequested: '已请求负责人审批', OwnerApprovalSignalSubmitted: '负责人已提交审批',
     WorkItemActivated: '工作项已激活', WorkItemRejected: '负责人已拒绝', ReworkStarted: '已开始重新执行',
+    CodingPlanStarted: 'Supervisor 已开始规划', CodingPlanProposed: 'Coding Plan 等待审批',
+    CodingPlanApproved: 'Coding Plan 已批准', CodingPlanRejected: 'Coding Plan 已打回',
+    CodingPlanInvalidated: '代码基线已更新，计划自动失效',
     RevisionRequested: '已请求人工意见修订',
     CodingAttemptStarted: 'Claude SDK Coding Attempt 已启动',
     AgentStageCompleted: 'Agent 阶段已完成', ModificationCompleted: '修改已完成',
@@ -416,6 +462,11 @@ function stagesForEvent(event: WorkItemEvent, fallback: FlowStageId): FlowStageI
     case 'WorkItemActivated':
     case 'WorkItemRejected': return ['approval'];
     case 'ReworkStarted':
+    case 'CodingPlanStarted':
+    case 'CodingPlanProposed':
+    case 'CodingPlanApproved':
+    case 'CodingPlanRejected':
+    case 'CodingPlanInvalidated':
     case 'RevisionRequested':
     case 'CodingAttemptStarted':
     case 'AgentStageCompleted': return ['execution'];
@@ -448,6 +499,8 @@ function blockedStage(payload: Record<string, unknown> | null, fallback: FlowSta
 function openedStage(eventType: string): FlowStageId | null {
   return ({
     OwnerApprovalRequested: 'approval', WorkItemActivated: 'execution', ReworkStarted: 'execution',
+    CodingPlanStarted: 'execution', CodingPlanProposed: 'execution', CodingPlanApproved: 'execution',
+    CodingPlanInvalidated: 'execution',
     CodingAttemptStarted: 'execution', AgentStageCompleted: 'execution', ModificationCompleted: 'patch',
     PatchApplied: 'validation', ValidationPassed: 'release', RepositoryReleasePrepared: 'release', MergeRequestCreated: 'release',
     MergeRequestMerged: 'release', MergeRequestClosed: 'release',
@@ -532,6 +585,32 @@ function parseModification(payload: Record<string, unknown> | null): Modificatio
     revision: numberValue(payload.revision) ?? 0,
     revisionMode: revisionMode(payload.revisionMode ?? payload.revision_mode),
   };
+}
+
+function parseCodingPlan(payload: Record<string, unknown> | null): CodingPlanView {
+  const tasks = arrayRecords(payload?.tasks).map((task) => ({
+    taskId: stringValue(task.taskId ?? task.task_id),
+    repo: stringValue(task.repo),
+    objective: stringValue(task.objective),
+    acceptanceCriteriaRefs: stringList(task.acceptanceCriteriaRefs ?? task.acceptance_criteria_refs),
+    evidence: stringList(task.evidence),
+  }));
+  const revisions = recordValue(payload?.baseRevisions ?? payload?.base_revisions) ?? {};
+  return {
+    revision: numberValue(payload?.planRevision ?? payload?.plan_revision) ?? 1,
+    summary: stringValue(payload?.summary),
+    tasks,
+    risks: stringList(payload?.risks),
+    openQuestions: stringList(payload?.openQuestions ?? payload?.open_questions),
+    baseRevisions: Object.fromEntries(Object.entries(revisions).map(([repo, value]) => [repo, stringValue(value)])),
+    status: 'proposed',
+  };
+}
+
+function updatePlanStatus(
+  plan: CodingPlanView | null, status: CodingPlanView['status'],
+): CodingPlanView | null {
+  return plan ? { ...plan, status } : null;
 }
 
 function revisionMode(value: unknown): 'incremental' | 'full' {

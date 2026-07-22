@@ -3443,10 +3443,93 @@ button.requirement-attachment-card:hover:not(:disabled) {
   margin: 0;
 }
 
+.coding-plan {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding: 18px;
+}
+
+.coding-plan.proposed {
+  border-color: #aeb7ef;
+}
+
+.coding-plan > header {
+  align-items: start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.coding-plan h3,
+.coding-plan p {
+  margin: 0;
+}
+
+.coding-plan header p,
+.coding-plan-boundary {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 5px;
+}
+
+.coding-plan header > span {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+
+.coding-plan > ol {
+  display: grid;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.coding-plan > ol > li {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.coding-plan > ol > li > div {
+  display: grid;
+  gap: 4px;
+  grid-template-columns: minmax(90px, 0.25fr) minmax(0, 1fr);
+}
+
+.coding-plan > ol ul,
+.coding-plan-notes ul {
+  margin: 5px 0 0;
+  padding-left: 20px;
+}
+
+.coding-plan > ol small,
+.coding-plan code {
+  color: var(--muted);
+}
+
+.coding-plan-notes {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .execution-detail {
   display: grid;
   gap: 26px;
-  grid-template-columns: minmax(240px, 0.8fr) minmax(360px, 1.2fr);
+  grid-template-columns: minmax(0, 1fr);
   margin-bottom: 22px;
 }
 

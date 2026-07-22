@@ -1,9 +1,9 @@
-import asyncio
 import logging
 import subprocess
 from pathlib import Path
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from asterism_worker.activities.execution_support import (
     changed_paths,
@@ -17,6 +17,8 @@ from asterism_worker.agent_config import resolve_agent_config
 from asterism_worker.config.settings import load_settings
 from asterism_worker.contracts import (
     CodingAttemptRequest,
+    CodingPlanRequest,
+    PLAN_BASE_CHANGED_ERROR,
     PatchApplyRequest,
     PatchApplyResult,
 )
@@ -24,10 +26,49 @@ from asterism_worker.providers.factory import build_execution_provider
 from asterism_worker.repo_source import (
     TeamWorkspace,
     cleanup_repo_workspace,
+    prepare_case_workspace,
+    prepare_repo_workspace,
     prepare_team_workspace,
+    refresh_case_workspace,
 )
 
 log = logging.getLogger(__name__)
+
+
+@activity.defn
+async def generate_coding_plan(request: dict) -> dict:
+    """在持久工作区执行只读规划，Activity 完成后由 Temporal 等待人工审批。"""
+
+    settings = load_settings()
+    parsed = CodingPlanRequest.model_validate(request)
+    workspace = await (
+        refresh_case_workspace(parsed.repos, parsed.system_id, parsed.case_id, settings)
+        if parsed.refresh_workspace
+        else prepare_case_workspace(parsed.repos, parsed.system_id, parsed.case_id, settings)
+    )
+
+    def heartbeat_provider_event(event: dict) -> None:
+        try:
+            activity.heartbeat({
+                "work_item_id": parsed.work_item_id,
+                "phase": "planning",
+                "event_type": event.get("type", ""),
+            })
+        except RuntimeError:
+            pass
+
+    resolved = await resolve_agent_config(
+        settings,
+        parsed.system_id,
+        snapshot=parsed.agent_config_snapshot,
+        callbacks={"event": heartbeat_provider_event},
+    )
+    provider = build_execution_provider(resolved)
+    log.info(
+        "启动 Claude SDK 只读规划 work_item=%s revision=%s",
+        parsed.work_item_id, parsed.plan_revision,
+    )
+    return (await provider.plan(parsed, workspace)).model_dump()
 
 
 @activity.defn
@@ -36,9 +77,14 @@ async def run_coding_attempt(request: dict) -> dict:
 
     settings = load_settings()
     parsed = CodingAttemptRequest.model_validate(request)
-    workspace = await prepare_team_workspace(parsed.repos, parsed.system_id, settings)
+    persistent = bool(parsed.approved_plan or parsed.resume_session_id)
+    workspace = await (
+        prepare_case_workspace(parsed.repos, parsed.system_id, parsed.case_id, settings)
+        if persistent else prepare_team_workspace(parsed.repos, parsed.system_id, settings)
+    )
     try:
         parsed = _restore_revision_candidate(parsed, workspace)
+        await _validate_plan_base(parsed, workspace, settings)
 
         def heartbeat_provider_event(event: dict) -> None:
             try:
@@ -61,10 +107,8 @@ async def run_coding_attempt(request: dict) -> dict:
             "启动 Claude SDK Coding Supervisor",
             extra={"work_item_id": parsed.work_item_id, "repo_count": len(parsed.repos)},
         )
-        result = await asyncio.wait_for(
-            provider.run(parsed, workspace),
-            timeout=resolved.engine.timeout_seconds,
-        )
+        # 总时限由 Temporal Activity 管理；不再把 Agent 配置的 15 分钟当作强制截断点。
+        result = await provider.run(parsed, workspace)
         by_id = {repo.repo_id: repo for repo in parsed.repos}
         for change in result.repo_changes:
             if not change.diff_patch.strip():
@@ -80,7 +124,55 @@ async def run_coding_attempt(request: dict) -> dict:
             result = result.model_copy(update={"revision_mode": parsed.revision_context.revision_mode})
         return result.model_dump()
     finally:
-        cleanup_repo_workspace(workspace.root)
+        if not persistent:
+            cleanup_repo_workspace(workspace.root)
+
+
+async def _validate_plan_base(
+    request: CodingAttemptRequest, workspace: TeamWorkspace, settings,
+) -> None:
+    plan = request.approved_plan
+    if plan is None:
+        return
+    for repo_id, expected in plan.base_revisions.items():
+        repo_path = workspace.repos.get(repo_id)
+        if repo_path is None:
+            raise RuntimeError(f"已批准计划引用未知仓库: {repo_id}")
+        actual = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo_path, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        if expected and actual != expected:
+            _raise_plan_base_changed(repo_id, expected, actual, "workspace")
+        repo = next((item for item in request.repos if item.repo_id == repo_id), None)
+        if repo is None:
+            continue
+        fresh_path: Path | None = None
+        source_path = Path(repo.local_path).expanduser() if repo.local_path else None
+        try:
+            if repo.clone_mode == "gitlab":
+                fresh_path = await prepare_repo_workspace(repo, request.system_id, settings)
+                source_path = fresh_path
+            if source_path and (source_path / ".git").exists():
+                source_revision = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], cwd=source_path, check=True,
+                    capture_output=True, text=True,
+                ).stdout.strip()
+                if expected and source_revision != expected:
+                    _raise_plan_base_changed(repo_id, expected, source_revision, "source")
+        finally:
+            if fresh_path is not None:
+                cleanup_repo_workspace(fresh_path)
+
+
+def _raise_plan_base_changed(repo_id: str, expected: str, actual: str, source: str) -> None:
+    """用稳定错误类型通知 Workflow：旧计划不可继续执行。"""
+
+    raise ApplicationError(
+        f"{repo_id}: 审批期间仓库已更新，请重新生成计划",
+        {"repo": repo_id, "expected": expected, "actual": actual, "source": source},
+        type=PLAN_BASE_CHANGED_ERROR,
+        non_retryable=True,
+    )
 
 
 def _apply_previous_candidate(request: CodingAttemptRequest, workspace: TeamWorkspace) -> None:

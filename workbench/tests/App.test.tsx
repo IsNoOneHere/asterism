@@ -458,6 +458,42 @@ test('work item detail shows the active revision and revision history', async ()
   expect(screen.getByText('增量修订')).toBeInTheDocument();
 });
 
+test('work item detail reviews a coding plan and requires feedback when rejecting it', async () => {
+  setApiResponse('/api/v5/work-items/wi-1', {
+    workItemId: 'wi-1', systemId: 'alpha-system', title: '登录页规划', lifecycleStatus: 'activated',
+    currentStage: '等待计划审批', waitingFor: 'owner', canControl: true,
+    availableActions: ['coding_plan_approved', 'coding_plan_rejected'], lastAppliedSequence: 3,
+  });
+  setApiResponse('/api/v5/work-items/wi-1/events', [
+    { sequence: 1, eventType: 'WorkItemActivated', payloadJson: '{}' },
+    { sequence: 2, eventType: 'CodingPlanStarted', payloadJson: JSON.stringify({ planRevision: 1 }) },
+    { sequence: 3, eventType: 'CodingPlanProposed', payloadJson: JSON.stringify({
+      planRevision: 1, summary: '只调整登录错误提示',
+      tasks: [{ taskId: 'task-01', repo: 'frontend', objective: '移动提示位置', acceptanceCriteriaRefs: ['AC-1'], evidence: ['src/login.tsx:LoginForm'] }],
+      risks: ['保持后端接口不变'], openQuestions: [], baseRevisions: { frontend: 'abc123' },
+    }) },
+  ]);
+
+  renderApp('/work-items/wi-1');
+
+  expect(await screen.findByRole('heading', { name: 'Coding Plan · 第 1 版' })).toBeInTheDocument();
+  expect(screen.getByText('任务：task-01')).toBeInTheDocument();
+  expect(screen.getByText('src/login.tsx:LoginForm')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '批准计划并执行' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '打回重新规划' }));
+  const dialog = screen.getByRole('dialog');
+  const note = within(dialog).getByLabelText('修订意见（必填）');
+  expect(within(dialog).getByRole('button', { name: '打回重新规划' })).toBeDisabled();
+  fireEvent.change(note, { target: { value: '不要改接口，只调整提示位置' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: '打回重新规划' }));
+
+  await waitFor(() => {
+    const call = vi.mocked(fetch).mock.calls.find(([path, init]) =>
+      String(path).endsWith('/signals/coding_plan_rejected') && init?.method === 'POST');
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ note: '不要改接口，只调整提示位置' });
+  });
+});
+
 test('work item detail shows repository agent completion metadata', async () => {
   renderApp('/work-items/wi-1');
 

@@ -28,6 +28,30 @@ import static org.mockito.Mockito.*;
 
 class WorkItemControllerSignalAttemptTest {
     @Test
+    void proposedCodingPlanReplacesStartWithApproveAndRequiredFeedbackReject() {
+        var fixture = fixture(item("activated", 3));
+        when(fixture.access.canControl("sys-1", fixture.actor)).thenReturn(true);
+        when(fixture.events.findByWorkItemId("wi-1")).thenReturn(List.of(
+                event(1, "WorkItemActivated", "{}"),
+                event(2, "CodingPlanStarted", "{\"planRevision\":1}"),
+                event(3, "CodingPlanProposed", "{\"planRevision\":1}")));
+
+        var availability = fixture.service.availability(item("activated", 3), fixture.actor);
+
+        assertThat(availability.actions()).containsExactly(
+                "coding_plan_approved", "coding_plan_rejected", "cancel_case");
+        assertThat(availability.currentStage()).isEqualTo("等待计划审批");
+        assertThat(availability.waitingFor()).isEqualTo("owner");
+        var blank = new WorkItemActionService.ActionRequest(
+                "request-012", "activated", 3L, "  ", null);
+        assertThatThrownBy(() -> fixture.service.submit(
+                "wi-1", "coding_plan_rejected", blank, fixture.actor))
+                .isInstanceOf(ApiException.class)
+                .extracting(error -> ((ApiException) error).code())
+                .isEqualTo("ACTION_NOTE_REQUIRED");
+    }
+
+    @Test
     void patchAndMergeRejectionsRequireARevisionNote() {
         var patch = fixture(item("modification_completed", 10));
         var merge = fixture(item("waiting_merge", 11));

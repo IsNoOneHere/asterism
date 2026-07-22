@@ -27,6 +27,23 @@ class RepoSourcePort(Protocol):
 class TeamWorkspace:
     root: Path
     repos: dict[str, Path]
+    persistent: bool = False
+
+
+def reset_team_workspace(workspace: TeamWorkspace) -> None:
+    """候选已持久化后，把稳定工作区恢复到批准计划的 Git 基线。"""
+
+    for repo_id, repo_path in workspace.repos.items():
+        safe_directory = f"safe.directory={repo_path.resolve()}"
+        subprocess.run(
+            ["git", "-c", safe_directory, "reset", "--hard", "HEAD"],
+            cwd=repo_path, check=True, capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["git", "-c", safe_directory, "clean", "-fd"],
+            cwd=repo_path, check=True, capture_output=True, text=True,
+        )
+        log.info("Coding 工作区已恢复 Git 基线 repo=%s", repo_id)
 
 
 class LocalRepoSource:
@@ -102,6 +119,85 @@ async def prepare_team_workspace(
         raise
 
 
+async def prepare_case_workspace(
+    repos: list[RepoSnapshot], system_id: str, case_id: str, settings: Settings,
+) -> TeamWorkspace:
+    """在持久卷准备稳定工作区，使 Claude Session 可跨 Activity 恢复。"""
+
+    case_root = _case_root(settings.artifacts_root, case_id)
+    workspace_root = case_root / "workspace"
+    if workspace_root.exists():
+        return open_case_workspace(repos, case_id, settings)
+    case_root.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix="workspace-staging-", dir=case_root))
+    try:
+        await _populate_case_staging(repos, system_id, settings, staging)
+        staging.rename(workspace_root)
+        log.info("Claude SDK 持久工作区已准备 case=%s repo_count=%s", case_id, len(repos))
+        return TeamWorkspace(workspace_root, {
+            repo.repo_id: workspace_root / _repo_directory(repo.repo_id, index)
+            for index, repo in enumerate(repos)
+        }, persistent=True)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+async def refresh_case_workspace(
+    repos: list[RepoSnapshot], system_id: str, case_id: str, settings: Settings,
+) -> TeamWorkspace:
+    """原子刷新 Case 代码基线，Claude runtime 与 Session 文件保持不变。"""
+
+    case_root = _case_root(settings.artifacts_root, case_id)
+    workspace_root = case_root / "workspace"
+    case_root.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix="workspace-staging-", dir=case_root))
+    backup = Path(tempfile.mkdtemp(prefix="workspace-backup-", dir=case_root))
+    backup.rmdir()
+    try:
+        await _populate_case_staging(repos, system_id, settings, staging)
+        if workspace_root.exists():
+            workspace_root.rename(backup)
+        try:
+            staging.rename(workspace_root)
+        except Exception:
+            if backup.exists() and not workspace_root.exists():
+                backup.rename(workspace_root)
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+        log.info("Claude SDK 持久工作区已刷新 case=%s repo_count=%s", case_id, len(repos))
+        return open_case_workspace(repos, case_id, settings)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(backup, ignore_errors=True)
+        raise
+
+
+async def _populate_case_staging(
+    repos: list[RepoSnapshot], system_id: str, settings: Settings, staging: Path,
+) -> None:
+    """把所有仓库放入同一个未发布的 Case staging 目录。"""
+
+    for index, repo in enumerate(repos):
+        workspace = await prepare_repo_workspace(repo, system_id, settings)
+        target = staging / _repo_directory(repo.repo_id, index)
+        shutil.move(str(workspace), target)
+        if workspace.name == "repo":
+            shutil.rmtree(workspace.parent, ignore_errors=True)
+
+
+def open_case_workspace(repos: list[RepoSnapshot], case_id: str, settings: Settings) -> TeamWorkspace:
+    root = _case_root(settings.artifacts_root, case_id) / "workspace"
+    paths = {
+        repo.repo_id: root / _repo_directory(repo.repo_id, index)
+        for index, repo in enumerate(repos)
+    }
+    missing = [repo_id for repo_id, path in paths.items() if not path.exists()]
+    if missing:
+        raise RuntimeError(f"持久工作区缺少仓库: {', '.join(missing)}")
+    return TeamWorkspace(root, paths, persistent=True)
+
+
 async def fetch_git_connection(system_id: str, settings: Settings) -> tuple[str, str]:
     url = settings.control_plane_url.rstrip("/") + f"/api/v5/internal/systems/{system_id}/git-config"
     headers = {"Authorization": f"Bearer {settings.worker_callback_token}"}
@@ -138,3 +234,12 @@ def _workspace(workspace_root: str, repo_id: str) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     prefix = re.sub(r"[^a-zA-Z0-9_.-]", "-", repo_id) or "repo"
     return Path(tempfile.mkdtemp(prefix=f"case-{prefix}-", dir=root))
+
+
+def _case_root(artifacts_root: str, case_id: str) -> Path:
+    safe_case = re.sub(r"[^a-zA-Z0-9_.-]", "-", case_id) or "case"
+    return Path(artifacts_root) / "cases" / safe_case
+
+
+def _repo_directory(repo_id: str, index: int) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.-]", "-", repo_id) or f"repo-{index + 1}"

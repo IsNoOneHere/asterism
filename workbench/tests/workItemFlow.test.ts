@@ -77,6 +77,31 @@ test('projects Claude SDK Supervisor and native subagents without a Planner node
   expect(flow.repositories.map((repo) => repo.repo)).toEqual(['backend', 'frontend']);
 });
 
+test('projects the latest human-reviewable coding plan without turning evidence into scope', () => {
+  const flow = buildWorkItemFlow(workItem('activated', { waitingFor: 'owner' }), [
+    event(1, 'WorkItemActivated'),
+    event(2, 'CodingPlanStarted', { planRevision: 1 }),
+    event(3, 'CodingPlanProposed', {
+      planRevision: 1,
+      summary: '只调整登录提示',
+      tasks: [{
+        task_id: 'task-01', repo: 'frontend', objective: '把错误提示放到输入框下方',
+        acceptance_criteria_refs: ['AC-1'], evidence: ['src/login.tsx:LoginForm'],
+      }],
+      risks: ['保持接口不变'], openQuestions: [], baseRevisions: { frontend: 'abc123' },
+    }),
+  ]);
+
+  expect(flow.codingPlan).toEqual(expect.objectContaining({
+    revision: 1, status: 'proposed', summary: '只调整登录提示',
+    tasks: [expect.objectContaining({ taskId: 'task-01', repo: 'frontend', evidence: ['src/login.tsx:LoginForm'] })],
+    baseRevisions: { frontend: 'abc123' },
+  }));
+  expect(flow.stages.find((stage) => stage.id === 'execution')).toMatchObject({
+    status: 'waiting', waitingFor: '系统负责人',
+  });
+});
+
 test.each([
   ['coding_attempt_failed', 'execution', 'Claude SDK Coding Attempt 执行失败'],
   ['patch_apply_failed', 'patch', 'Patch 应用失败'],

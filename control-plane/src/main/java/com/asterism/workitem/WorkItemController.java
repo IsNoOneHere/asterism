@@ -196,7 +196,8 @@ public class WorkItemController {
     private WorkItemView view(WorkItemProjection item, Authentication actor) {
         var availability = actions.availability(item, actor);
         return new WorkItemView(item.displayWorkItemId(), item.systemId(), item.prdId(), item.caseId(), item.title(),
-                item.lifecycleStatus(), item.approvalStatus(), item.executionAllowed(), item.currentStage(), item.waitingFor(),
+                item.lifecycleStatus(), item.approvalStatus(), item.executionAllowed(),
+                availability.currentStage(), availability.waitingFor(),
                 item.ownerUserId(), item.createdBy(), item.createdAt(), item.updatedAt(), canDelete(item, actor), availability.canAct(),
                 availability.actions(), item.lastAppliedSequence(), availability.pendingAction(),
                 availability.releaseMode(), availability.validationMode(), targets(item.prdId()));

@@ -8,6 +8,7 @@ from temporalio.exceptions import ApplicationError
 
 from asterism_worker.contracts import (
     CaseInput,
+    CodingPlanDraft,
     ContextSnapshot,
     ExecutionResult,
     LifecycleStatus,
@@ -19,9 +20,11 @@ from asterism_worker.workflows.coding import (
     CodingWorkflow,
     ExecutionPhase,
 )
+from asterism_worker.workflows.planning import PlanningWorkflow
 from asterism_worker.workflows.publishing import PublishingWorkflow
 from asterism_worker.workflows.state_machine import CaseState, TERMINAL_STATUSES
 from asterism_worker.workflows.validation import ValidationWorkflow
+from asterism_worker.workflows.workflow_support import error_detail, feedback_text
 
 MERGE_POLL_INTERVAL = timedelta(seconds=60)
 
@@ -52,6 +55,20 @@ ACTION_SPECS = {
         "_transition_action", _statuses("waiting_owner_approval"), transition="owner_rejected",
     ),
     "start_modification": ActionSpec("_start_modification_action", _statuses("activated")),
+    "coding_plan_approved": ActionSpec("_plan_approved_action", _statuses("activated")),
+    "coding_plan_rejected": ActionSpec(
+        "_plan_rejected_action",
+        _statuses("activated"),
+        feedback_mode="replace",
+        feedback_label="计划打回意见",
+        note_required_statuses=_statuses("activated"),
+    ),
+    "interrupt_attempt": ActionSpec(
+        "_interrupt_attempt_action",
+        _statuses("activated"),
+        feedback_mode="append",
+        feedback_label="停止原因",
+    ),
     "patch_apply_approved": ActionSpec("_apply_patch_action", _statuses("modification_completed")),
     "patch_apply_rejected": ActionSpec(
         "_patch_rejected_action",
@@ -109,28 +126,8 @@ ACTION_SPECS = {
 }
 
 
-def feedback_text(context: dict) -> str:
-    """从动作上下文提取用户可审计的反馈。"""
-
-    return "\n".join(
-        str(context.get(key, "")).strip()
-        for key in ("note", "evidence")
-        if str(context.get(key, "")).strip()
-    )
-
-
-def error_detail(error: BaseException) -> str:
-    messages: list[str] = []
-    current: BaseException | None = error
-    while current is not None:
-        if text := str(current):
-            messages.append(text)
-        current = current.__cause__
-    return " | ".join(messages)
-
-
 @workflow.defn(name="AsterismCaseWorkflow")
-class AsterismCaseWorkflow(CodingWorkflow, PublishingWorkflow, ValidationWorkflow):
+class AsterismCaseWorkflow(PlanningWorkflow, CodingWorkflow, PublishingWorkflow, ValidationWorkflow):
     def __init__(self) -> None:
         self.state = CaseState()
         self.case_input: CaseInput | None = None
@@ -149,6 +146,11 @@ class AsterismCaseWorkflow(CodingWorkflow, PublishingWorkflow, ValidationWorkflo
         self.rework_feedback = ""
         self.revision = 0
         self.revision_mode = "full"
+        self.coding_plan: CodingPlanDraft | None = None
+        self.plan_revision = 0
+        self.coding_session_id = ""
+        self.active_coding_activity = None
+        self.coding_interrupt_requested = False
 
     @workflow.run
     async def run(self, case_input: CaseInput) -> str:
@@ -192,6 +194,24 @@ class AsterismCaseWorkflow(CodingWorkflow, PublishingWorkflow, ValidationWorkflo
     @workflow.signal
     async def start_modification(self, signal: dict) -> None:
         self._enqueue("start_modification", signal)
+
+    @workflow.signal
+    async def coding_plan_approved(self, signal: dict) -> None:
+        self._enqueue("coding_plan_approved", signal)
+
+    @workflow.signal
+    async def coding_plan_rejected(self, signal: dict) -> None:
+        self._enqueue("coding_plan_rejected", signal)
+
+    @workflow.signal
+    async def interrupt_attempt(self, signal: dict) -> None:
+        """停止当前 Coding Activity；业务收敛仍由主循环按动作顺序处理。"""
+
+        self._enqueue("interrupt_attempt", signal)
+        handle = self.active_coding_activity
+        if handle is not None and not handle.done():
+            self.coding_interrupt_requested = True
+            handle.cancel()
 
     @workflow.signal
     async def patch_apply_approved(self, signal: dict) -> None:

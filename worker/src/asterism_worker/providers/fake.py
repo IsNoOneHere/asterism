@@ -1,6 +1,16 @@
 import logging
 
-from asterism_worker.contracts import CodingAttemptRequest, CodingAttemptResult, RepoChangeResult, SubagentRun
+from asterism_worker.contracts import (
+    CodingAttemptRequest,
+    CodingAttemptResult,
+    CodingPlanDraft,
+    CodingPlanRequest,
+    CodingPlanTask,
+    ExecutionOutcome,
+    ExecutionTaskOutcome,
+    RepoChangeResult,
+    SubagentRun,
+)
 from asterism_worker.providers.base import ExecutionProvider
 from asterism_worker.repo_source import TeamWorkspace
 
@@ -8,11 +18,27 @@ log = logging.getLogger(__name__)
 
 
 class FakeExecutionProvider(ExecutionProvider):
+    async def plan(self, request: CodingPlanRequest, _workspace: TeamWorkspace) -> CodingPlanDraft:
+        repo = request.repos[0].repo_id
+        return CodingPlanDraft(
+            summary="fake coding plan",
+            tasks=[CodingPlanTask(task_id="task-01", repo=repo, objective=request.goal)],
+            revision=request.plan_revision,
+            session_id="fake-session",
+        )
+
     async def run(self, request: CodingAttemptRequest, _workspace: TeamWorkspace) -> CodingAttemptResult:
         log.info("fake provider 生成 diff", extra={"work_item_id": request.work_item_id})
         repo = request.repos[0].repo_id
         return CodingAttemptResult(
             summary="fake diff generated",
+            outcome=ExecutionOutcome(
+                status="completed",
+                task_outcomes=[ExecutionTaskOutcome(
+                    task_id="task-01", status="completed", changed_paths=["README.md"],
+                )],
+                changed_paths=["README.md"],
+            ),
             repo_changes=[RepoChangeResult(
                 repo=repo,
                 summary="fake diff generated",
