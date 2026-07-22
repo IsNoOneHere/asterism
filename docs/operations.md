@@ -83,7 +83,7 @@ macOS Apple Container 通过 `V5_CONTAINER_RUNTIME=apple ./asterism install` 使
 
 ## 发布镜像
 
-推送 `v*` tag 后，GitHub Actions 会构建 `linux/amd64`、`linux/arm64` 的 `asterism-server` 和 `asterism-runner` 固定版本镜像。首次发布后必须在 GHCR 中把两个 package 设为 Public，确认未登录用户可以拉取；部署配置只使用版本号，不使用 `latest`。
+推送 `v*` tag 后，GitHub Actions 会构建 `linux/amd64`、`linux/arm64` 的 `asterism-server` 和 `asterism-runner` 固定版本镜像。发布任务最后会匿名读取两个多架构 manifest；GHCR package 未设为 Public、镜像缺少任一架构时都会失败。部署配置只使用版本号，不使用 `latest`。
 
 ## DeepSeek 与 Claude SDK
 

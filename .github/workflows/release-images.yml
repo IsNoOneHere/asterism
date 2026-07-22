@@ -47,3 +47,30 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
           provenance: mode=max
           sbom: true
+
+  verify-public-images:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: Verify anonymous multi-arch pull
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          for name in server runner; do
+            image="ghcr.io/isnoonehere/asterism-${name}:${version}"
+            raw=""
+            for attempt in $(seq 1 12); do
+              raw="$(docker buildx imagetools inspect --raw "$image" 2>/dev/null || true)"
+              [ -n "$raw" ] && break
+              sleep 10
+            done
+            # 匿名拉取与双架构清单是开源一键安装成立的发布门禁。
+            [ -n "$raw" ] || { echo "::error::$image 无法匿名拉取，请将 GHCR package 设为 Public"; exit 1; }
+            printf '%s' "$raw" | jq -e '
+              [.manifests[].platform | select(.os == "linux") | .architecture]
+              | (index("amd64") != null and index("arm64") != null)
+            ' >/dev/null || { echo "::error::$image 缺少 linux/amd64 或 linux/arm64"; exit 1; }
+          done
