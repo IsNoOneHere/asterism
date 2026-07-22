@@ -15,10 +15,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v5")
@@ -28,14 +26,17 @@ public class MemoryController {
     private final SystemAccessService access;
     private final JdbcAggregateTemplate aggregate;
     private final ObjectMapper objectMapper;
+    private final MemoryCandidateService candidates;
 
     public MemoryController(MemoryItemRepository memories, DomainEventService events, SystemAccessService access,
-                            JdbcAggregateTemplate aggregate, ObjectMapper objectMapper) {
+                            JdbcAggregateTemplate aggregate, ObjectMapper objectMapper,
+                            MemoryCandidateService candidates) {
         this.memories = memories;
         this.events = events;
         this.access = access;
         this.aggregate = aggregate;
         this.objectMapper = objectMapper;
+        this.candidates = candidates;
     }
 
     @GetMapping("/memory")
@@ -45,31 +46,17 @@ public class MemoryController {
         var values = status == null || status.isBlank()
                 ? memories.findTop100BySystemIdOrderByCreatedAtDesc(systemId)
                 : memories.findTop100BySystemIdAndStatusOrderByCreatedAtDesc(systemId, status);
-        return values.stream().map(this::view).toList();
+        var targets = candidates.targetRefs(values);
+        return values.stream().map(memory -> view(memory, targets.getOrDefault(memory.memoryId(), List.of()))).toList();
     }
 
     @PostMapping("/memory/candidates")
     MemoryView candidate(@Valid @RequestBody MemoryCandidateRequest request, Authentication actor) {
         access.requireMember(request.systemId(), actor);
-        var now = Instant.now();
-        var memory = new MemoryItem("mem-" + UUID.randomUUID(), request.systemId(), request.content(),
-                "candidate", audience(request.audience()), null, null,
-                metadata(request.category(), request.title(), request.workItemId()),
-                actor.getName(), now, null);
-        aggregate.insert(memory);
-        events.append(new DomainEventService.AppendEvent(
-                DomainEventType.MemoryCandidateCreated,
-                request.systemId(),
-                null,
-                null,
-                null,
-                actor.getName(),
-                "control-plane",
-                Map.of("memoryId", memory.memoryId()),
-                memory.memoryId(),
-                null,
-                "memory-candidate:" + memory.memoryId()));
-        return view(memory);
+        var memory = candidates.create(new MemoryCandidateService.CandidateInput(
+                request.systemId(), request.category(), request.audience(), request.title(), request.content(), "",
+                request.targetRefs(), List.of(), request.workItemId(), "", actor.getName()));
+        return view(memory, candidates.targetRefs(List.of(memory)).getOrDefault(memory.memoryId(), List.of()));
     }
 
     @PostMapping("/memory/{memoryId}/approve")
@@ -78,46 +65,38 @@ public class MemoryController {
                        Authentication actor) {
         var current = memories.findById(memoryId).orElseThrow(() -> new IllegalArgumentException("记忆不存在"));
         access.requireOwnerOrAdmin(current.systemId(), actor);
-        var approved = new MemoryItem(current.memoryId(), current.systemId(),
-                request == null ? current.content() : request.content(), "approved",
-                request == null ? current.audience() : audience(request.audience()),
-                current.sourceEventId(), actor.getName(), request == null ? current.metadataJson()
-                : metadata(request.category(), request.title(), workItemId(current)), current.createdBy(),
-                current.createdAt(), Instant.now());
-        aggregate.update(approved);
-        events.append(new DomainEventService.AppendEvent(
-                DomainEventType.MemoryApproved,
-                approved.systemId(),
-                null,
-                null,
-                null,
-                actor.getName(),
-                "control-plane",
-                Map.of("memoryId", memoryId),
-                memoryId,
-                null,
-                "memory-approved:" + memoryId));
-        return view(approved);
+        var currentTargets = candidates.targetRefs(List.of(current)).getOrDefault(memoryId, List.of());
+        var approved = candidates.approve(current, request == null
+                ? new MemoryCandidateService.CandidateEdit(
+                category(current), current.audience(), title(current), current.content(), currentTargets)
+                : new MemoryCandidateService.CandidateEdit(
+                request.category(), request.audience(), request.title(), request.content(), request.targetRefs()),
+                actor.getName());
+        return view(approved, candidates.targetRefs(List.of(approved)).getOrDefault(memoryId, List.of()));
     }
 
     @PostMapping("/memory/{memoryId}/reject")
     MemoryView reject(@PathVariable String memoryId, Authentication actor) {
         var current = memories.findById(memoryId).orElseThrow(() -> new IllegalArgumentException("记忆不存在"));
         access.requireOwnerOrAdmin(current.systemId(), actor);
-        return view(changeStatus(current, "rejected", DomainEventType.MemoryRejected, actor.getName()));
+        return view(changeStatus(current, "rejected", DomainEventType.MemoryRejected, actor.getName()),
+                candidates.targetRefs(List.of(current)).getOrDefault(memoryId, List.of()));
     }
 
     @PostMapping("/memory/{memoryId}/disable")
     MemoryView disable(@PathVariable String memoryId, Authentication actor) {
         var current = memories.findById(memoryId).orElseThrow(() -> new IllegalArgumentException("记忆不存在"));
         access.requireOwnerOrAdmin(current.systemId(), actor);
-        return view(changeStatus(current, "disabled", DomainEventType.MemoryDisabled, actor.getName()));
+        return view(changeStatus(current, "disabled", DomainEventType.MemoryDisabled, actor.getName()),
+                candidates.targetRefs(List.of(current)).getOrDefault(memoryId, List.of()));
     }
 
     private MemoryItem changeStatus(MemoryItem current, String status, DomainEventType eventType, String actorId) {
         // reject/disable 不删除原始内容，只变更治理状态，避免上下文再召回。
         var changed = new MemoryItem(current.memoryId(), current.systemId(), current.content(), status,
-                current.audience(), current.sourceEventId(), current.approvedBy(), current.metadataJson(), current.createdBy(),
+                current.audience(), current.stableCandidateId(), current.sourceRef(), current.evidenceRefs(),
+                current.normalizedContentHash(), current.sourceEventId(), current.approvedBy(),
+                current.metadataJson(), current.createdBy(),
                 current.createdAt(), current.approvedAt());
         aggregate.update(changed);
         events.append(new DomainEventService.AppendEvent(
@@ -135,29 +114,23 @@ public class MemoryController {
         return changed;
     }
 
-    private MemoryView view(MemoryItem memory) {
+    private MemoryView view(MemoryItem memory, List<String> targetRefs) {
         var metadata = readMetadata(memory.metadataJson());
         var title = text(metadata.get("title"));
         if (title.isBlank()) title = fallbackTitle(memory.content());
         return new MemoryView(memory.memoryId(), memory.systemId(), text(metadata.get("category")), title,
-                memory.content(), memory.status(), memory.audience(), workItemId(memory), memory.sourceEventId(), memory.approvedBy(),
+                memory.content(), memory.status(), memory.audience(), memory.stableCandidateId(), memory.sourceRef(),
+                targetRefs, candidates.evidenceRefs(memory), workItemId(memory), memory.sourceEventId(), memory.approvedBy(),
                 memory.metadataJson(), memory.createdBy(), memory.createdAt(), memory.approvedAt());
     }
 
-    private String audience(String value) {
-        return value == null || value.isBlank() ? "both" : value;
+    private String category(MemoryItem memory) {
+        return text(readMetadata(memory.metadataJson()).get("category"));
     }
 
-    private String metadata(String category, String title, String workItemId) {
-        var metadata = new LinkedHashMap<String, Object>();
-        metadata.put("category", category);
-        metadata.put("title", title);
-        if (workItemId != null && !workItemId.isBlank()) metadata.put("workItemId", workItemId);
-        try {
-            return objectMapper.writeValueAsString(metadata);
-        } catch (JsonProcessingException error) {
-            throw new IllegalArgumentException("记忆元数据不是合法 JSON", error);
-        }
+    private String title(MemoryItem memory) {
+        var value = text(readMetadata(memory.metadataJson()).get("title"));
+        return value.isBlank() ? fallbackTitle(memory.content()) : value;
     }
 
     private Map<String, Object> readMetadata(String json) {
@@ -187,6 +160,7 @@ public class MemoryController {
             @NotBlank @Size(max = 80) String title,
             @NotBlank @Size(max = 1000) String content,
             @Pattern(regexp = "product|execution|both") String audience,
+            List<String> targetRefs,
             String workItemId) {
     }
 
@@ -194,11 +168,14 @@ public class MemoryController {
             @NotBlank @Pattern(regexp = "constraint|convention|lesson") String category,
             @NotBlank @Size(max = 80) String title,
             @NotBlank @Size(max = 1000) String content,
-            @Pattern(regexp = "product|execution|both") String audience) {
+            @Pattern(regexp = "product|execution|both") String audience,
+            List<String> targetRefs) {
     }
 
     public record MemoryView(String memoryId, String systemId, String category, String title, String content,
-                             String status, String audience, String workItemId, String sourceEventId, String approvedBy,
+                             String status, String audience, String stableCandidateId, String sourceRef,
+                             List<String> targetRefs, List<String> evidenceRefs,
+                             String workItemId, String sourceEventId, String approvedBy,
                              String metadataJson, String createdBy, Instant createdAt, Instant approvedAt) {
     }
 

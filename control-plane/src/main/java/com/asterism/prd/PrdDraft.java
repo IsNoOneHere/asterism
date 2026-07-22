@@ -49,6 +49,12 @@ public record PrdDraft(
         return new PrdDraft(title, goal, scope, acceptanceCriteria, suspectedTargets, targets, updatedExtras);
     }
 
+    public PrdDraft withMemoryCandidates(List<ProductAgentPort.MemoryCandidateProposal> candidates) {
+        var updatedExtras = new LinkedHashMap<>(extras);
+        updatedExtras.put("memoryCandidates", candidates == null ? List.of() : List.copyOf(candidates));
+        return new PrdDraft(title, goal, scope, acceptanceCriteria, suspectedTargets, targets, updatedExtras);
+    }
+
     public PrdDraft preserveTargets(PrdDraft current) {
         var mergedExtras = new LinkedHashMap<>(current.extras);
         mergedExtras.putAll(extras);

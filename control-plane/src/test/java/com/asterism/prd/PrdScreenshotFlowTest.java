@@ -118,7 +118,8 @@ class PrdScreenshotFlowTest {
                 .thenReturn("manifest-1");
         var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
                 new PrdDraftCodec(objectMapper), transactions, access, systems, configurations, aggregate, ids,
-                readiness, git, manifests, new PrdCitationService());
+                readiness, git, manifests, new PrdCitationService(),
+                mock(PrdMemoryCandidateService.class));
         var controller = new PrdController(conversations, confirmations);
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
 

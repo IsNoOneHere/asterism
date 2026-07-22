@@ -41,6 +41,7 @@ public class PrdConfirmationService {
     private final GitIntegrationService git;
     private final RequirementContextManifestService manifests;
     private final PrdCitationService citations;
+    private final PrdMemoryCandidateService memoryCandidates;
 
     public PrdConfirmationService(
             PrdSessionRepository sessions,
@@ -57,7 +58,8 @@ public class PrdConfirmationService {
             ExecutionReadinessService readiness,
             GitIntegrationService git,
             RequirementContextManifestService manifests,
-            PrdCitationService citations) {
+            PrdCitationService citations,
+            PrdMemoryCandidateService memoryCandidates) {
         this.sessions = sessions;
         this.events = events;
         this.temporal = temporal;
@@ -73,6 +75,7 @@ public class PrdConfirmationService {
         this.git = git;
         this.manifests = manifests;
         this.citations = citations;
+        this.memoryCandidates = memoryCandidates;
     }
 
     public PrdConfirmResponse confirm(String prdId, Authentication actor) {
@@ -161,6 +164,7 @@ public class PrdConfirmationService {
         var draft = draftCodec.read(current.draftJson());
         var requirementManifestId = manifests.freeze(current.systemId(), prdId, workItemId,
                 citations.references(draft), current.draftJson(), actor.getName());
+        memoryCandidates.createCandidates(current, draft, workItemId, actor.getName());
         var starting = new PrdSession(
                 current.prdId(), current.systemId(), current.conversationId(), workItemId, caseId,
                 current.title(), current.goal(), current.draftJson(), current.missingFields(), "case_starting",

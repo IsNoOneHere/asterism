@@ -7,7 +7,6 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 @Component
@@ -29,26 +28,29 @@ public class MemoryContextReferenceValidator implements ContextReferenceValidato
     public Optional<ContextItem> current(ContextItem item) {
         var memoryId = item.refId().substring("MEM:".length());
         return jdbc.sql("""
-                        select audience, content, source_event_id, metadata_json::text,
-                               coalesce(nullif(metadata_json ->> 'title', ''), left(content, 80)) as title
-                        from memory_items where memory_id = :id and status = 'approved'
+                        select m.audience, m.content, m.source_ref,
+                               coalesce(nullif(m.metadata_json ->> 'title', ''), left(m.content, 80)) as title,
+                               coalesce(jsonb_agg(mt.knowledge_entry_id order by mt.knowledge_entry_id)
+                                   filter (where mt.knowledge_entry_id is not null), '[]'::jsonb)::text as target_refs
+                        from memory_items m
+                        left join memory_targets mt on mt.memory_id = m.memory_id
+                        where m.memory_id = :id and m.status = 'approved'
+                        group by m.memory_id, m.audience, m.content, m.source_ref, m.metadata_json
                         """)
                 .param("id", memoryId)
                 .query((rs, rowNum) -> {
                     var content = rs.getString("content");
                     return new ContextItem(item.refId(), type(), rs.getString("audience"), rs.getString("title"),
-                            content, targetRefs(rs.getString("metadata_json")), rs.getString("source_event_id"),
+                            content, readList(rs.getString("target_refs")), rs.getString("source_ref"),
                             ContextHash.sha256(content), item.relevance());
                 })
                 .optional();
     }
 
-    private List<String> targetRefs(String metadataJson) {
+    private List<String> readList(String value) {
         try {
-            Map<String, Object> metadata = objectMapper.readValue(metadataJson, new TypeReference<>() {
+            return objectMapper.readValue(value, new TypeReference<>() {
             });
-            var value = metadata.get("targetRefs");
-            return value instanceof List<?> list ? list.stream().map(String::valueOf).toList() : List.of();
         } catch (JsonProcessingException error) {
             return List.of();
         }

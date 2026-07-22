@@ -91,7 +91,9 @@ export function jsonResponse(data: unknown, ok = true, status = ok ? 200 : 401) 
 
 export function resetAppTestState() {
   localStorage.clear();
-  candidateMemories = [{ memoryId: 'mem-candidate', systemId: 'alpha-system', category: 'convention', title: '登录页样式约定', content: '保留登录页样式', status: 'candidate', workItemId: 'wi-1', createdAt: '2026-07-05T12:00:00Z' }];
+  candidateMemories = [{ memoryId: 'mem-candidate', systemId: 'alpha-system', category: 'convention',
+    audience: 'both', targetRefs: [], evidenceRefs: ['evt-1'], title: '登录页样式约定', content: '保留登录页样式',
+    status: 'candidate', workItemId: 'wi-1', createdAt: '2026-07-05T12:00:00Z' }];
   conversationMessages = [];
   workItems = [];
   agentConfiguration = {
@@ -180,7 +182,11 @@ export function resetAppTestState() {
       });
     }
     if (path.startsWith('/api/v5/systems/alpha-system/knowledge?') && !init?.method) {
-      return jsonResponse([]);
+      return jsonResponse([{
+        entryId: 'page-login', systemId: 'alpha-system', repo: 'frontend', kind: 'page', title: '登录页',
+        anchorTexts: ['登录'], routePath: '/login', apiEndpoints: ['POST /api/login'], codeRefs: [],
+        status: 'approved', source: 'manual', sourceRef: 'page-login',
+      }]);
     }
     if (path === '/api/v5/memory/mem-candidate/approve' && init?.method === 'POST') {
       const body = JSON.parse(String(init.body));

@@ -73,10 +73,13 @@ export type WorkItemActionRequest = {
 };
 export type UserAccount = Schemas['UserAccountView'] & { userId: string; displayName: string; enabled: boolean };
 export type MemoryCategory = 'constraint' | 'convention' | 'lesson';
+export type MemoryAudience = 'product' | 'execution' | 'both';
 export type MemoryDraft = {
   category: MemoryCategory;
+  audience: MemoryAudience;
   title: string;
   content: string;
+  targetRefs: string[];
 };
 export type MemoryItem = Schemas['MemoryView'] & {
   memoryId: string;
@@ -85,6 +88,11 @@ export type MemoryItem = Schemas['MemoryView'] & {
   title: string;
   content: string;
   status: string;
+  audience: MemoryAudience;
+  stableCandidateId?: string;
+  sourceRef?: string;
+  targetRefs: string[];
+  evidenceRefs: string[];
   workItemId?: string | null;
   sourceEventId?: string | null;
   createdBy?: string;

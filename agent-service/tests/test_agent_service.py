@@ -59,6 +59,7 @@ def test_prd_draft_retries_json_and_asks_acceptance_in_chinese():
     assert "验收标准" in response.json()["assistant_message"]
     assert "只能改 src" in llm.prompts[0]
     assert "Never invent a refId" in llm.prompts[0]
+    assert "evidence_refs may only use refIds" in llm.prompts[0]
     assert llm.json_modes == [True, True]
 
 

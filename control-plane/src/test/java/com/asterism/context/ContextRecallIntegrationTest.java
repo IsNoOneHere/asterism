@@ -2,6 +2,7 @@ package com.asterism.context;
 
 import com.asterism.IntegrationDatabase;
 import com.asterism.prd.ConversationMessage;
+import com.asterism.memory.MemoryCandidateService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -27,6 +28,7 @@ class ContextRecallIntegrationTest {
     @Autowired private SystemKnowledgeContextSource knowledge;
     @Autowired private ContextRecallService recall;
     @Autowired private RequirementContextManifestService manifests;
+    @Autowired private MemoryCandidateService candidates;
 
     @Test
     void prdRecallUsesOnlyApprovedMatchingAudienceAndPlainTextKnowledge() {
@@ -97,6 +99,37 @@ class ContextRecallIntegrationTest {
                 .extracting(ContextItem::content).isEqualTo("只有系统 Owner 才能确认发布");
         assertThat(manifests.refresh(fixture.systemId(), fixture.prdId(), fixture.workItemId(),
                 "owner", "refresh-request-1")).isEqualTo(refreshedId);
+    }
+
+    @Test
+    void targetMatchRanksFirstAndCandidateCreationIsDeduplicatedWithoutAutoApproval() {
+        var fixture = fixture();
+        var targetId = "target-" + fixture.suffix();
+        knowledge(fixture.systemId(), targetId, "登录页", "/login/" + fixture.suffix());
+        var input = new MemoryCandidateService.CandidateInput(
+                fixture.systemId(), "constraint", "product", "登录目标规则", "登录错误必须显示中文提示",
+                "prd:" + fixture.prdId() + ":rule-1", List.of(targetId), List.of("MEM:evidence"),
+                fixture.workItemId(), "", "requester");
+
+        var candidate = candidates.create(input);
+
+        assertThat(candidate.status()).isEqualTo("candidate");
+        assertThat(jdbc.sql("select status from memory_items where memory_id = :id")
+                .param("id", candidate.memoryId()).query(String.class).single()).isEqualTo("candidate");
+        var approved = candidates.approve(candidate, new MemoryCandidateService.CandidateEdit(
+                "constraint", "product", "登录目标规则", candidate.content(), List.of(targetId)), "owner");
+        var duplicate = candidates.create(new MemoryCandidateService.CandidateInput(
+                fixture.systemId(), "constraint", "product", "重复规则", "  登录错误必须显示中文提示  ",
+                "prd:" + fixture.prdId() + ":rule-duplicate", List.of(), List.of("MEM:evidence"),
+                fixture.workItemId(), "", "requester"));
+
+        assertThat(duplicate.memoryId()).isEqualTo(approved.memoryId());
+        var bundle = recall.recall(new ContextRecallQuery(
+                fixture.systemId(), fixture.prdId(), "product", "完全无关的查询", null, Map.of(),
+                List.of(targetId), List.of(), "requester"));
+        assertThat(bundle.items()).isNotEmpty();
+        assertThat(bundle.items().getFirst().refId()).isEqualTo("MEM:" + approved.memoryId());
+        assertThat(bundle.items().getFirst().targetRefs()).containsExactly(targetId);
     }
 
     private Fixture fixture() {

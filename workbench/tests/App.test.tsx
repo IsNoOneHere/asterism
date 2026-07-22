@@ -638,12 +638,18 @@ test('memory approve moves candidate out of pending tab', async () => {
   expect(screen.getByRole('link', { name: /来源工作项 wi-1/ })).toHaveAttribute('href', '/work-items/wi-1');
   fireEvent.click(screen.getByRole('button', { name: '编辑并批准' }));
   expect(screen.getByRole('dialog')).toHaveAttribute('open');
+  expect(await screen.findByLabelText('适用阶段')).toHaveValue('both');
+  fireEvent.change(screen.getByLabelText('适用阶段'), { target: { value: 'execution' } });
+  fireEvent.click(await screen.findByRole('checkbox', { name: /登录页/ }));
   fireEvent.change(screen.getByLabelText('标题'), { target: { value: '登录页视觉约定' } });
   fireEvent.click(screen.getByRole('button', { name: '批准并生效' }));
 
   await waitFor(() => {
     expect(screen.queryByText('登录页样式约定')).not.toBeInTheDocument();
   });
+  const call = vi.mocked(fetch).mock.calls.find(([path, init]) =>
+    String(path).endsWith('/memory/mem-candidate/approve') && init?.method === 'POST');
+  expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({ audience: 'execution', targetRefs: ['page-login'] });
 });
 
 test('archived lifecycle memory does not expose raw event payload', async () => {

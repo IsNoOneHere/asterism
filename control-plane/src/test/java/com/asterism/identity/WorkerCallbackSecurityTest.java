@@ -6,6 +6,8 @@ import com.asterism.event.ProjectionController;
 import com.asterism.context.ContextController;
 import com.asterism.context.RequirementContextManifestService;
 import com.asterism.memory.MemoryController;
+import com.asterism.memory.MemoryCandidateService;
+import com.asterism.memory.WorkItemMemoryLearningService;
 import com.asterism.memory.MemoryItemRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
@@ -46,6 +48,12 @@ class WorkerCallbackSecurityTest {
 
     @MockBean
     private JdbcAggregateTemplate aggregate;
+
+    @MockBean
+    private MemoryCandidateService memoryCandidates;
+
+    @MockBean
+    private WorkItemMemoryLearningService memoryLearning;
 
     @MockBean
     private SystemAccessService access;

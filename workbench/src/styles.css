@@ -1932,6 +1932,13 @@ button.danger-action:hover:not(:disabled) {
   resize: vertical;
 }
 
+.memory-target-picker { border: 1px solid var(--border); border-radius: var(--radius-control); display: grid; gap: 8px; margin: 0; padding: 12px; }
+.memory-target-picker legend { font-size: 13px; font-weight: 600; padding: 0 4px; }
+.memory-target-picker > div { display: grid; gap: 6px; max-height: 180px; overflow: auto; }
+.memory-target-picker > div label { align-items: flex-start; display: flex; gap: 8px; margin: 0; }
+.memory-target-picker input { margin-top: 3px; width: auto; }
+.memory-target-picker small { color: var(--muted); display: block; font-weight: 400; }
+
 .config-dialog-fields,
 .agent-role-fields {
   display: grid;

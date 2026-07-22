@@ -287,7 +287,8 @@ public class PrdConversationService {
                 turn.currentMissing(), turn.history(), turn.contextBundle().items());
         var citationResult = citations.validate(turn.contextBundle(), result);
         var draft = draftCodec.fromMap(result.draft()).withTitle(result.title()).preserveTargets(turn.currentDraft())
-                .withCitations(citationResult.citations(), citationResult.usedRefs());
+                .withCitations(citationResult.citations(), citationResult.usedRefs())
+                .withMemoryCandidates(result.memoryCandidates());
         var anchors = analysis.observations().stream().flatMap(observation -> observation.anchors().stream()).toList();
         var match = anchors.isEmpty() ? new KnowledgeMatchService.MatchResult(List.of(), false)
                 : knowledge.match(turn.session().systemId(), anchors);

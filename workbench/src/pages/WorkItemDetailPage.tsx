@@ -70,6 +70,12 @@ export function WorkItemDetailPage() {
     enabled: Boolean(workItemId),
     retry: false,
   });
+  const memoryTargets = useQuery({
+    queryKey: ['knowledge', item.data?.systemId, 'approved'],
+    queryFn: () => api.knowledge(item.data!.systemId, 'approved'),
+    enabled: memoryOpen && Boolean(item.data?.systemId),
+    retry: false,
+  });
   useEffect(() => {
     // 终态首次出现后再补拉一次事件，避免状态投影先返回而漏掉最后的发布事件。
     if (isTerminal(item.data?.lifecycleStatus) && events.isFetched) {
@@ -223,7 +229,10 @@ export function WorkItemDetailPage() {
         {previewAttachment && <img src={api.attachmentUrl(previewAttachment.attachmentId)} alt={`${previewAttachment.filename} 预览`} />}
         <button type="button" className="secondary" onClick={() => previewDialogRef.current?.close()}>关闭预览</button>
       </dialog>
-      <MemoryEditorDialog open={memoryOpen} title="从工作项沉淀记忆" submitLabel="加入待审批" workItemId={workItemId} pending={createMemory.isPending} error={createMemory.error} onClose={() => { setMemoryOpen(false); createMemory.reset(); }} onSubmit={(draft) => createMemory.mutate(draft)} />
+      <MemoryEditorDialog open={memoryOpen} title="从工作项沉淀记忆" submitLabel="加入待审批"
+        knowledgeTargets={memoryTargets.data ?? []} workItemId={workItemId} pending={createMemory.isPending}
+        error={createMemory.error} onClose={() => { setMemoryOpen(false); createMemory.reset(); }}
+        onSubmit={(draft) => createMemory.mutate(draft)} />
       <ActionConfirmDialog
         open={Boolean(confirmAction)}
         title={`确认${confirmAction?.label || ''}？`}

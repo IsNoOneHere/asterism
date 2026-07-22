@@ -21,6 +21,12 @@ export function MemoryPage() {
   const approved = useQuery({ queryKey: ['memory', systemId, 'approved'], queryFn: () => api.memories(systemId, 'approved'), enabled: Boolean(systemId), retry: false });
   const rejected = useQuery({ queryKey: ['memory', systemId, 'rejected'], queryFn: () => api.memories(systemId, 'rejected'), enabled: Boolean(systemId), retry: false });
   const disabled = useQuery({ queryKey: ['memory', systemId, 'disabled'], queryFn: () => api.memories(systemId, 'disabled'), enabled: Boolean(systemId), retry: false });
+  const knowledgeTargets = useQuery({
+    queryKey: ['knowledge', systemId, 'approved'],
+    queryFn: () => api.knowledge(systemId, 'approved'),
+    enabled: Boolean(systemId),
+    retry: false,
+  });
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['memory', systemId] });
@@ -82,6 +88,7 @@ export function MemoryPage() {
       title={editing ? '编辑并批准' : '新增系统记忆'}
       submitLabel={editing ? '批准并生效' : '加入待审批'}
       initial={editing ? memoryDraft(editing) : undefined}
+      knowledgeTargets={knowledgeTargets.data ?? []}
       workItemId={editing?.workItemId ?? undefined}
       pending={!canManageCurrentSystem || (editing ? approve.isPending : create.isPending)}
       error={editing ? approve.error : create.error}
@@ -126,6 +133,7 @@ function MemoryRow({ item, tab, canManage, onApprove, onReject, onDisable }: {
     <div>
       <div className="memory-card-title"><span className={'memory-category ' + (item.category || 'legacy')}>{legacyEvent ? '旧事件' : categoryLabel(item.category)}</span><strong>{legacyEvent ? '旧生命周期事件候选' : item.title}</strong></div>
       <p>{legacyEvent ? '原始 JSON、diff 和日志仅保留在事件审计中，不作为系统记忆展示。' : item.content}</p>
+      <span>适用：{audienceLabel(item.audience)}{item.targetRefs?.length ? ` · ${item.targetRefs.length} 个知识目标` : ' · 系统全局'}</span>
       <span>{item.workItemId ? <Link className="action-link" to={'/work-items/' + item.workItemId}>来源工作项 {item.workItemId}</Link> : legacyEvent ? '已归档至事件审计' : '手工录入'} · {formatTime(item.createdAt)}</span>
     </div>
     {canManage && tab === 'candidate' && <div className="button-row"><button type="button" onClick={onApprove}>编辑并批准</button><button type="button" className="secondary" onClick={onReject}>拒绝</button></div>}
@@ -134,7 +142,12 @@ function MemoryRow({ item, tab, canManage, onApprove, onReject, onDisable }: {
 }
 
 function memoryDraft(item: MemoryItem): MemoryDraft {
-  return { category: item.category || 'convention', title: item.title, content: item.content };
+  return { category: item.category || 'convention', audience: item.audience || 'both', title: item.title,
+    content: item.content, targetRefs: item.targetRefs || [] };
+}
+
+function audienceLabel(audience?: string) {
+  return ({ product: '产品 / PRD', execution: '规划与开发', both: '产品与执行' } as Record<string, string>)[audience || 'both'] || audience;
 }
 
 function categoryLabel(category: MemoryCategory | '') {

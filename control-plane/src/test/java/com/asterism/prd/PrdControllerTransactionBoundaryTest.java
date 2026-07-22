@@ -286,7 +286,8 @@ class PrdControllerTransactionBoundaryTest {
         var objectMapper = new ObjectMapper();
         var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
                 new PrdDraftCodec(objectMapper), tx, access, systems, configurations, aggregate, workItemIds,
-                readiness, git, manifests, new PrdCitationService());
+                readiness, git, manifests, new PrdCitationService(),
+                mock(PrdMemoryCandidateService.class));
         return new PrdController(mock(PrdConversationService.class), confirmations);
     }
 
