@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -136,7 +137,7 @@ public class RequirementContextManifestService {
                 .param("queryHash", queryHash)
                 .param("items", json(items))
                 .param("actorId", actorId)
-                .param("createdAt", Instant.now())
+                .param("createdAt", Timestamp.from(Instant.now()))
                 .update();
         return manifestId;
     }

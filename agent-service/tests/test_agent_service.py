@@ -3,6 +3,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import httpx
+from openai import APIConnectionError, BadRequestError
 
 from agent_service.app import create_app
 from agent_service.llm import LlmClient, ModelConfig, OpenAIChatClient
@@ -32,6 +34,15 @@ class FakeLlmClient(LlmClient):
         self.prompts.append(prompt)
         self.configs.append(config)
         return self.responses.pop(0)
+
+
+class FailingVisionLlmClient(FakeLlmClient):
+    def __init__(self, error: Exception) -> None:
+        super().__init__([])
+        self.error = error
+
+    def complete_vision(self, prompt: str, image: bytes, content_type: str, config: ModelConfig) -> str:
+        raise self.error
 
 
 def test_legacy_execution_endpoints_are_removed():
@@ -240,6 +251,47 @@ def test_analyze_image_requires_vision_profile():
 
     assert response.status_code == 422
     assert llm.calls == 0
+
+
+def test_analyze_image_reports_provider_without_vision_capability():
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    llm = FailingVisionLlmClient(BadRequestError(
+        "unknown variant image_url, expected text",
+        response=httpx.Response(400, request=request),
+        body=None,
+    ))
+    client = TestClient(create_app(
+        llm,
+        model_config_fetcher=lambda *args: ModelConfig(
+            managed=True, provider="openai-compat", model="deepseek-v4-pro",
+            api_key="secret", supports_vision=True,
+        ),
+    ))
+
+    response = client.post("/analyze-image?system_id=sys-1", content=b"image", headers={
+        "Content-Type": "image/png", "Authorization": "Bearer dev-worker-token",
+    })
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "当前模型不支持图片理解，请更换支持 Vision 的模型 Profile"
+
+
+def test_analyze_image_reports_provider_outage():
+    request = httpx.Request("POST", "https://models.example/chat/completions")
+    llm = FailingVisionLlmClient(APIConnectionError(request=request))
+    client = TestClient(create_app(
+        llm,
+        model_config_fetcher=lambda *args: ModelConfig(
+            managed=True, model="vision-model", api_key="secret", supports_vision=True,
+        ),
+    ))
+
+    response = client.post("/analyze-image?system_id=sys-1", content=b"image", headers={
+        "Content-Type": "image/png", "Authorization": "Bearer dev-worker-token",
+    })
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "图片分析服务暂时不可用"
 
 
 def test_analyze_image_rejects_direct_unauthorized_call():

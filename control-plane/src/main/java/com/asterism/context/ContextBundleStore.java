@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -34,7 +35,8 @@ public class ContextBundleStore {
                 .param("queryHash", bundle.queryHash())
                 .param("items", json(bundle.items()))
                 .param("actorId", actorId)
-                .param("createdAt", bundle.createdAt())
+                // PostgreSQL JDBC 不能直接推断 Instant，统一转为明确的 timestamptz 输入。
+                .param("createdAt", Timestamp.from(bundle.createdAt()))
                 .update();
     }
 

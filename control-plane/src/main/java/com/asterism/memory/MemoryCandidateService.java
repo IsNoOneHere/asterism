@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.text.Normalizer;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -163,7 +164,7 @@ public class MemoryCandidateService {
                 .param("sourceEventId", memory.sourceEventId())
                 .param("metadataJson", memory.metadataJson())
                 .param("createdBy", memory.createdBy())
-                .param("createdAt", memory.createdAt())
+                .param("createdAt", Timestamp.from(memory.createdAt()))
                 .update() == 1;
     }
 
@@ -210,7 +211,7 @@ public class MemoryCandidateService {
                             """)
                     .param("memoryId", memoryId)
                     .param("target", target)
-                    .param("createdAt", Instant.now())
+                    .param("createdAt", Timestamp.from(Instant.now()))
                     .update();
         }
     }

@@ -5,6 +5,7 @@ from hmac import compare_digest
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 import httpx
+from openai import APIError, BadRequestError
 from pydantic import ValidationError
 
 from agent_service.contracts import DraftRequest, DraftResult, UiObservation
@@ -50,6 +51,17 @@ def create_app(
         try:
             raw = llm.complete_vision(image_observation_prompt(), image, content_type, model_config)
             return UiObservation.model_validate(json.loads(raw))
+        except BadRequestError as error:
+            # Profile 可能被误标为 Vision；把 Provider 的图片能力拒绝转成可操作提示。
+            log.warning("Vision 模型拒绝图片 provider=%s model=%s", model_config.provider, model_config.model)
+            raise HTTPException(
+                status_code=422,
+                detail="当前模型不支持图片理解，请更换支持 Vision 的模型 Profile",
+            ) from error
+        except APIError as error:
+            log.warning("Vision 模型调用失败 provider=%s model=%s type=%s",
+                        model_config.provider, model_config.model, type(error).__name__)
+            raise HTTPException(status_code=502, detail="图片分析服务暂时不可用") from error
         except (json.JSONDecodeError, ValidationError):
             raise HTTPException(status_code=400, detail="vision model did not return valid UiObservation JSON")
 
