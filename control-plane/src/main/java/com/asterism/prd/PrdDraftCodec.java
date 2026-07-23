@@ -31,7 +31,7 @@ public class PrdDraftCodec {
         var title = text(fields.remove("title"));
         var goal = text(fields.remove("goal"));
         var scope = text(fields.remove("scope"));
-        var acceptanceCriteria = strings(fields.remove("acceptanceCriteria"));
+        var acceptanceCriteria = strings("acceptanceCriteria", fields.remove("acceptanceCriteria"));
         var suspectedTargets = targets(fields.remove("suspectedTargets"));
         var targets = targets(fields.remove("targets"));
         return new PrdDraft(title, goal, scope, acceptanceCriteria, suspectedTargets, targets, fields);
@@ -60,8 +60,19 @@ public class PrdDraftCodec {
         return value == null ? null : String.valueOf(value);
     }
 
-    private List<String> strings(Object value) {
-        return value == null ? List.of() : objectMapper.convertValue(value, new TypeReference<>() {});
+    private List<String> strings(String field, Object value) {
+        if (value == null) return List.of();
+        if (!(value instanceof List<?> values)) {
+            throw new DraftFieldTypeException(field, "List<String>", value.getClass().getName());
+        }
+        for (var index = 0; index < values.size(); index++) {
+            var item = values.get(index);
+            if (!(item instanceof String)) {
+                var actualType = item == null ? "null" : item.getClass().getName();
+                throw new DraftFieldTypeException(field + "[" + index + "]", "String", actualType);
+            }
+        }
+        return values.stream().map(String.class::cast).toList();
     }
 
     private List<KnowledgeMatchService.SuspectedTarget> targets(Object value) {
@@ -70,5 +81,31 @@ public class PrdDraftCodec {
 
     private List<Map<String, Object>> targetMaps(List<KnowledgeMatchService.SuspectedTarget> value) {
         return objectMapper.convertValue(value, new TypeReference<>() {});
+    }
+
+    /** 精确标识跨服务字段和实际类型，避免 Jackson 裸异常掩盖契约漂移。 */
+    public static final class DraftFieldTypeException extends IllegalArgumentException {
+        private final String field;
+        private final String expectedType;
+        private final String actualType;
+
+        public DraftFieldTypeException(String field, String expectedType, String actualType) {
+            super("PRD draft 字段 " + field + " 类型错误，期望 " + expectedType + "，实际 " + actualType);
+            this.field = field;
+            this.expectedType = expectedType;
+            this.actualType = actualType;
+        }
+
+        public String field() {
+            return field;
+        }
+
+        public String expectedType() {
+            return expectedType;
+        }
+
+        public String actualType() {
+            return actualType;
+        }
     }
 }

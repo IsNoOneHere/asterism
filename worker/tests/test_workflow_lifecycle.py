@@ -41,6 +41,20 @@ def test_terminal_workflow_rejects_removed_architecture():
     assert "claude_sdk_team" in str(failure.value.__cause__)
 
 
+def test_plan_output_invalid_is_not_retried_by_temporal():
+    events, result, calls, _ = asyncio.run(_run_workflow([
+        ("owner_approved", "approve-1"),
+        ("start_modification", "start-1"),
+        ("cancel_case", "cancel-1"),
+    ], plan_output_invalid=True))
+
+    assert result == "cancelled"
+    assert calls["generate_coding_plan"] == 1
+    blocked = next(event for event in events if event["eventType"] == "WorkerBlocked")
+    assert blocked["payload"]["reason"] == "coding_plan_failed"
+    assert blocked["payload"]["failedPhase"] == "planning"
+
+
 def test_coding_retry_reuses_context_and_previous_candidate():
     requests: list[dict] = []
     events, result, calls, requests = asyncio.run(_run_workflow([
@@ -361,6 +375,7 @@ async def _run_workflow(
     coding_outcomes: list[dict] | None = None,
     wait_for_coding_interrupt: bool = False,
     context_stale_once: bool = False,
+    plan_output_invalid: bool = False,
 ) -> tuple[list[dict], str, dict[str, int], list[dict]]:
     events: list[dict] = []
     calls: dict[str, int] = {}
@@ -433,6 +448,12 @@ async def _run_workflow(
     async def generate_coding_plan(request: dict) -> dict:
         called("generate_coding_plan")
         planning_requests.append(request)
+        if plan_output_invalid:
+            raise ApplicationError(
+                "structured_output_invalid",
+                type="PLAN_OUTPUT_INVALID",
+                non_retryable=True,
+            )
         revision = request["plan_revision"]
         return {
             "summary": f"第 {revision} 版计划",

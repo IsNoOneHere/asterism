@@ -55,8 +55,11 @@ run_service() {
   name="$1"
   shift
   if exists "$name"; then
-    running "$name" || "$CONTAINER_BIN" start "$name"
-    return
+    if running "$name"; then
+      return
+    fi
+    # Apple Container 偶尔无法重新 bootstrap stopped 容器；容器可重建，数据由独立卷保留。
+    "$CONTAINER_BIN" delete "$name"
   fi
   "$CONTAINER_BIN" run --detach --name "$name" --network "$NETWORK" "$@"
 }
@@ -147,7 +150,7 @@ build_image() {
 }
 
 build_images() {
-  # 构建失败也要回收临时 BuildKit，避免它被误认为第五个业务服务。
+  # BuildKit 只保留为停止态构建缓存，不属于业务服务，后续升级可复用镜像层。
   if ! build_image asterism-runner:local worker/Dockerfile; then
     running buildkit && "$CONTAINER_BIN" stop buildkit || true
     return 1

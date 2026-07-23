@@ -2,17 +2,21 @@ import asyncio
 import subprocess
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
+from asterism_worker.activities import execution as execution_activity
 from asterism_worker.activities.execution import (
     _apply_previous_candidate,
     _restore_revision_candidate,
     apply_patch_to_repo,
+    generate_coding_plan,
     run_coding_attempt,
     run_validation,
 )
 from asterism_worker.agent_config import AgentConstraints, EngineConfig, ModelProfile, ResolvedAgentConfig
 from asterism_worker.contracts import CodingAttemptRequest, RepoSnapshot
 from asterism_worker.providers.claude_sdk_team import ClaudeSdkTeamProvider
+from asterism_worker.providers.claude_sdk_planning import PlanningOutputError
 from asterism_worker.providers.factory import build_execution_provider
 from asterism_worker.providers.fake import FakeExecutionProvider
 from asterism_worker.repo_source import TeamWorkspace
@@ -41,6 +45,52 @@ def test_factory_only_accepts_fake_and_claude_sdk_team():
 
     with pytest.raises(ValueError, match="unsupported"):
         build_execution_provider(ResolvedAgentConfig(EngineConfig("http"), ModelProfile()))
+
+
+def _stub_planning_activity(monkeypatch, tmp_path, error):
+    class FailingProvider:
+        async def plan(self, _request, _workspace):
+            raise error
+
+    async def prepare_workspace(*_args):
+        return TeamWorkspace(tmp_path, {"main": tmp_path})
+
+    async def resolve_config(*_args, **_kwargs):
+        return object()
+
+    monkeypatch.setattr(execution_activity, "load_settings", object)
+    monkeypatch.setattr(execution_activity, "prepare_case_workspace", prepare_workspace)
+    monkeypatch.setattr(execution_activity, "resolve_agent_config", resolve_config)
+    monkeypatch.setattr(execution_activity, "build_execution_provider", lambda _resolved: FailingProvider())
+
+
+def _planning_request():
+    return {
+        "case_id": "case-1",
+        "work_item_id": "wi-1",
+        "system_id": "sys-1",
+        "requirement_manifest_id": "manifest-1",
+        "repos": [{"repo_id": "main"}],
+        "goal": "修复保存",
+    }
+
+
+def test_generate_coding_plan_marks_output_error_non_retryable(tmp_path, monkeypatch):
+    _stub_planning_activity(monkeypatch, tmp_path, PlanningOutputError("structured_output_invalid"))
+
+    with pytest.raises(ApplicationError) as caught:
+        asyncio.run(generate_coding_plan(_planning_request()))
+
+    assert caught.value.type == "PLAN_OUTPUT_INVALID"
+    assert caught.value.non_retryable is True
+    assert caught.value.message == "structured_output_invalid"
+
+
+def test_generate_coding_plan_keeps_runtime_error_retryable(tmp_path, monkeypatch):
+    _stub_planning_activity(monkeypatch, tmp_path, RuntimeError("temporary network error"))
+
+    with pytest.raises(RuntimeError, match="temporary network error"):
+        asyncio.run(generate_coding_plan(_planning_request()))
 
 
 def test_previous_candidate_is_restored_before_revision(tmp_path):

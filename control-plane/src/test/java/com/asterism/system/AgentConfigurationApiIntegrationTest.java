@@ -44,12 +44,16 @@ class AgentConfigurationApiIntegrationTest {
         var profileResponse = mockMvc.perform(post("/api/v5/systems/" + systemId + "/model-profiles")
                         .contentType(MediaType.APPLICATION_JSON).content("""
                                 {"name":"Claude","provider":"anthropic","model":"claude-sonnet",
-                                 "baseUrl":"https://example.invalid","apiKey":"profile-secret"}
+                                 "baseUrl":"https://example.invalid","apiKey":"profile-secret",
+                                 "imageInput":true,"structuredOutput":"json_schema"}
                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.modelProfiles[0].apiKeySet").value(true))
                 .andExpect(jsonPath("$.agents[0].name").value("product"))
-                .andExpect(jsonPath("$.agents[1].name").value("developer"))
+                .andExpect(jsonPath("$.agents[1].name").value("vision"))
+                .andExpect(jsonPath("$.agents[2].name").value("developer"))
+                .andExpect(jsonPath("$.modelProfiles[0].imageInput").value(true))
+                .andExpect(jsonPath("$.modelProfiles[0].structuredOutput").value("json_schema"))
                 .andExpect(jsonPath("$.maxRevisions").value(5))
                 .andExpect(jsonPath("$.engines[0]").value("claude_sdk_team"))
                 .andExpect(jsonPath("$.modelRouting").doesNotExist())
@@ -76,7 +80,14 @@ class AgentConfigurationApiIntegrationTest {
                                  "pathScope":["src"],"maxTurns":12,"timeoutSeconds":300}
                                 """.formatted(profileId)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.agents[1].engine").value("claude_sdk_team"));
+                .andExpect(jsonPath("$.agents[2].engine").value("claude_sdk_team"));
+
+        mockMvc.perform(patch("/api/v5/systems/" + systemId + "/agents/vision")
+                        .contentType(MediaType.APPLICATION_JSON).content("""
+                                {"name":"vision","modelProfileRef":"%s"}
+                                """.formatted(profileId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.agents[1].modelProfileRef").value(profileId));
 
         mockMvc.perform(post("/api/v5/systems/" + systemId + "/agents")
                         .contentType(MediaType.APPLICATION_JSON).content("""
@@ -99,6 +110,8 @@ class AgentConfigurationApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.configured").value(true))
                 .andExpect(jsonPath("$.model").value("claude-sonnet"))
+                .andExpect(jsonPath("$.image_input").value(true))
+                .andExpect(jsonPath("$.structured_output").value("json_schema"))
                 .andExpect(jsonPath("$.model_profiles[0].api_key").value("profile-secret"))
                 .andExpect(jsonPath("$.agents[0].name").value("product"))
                 .andExpect(jsonPath("$.agents[0].model_profile_ref").value(profileId));

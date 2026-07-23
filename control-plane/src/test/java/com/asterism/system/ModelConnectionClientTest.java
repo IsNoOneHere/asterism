@@ -45,6 +45,21 @@ class ModelConnectionClientTest {
         }
     }
 
+    @Test
+    void forwardsCapabilityTestSeparately() throws Exception {
+        var query = new AtomicReference<String>();
+        var server = server(200, "{\"supported\":true,\"message\":\"图片输入正常\",\"checkedAt\":\"now\",\"code\":\"\"}",
+                exchange -> query.set(exchange.getRequestURI().getRawQuery()));
+        try {
+            var result = client(server).testCapability("sys-1", "mp-1", "image_input");
+
+            assertThat(result.supported()).isTrue();
+            assertThat(query.get()).contains("capability=image_input");
+        } finally {
+            server.stop(0);
+        }
+    }
+
     private ModelConnectionClient client(HttpServer server) {
         return new ModelConnectionClient(new ObjectMapper(),
                 "http://127.0.0.1:" + server.getAddress().getPort() + "/model-connection-test", "internal-token");
@@ -53,6 +68,13 @@ class ModelConnectionClientTest {
     private HttpServer server(int status, String body, RequestCapture capture) throws Exception {
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/model-connection-test", exchange -> {
+            capture.accept(exchange);
+            var response = body.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(status, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.createContext("/model-capability-test", exchange -> {
             capture.accept(exchange);
             var response = body.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(status, response.length);

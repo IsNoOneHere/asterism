@@ -3,6 +3,7 @@ package com.asterism.prd;
 import com.asterism.attachment.Attachment;
 import com.asterism.attachment.AttachmentService;
 import com.asterism.common.ApiException;
+import com.asterism.common.ModelInvocationException;
 import com.asterism.context.ContextBundle;
 import com.asterism.context.ContextRecallQuery;
 import com.asterism.context.ContextRecallService;
@@ -39,10 +40,11 @@ import java.util.stream.Collectors;
 public class PrdConversationService {
     private static final Logger log = LoggerFactory.getLogger(PrdConversationService.class);
     private static final String AI_UNAVAILABLE = "AI 暂时不可用，请重试";
+    private static final String TURN_FAILED_MESSAGE = "AI 生成失败，本轮未修改草稿。你可以重试或手工编辑。";
     static final String PENDING_SENDER = "assistant_pending";
     static final long PENDING_TIMEOUT_SECONDS = 120;
     private static final Set<String> EDITABLE_STATUSES = Set.of(
-            "waiting_input", "need_clarification", "waiting_user_confirm", "case_start_failed");
+            "waiting_input", "need_clarification", "waiting_user_confirm", "turn_failed", "case_start_failed");
 
     private final PrdSessionRepository sessions;
     private final ConversationMessageRepository messages;
@@ -112,8 +114,8 @@ public class PrdConversationService {
             taskExecutor.execute(() -> executeTurn(turn));
         } catch (RuntimeException error) {
             log.warn("PRD 后台执行器拒绝回合 prdId={} type={}", turn.session().prdId(), error.getClass().getSimpleName());
-            transactions.executeWithoutResult(status -> failTurn(turn));
-            return new PrdMessageResponse(response.prdId(), response.conversationId(), response.status(), AI_UNAVAILABLE,
+            transactions.executeWithoutResult(status -> failTurn(turn, "EXECUTOR_REJECTED"));
+            return new PrdMessageResponse(response.prdId(), response.conversationId(), "turn_failed", TURN_FAILED_MESSAGE,
                     response.missingFields(), response.draft(), false);
         }
         return response;
@@ -190,11 +192,7 @@ public class PrdConversationService {
             manualCitations.put("AC-" + (index + 1), List.of(userRef));
         }
         draft = draft.withCitations(manualCitations, List.of(userRef));
-        var missing = new ArrayList<>(readList(current.missingFields()));
-        missing.removeIf(field -> List.of("title", "goal", "acceptanceCriteria", "acceptance_criteria").contains(field));
-        if (updatedTitle == null || updatedTitle.isBlank()) missing.add("title");
-        if (updatedGoal == null || updatedGoal.isBlank()) missing.add("goal");
-        if (draft.acceptanceCriteria().isEmpty()) missing.add("acceptance_criteria");
+        var missing = computeMissingFields(draft);
         var status = missing.isEmpty() ? "waiting_user_confirm" : "need_clarification";
         var now = Instant.now();
         aggregate.update(new PrdSession(current.prdId(), current.systemId(), current.conversationId(), current.workItemId(),
@@ -225,9 +223,10 @@ public class PrdConversationService {
             var result = processTurn(turn);
             transactions.executeWithoutResult(status -> completeTurn(turn, result));
         } catch (RuntimeException error) {
-            log.warn("PRD AI 回合失败，已保留用户消息 prdId={} type={}",
-                    turn.session().prdId(), error.getClass().getSimpleName());
-            transactions.executeWithoutResult(status -> failTurn(turn));
+            var failureCode = failureCode(error);
+            log.warn("PRD AI 回合失败，已保留原草稿 prdId={} code={}",
+                    turn.session().prdId(), failureCode);
+            transactions.executeWithoutResult(status -> failTurn(turn, failureCode));
         }
     }
 
@@ -286,7 +285,10 @@ public class PrdConversationService {
         var result = productAgent.updateDraft(turn.session().systemId(), agentContent, draftCodec.toMap(turn.currentDraft()),
                 turn.currentMissing(), turn.history(), turn.contextBundle().items());
         var citationResult = citations.validate(turn.contextBundle(), result);
-        var draft = draftCodec.fromMap(result.draft()).withTitle(result.title()).preserveTargets(turn.currentDraft())
+        // 模型结果按顶层 patch 合并，避免遗漏字段时丢失已积累的草稿内容。
+        var mergedDraft = new LinkedHashMap<>(draftCodec.toMap(turn.currentDraft()));
+        mergedDraft.putAll(result.draft());
+        var draft = draftCodec.fromMap(mergedDraft).withTitle(result.title()).preserveTargets(turn.currentDraft())
                 .withCitations(citationResult.citations(), citationResult.usedRefs())
                 .withMemoryCandidates(result.memoryCandidates());
         var anchors = analysis.observations().stream().flatMap(observation -> observation.anchors().stream()).toList();
@@ -299,16 +301,16 @@ public class PrdConversationService {
 
     private void completeTurn(PreparedTurn turn, ProcessedTurn processed) {
         var now = Instant.now();
-        var result = processed.result();
         if (messages.completePending(turn.pendingMessage().messageId(), processed.assistantMessage()) == 0) return;
         messages.attachContext(turn.pendingMessage().messageId(), turn.contextBundle().bundleId(),
                 json(processed.citationResult().usedRefs()), json(processed.citationResult().citations()));
-        var status = result.missingFields().isEmpty() ? "waiting_user_confirm" : "need_clarification";
+        var missing = computeMissingFields(processed.draft());
+        var status = missing.isEmpty() ? "waiting_user_confirm" : "need_clarification";
         var title = turn.newSession() || turn.session().title() == null ? processed.draft().title() : turn.session().title();
         var goal = turn.newSession() ? processed.draft().goal() : turn.session().goal();
         var session = new PrdSession(turn.session().prdId(), turn.session().systemId(), turn.session().conversationId(),
                 turn.session().workItemId(), turn.session().caseId(), title, goal, draftCodec.write(processed.draft()),
-                json(result.missingFields()), status, turn.session().createdBy(), turn.session().confirmedBy(),
+                json(missing), status, turn.session().createdBy(), turn.session().confirmedBy(),
                 turn.session().confirmedAt(), turn.session().createdAt(), now);
         aggregate.update(session);
         aggregate.update(new ConversationMessage(turn.userMessage().messageId(), turn.userMessage().conversationId(),
@@ -321,15 +323,39 @@ public class PrdConversationService {
                 Map.of("title", title, "status", status, "turn", turn.turn(),
                         "contextBundleId", turn.contextBundle().bundleId(),
                         "usedContextRefs", processed.citationResult().usedRefs()));
-        if (!result.missingFields().isEmpty()) {
+        if (!missing.isEmpty()) {
             append(DomainEventType.ClarificationRequested, session.systemId(), session.prdId(), "product-agent",
                     "ClarificationRequested:" + session.prdId() + ":" + turn.turn(),
-                    Map.of("missingFields", result.missingFields()));
+                    Map.of("missingFields", missing));
         }
     }
 
-    private void failTurn(PreparedTurn turn) {
-        messages.completePending(turn.pendingMessage().messageId(), AI_UNAVAILABLE);
+    private void failTurn(PreparedTurn turn, String failureCode) {
+        if (messages.completePending(turn.pendingMessage().messageId(), TURN_FAILED_MESSAGE) == 0) return;
+        var current = turn.session();
+        var now = Instant.now();
+        aggregate.update(new PrdSession(current.prdId(), current.systemId(), current.conversationId(),
+                current.workItemId(), current.caseId(), current.title(), current.goal(),
+                draftCodec.write(turn.currentDraft()), json(turn.currentMissing()), "turn_failed",
+                current.createdBy(), current.confirmedBy(), current.confirmedAt(), current.createdAt(), now));
+        append(DomainEventType.PRDUpdated, current.systemId(), current.prdId(), turn.actorId(),
+                "PRDUpdated:" + current.prdId() + ":" + turn.turn() + ":failed",
+                Map.of("source", "model_failure", "status", "turn_failed", "reason", failureCode));
+    }
+
+    private String failureCode(RuntimeException error) {
+        if (error instanceof ModelInvocationException modelError) return modelError.code();
+        if (error instanceof PrdDraftCodec.DraftFieldTypeException) return "PRD_DRAFT_INVALID";
+        return error.getClass().getSimpleName();
+    }
+
+    private List<String> computeMissingFields(PrdDraft draft) {
+        // 生命周期只由已校验的草稿内容决定，不采信模型声明的 missing_fields。
+        var missing = new ArrayList<String>();
+        if (draft.title() == null || draft.title().isBlank()) missing.add("title");
+        if (draft.goal() == null || draft.goal().isBlank()) missing.add("goal");
+        if (draft.acceptanceCriteria().isEmpty()) missing.add("acceptance_criteria");
+        return List.copyOf(missing);
     }
 
     private AnalysisResult analyze(String systemId, List<Attachment> turnAttachments) {

@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import os
 import subprocess
@@ -15,7 +16,14 @@ from claude_agent_sdk import (
 )
 
 from asterism_worker.agent_config import AgentConstraints, EngineConfig, ModelProfile
-from asterism_worker.contracts import CodingAttemptRequest, CodingPlanDraft, CodingPlanRequest, CodingPlanTask
+from asterism_worker.contracts import (
+    CodingAttemptRequest,
+    CodingPlanDraft,
+    CodingPlanProposal,
+    CodingPlanRequest,
+    CodingPlanTask,
+)
+from asterism_worker.providers.claude_sdk_planning import ClaudeSdkPlanningMixin, PlanningOutputError
 from asterism_worker.providers.claude_sdk_team import (
     SUBAGENT_TOOLS,
     SUPERVISOR_TOOLS,
@@ -247,6 +255,10 @@ def test_team_provider_plans_read_only_and_can_resume_the_same_session(tmp_path,
         assert options.session_store is None
         assert options.session_store_flush == "eager"
         assert options.enable_file_checkpointing is False
+        assert options.output_format == {
+            "type": "json_schema",
+            "schema": CodingPlanProposal.model_json_schema(),
+        }
         gate = options.hooks["PreToolUse"][0].hooks[0]
         first = await gate({
             "tool_name": "Read", "tool_input": {"file_path": "frontend/src/app.txt"},
@@ -259,14 +271,16 @@ def test_team_provider_plans_read_only_and_can_resume_the_same_session(tmp_path,
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=2,
             session_id="22222222-2222-4222-8222-222222222222",
-            result=json.dumps({
+            result="这段自由文本不是 JSON，但不能再参与规划结果解析。",
+            structured_output={
                 "summary": "只改前端提示",
                 "tasks": [{
                     "repo": "frontend", "objective": "调整错误提示位置",
                     "acceptance_criteria_refs": ["AC-1"], "evidence": ["src/app.txt"],
                 }],
                 "risks": ["保持接口不变"], "open_questions": [],
-            }, ensure_ascii=False),
+            },
+            usage={"input_tokens": 10, "output_tokens": 5},
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -284,8 +298,126 @@ def test_team_provider_plans_read_only_and_can_resume_the_same_session(tmp_path,
 
     assert plan.revision == 2
     assert plan.session_id == "22222222-2222-4222-8222-222222222222"
+    assert plan.tasks[0].task_id == "task-01"
     assert plan.tasks[0].repo == "frontend"
     assert set(plan.base_revisions) == {"backend", "frontend"}
+    transcript = tmp_path / "artifacts" / "wi-1" / "coding-plan-case-1.jsonl"
+    assert '"usage": {"input_tokens": 10, "output_tokens": 5}' in transcript.read_text()
+
+
+def test_planning_proposal_schema_excludes_system_fields():
+    schema = CodingPlanProposal.model_json_schema()
+
+    assert set(schema["properties"]) == {"summary", "tasks", "risks", "open_questions"}
+    assert set(schema["$defs"]["CodingPlanTaskProposal"]["properties"]) == {
+        "repo", "objective", "acceptance_criteria_refs", "evidence",
+    }
+
+
+@pytest.mark.parametrize(
+    ("structured_output", "category"),
+    [
+        (None, "structured_output_missing"),
+        ({
+            "summary": 1,
+            "tasks": [{"repo": "backend", "objective": "修复保存"}],
+            "risks": [],
+            "open_questions": [],
+        }, "structured_output_invalid"),
+        ({
+            "summary": "空计划",
+            "tasks": [],
+            "risks": [],
+            "open_questions": [],
+        }, "structured_output_invalid"),
+        ({
+            "summary": "模型越权生成身份",
+            "tasks": [{"task_id": "model-task", "repo": "backend", "objective": "修复保存"}],
+            "risks": [],
+            "open_questions": [],
+        }, "structured_output_invalid"),
+        ({
+            "summary": "未知仓库",
+            "tasks": [{"repo": "missing", "objective": "修复保存"}],
+            "risks": [],
+            "open_questions": [],
+        }, "unknown_repo"),
+    ],
+)
+def test_planning_rejects_invalid_structured_output(
+    tmp_path,
+    monkeypatch,
+    structured_output,
+    category,
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    team_root = tmp_path / "team"
+    team_root.mkdir()
+    coding_request, workspace = team_request(team_root)
+    request = CodingPlanRequest.model_validate({
+        **coding_request.model_dump(),
+        "plan_revision": 1,
+    })
+
+    async def fake_query(**_kwargs):
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-invalid", result='{"ignored": true}',
+            structured_output=structured_output,
+        )
+
+    provider = ClaudeSdkTeamProvider(
+        ModelProfile(provider="anthropic", model="claude", api_key="key"),
+        EngineConfig(name="claude_sdk_team"),
+        str(tmp_path / "artifacts"),
+        AgentConstraints(role_id="developer"),
+        {"query": fake_query},
+    )
+
+    with pytest.raises(PlanningOutputError, match=f"^{category}$"):
+        asyncio.run(provider.plan(request, workspace))
+
+
+def test_planning_maps_sdk_structured_output_retry_exhaustion(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    team_root = tmp_path / "team"
+    team_root.mkdir()
+    coding_request, workspace = team_request(team_root)
+    request = CodingPlanRequest.model_validate({
+        **coding_request.model_dump(),
+        "plan_revision": 1,
+    })
+
+    async def fake_query(**_kwargs):
+        yield ResultMessage(
+            subtype="error_max_structured_output_retries",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=True,
+            num_turns=1,
+            session_id="session-invalid",
+            result="模型多次修复后仍不符合 Schema",
+        )
+
+    provider = ClaudeSdkTeamProvider(
+        ModelProfile(provider="anthropic", model="claude", api_key="key"),
+        EngineConfig(name="claude_sdk_team"),
+        str(tmp_path / "artifacts"),
+        AgentConstraints(role_id="developer"),
+        {"query": fake_query},
+    )
+
+    with pytest.raises(PlanningOutputError, match="^structured_output_retry_exhausted$"):
+        asyncio.run(provider.plan(request, workspace))
+
+
+def test_planning_source_has_no_free_text_json_fallback():
+    source = inspect.getsource(ClaudeSdkPlanningMixin)
+
+    assert "json.loads" not in source
+    assert "re.search" not in source
+    assert "_parse_plan" not in source
+    assert "只输出 JSON" not in source
 
 
 def test_session_resolution_prefers_local_and_rebuilds_from_durable_context(tmp_path):
@@ -350,17 +482,18 @@ def test_planning_reserves_turns_for_plan_synthesis(tmp_path, monkeypatch):
             "tool_name": "Read", "tool_input": {"file_path": "backend/src/app.txt"},
         }, None, None)
         assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "立即输出 JSON 计划" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "立即提交结构化执行计划" in decision["hookSpecificOutput"]["permissionDecisionReason"]
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=5,
-            session_id="session-plan-budget", result=json.dumps({
+            session_id="session-plan-budget", result="忽略这段文本",
+            structured_output={
                 "summary": "后端修复",
                 "tasks": [{
                     "repo": "backend", "objective": "修复设置保存",
                     "acceptance_criteria_refs": ["AC-1"], "evidence": ["src/app.txt"],
                 }],
                 "risks": [], "open_questions": [],
-            }, ensure_ascii=False),
+            },
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -444,14 +577,15 @@ def test_planning_captures_git_baseline_before_switching_sdk_user(tmp_path, monk
     async def fake_query(**_kwargs):
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
-            session_id="session-plan-owner", result=json.dumps({
+            session_id="session-plan-owner", result="忽略这段文本",
+            structured_output={
                 "summary": "后端修复",
                 "tasks": [{
                     "repo": "backend", "objective": "修复设置保存",
                     "acceptance_criteria_refs": ["AC-1"], "evidence": ["src/app.txt"],
                 }],
                 "risks": [], "open_questions": [],
-            }, ensure_ascii=False),
+            },
         )
 
     provider = ClaudeSdkTeamProvider(

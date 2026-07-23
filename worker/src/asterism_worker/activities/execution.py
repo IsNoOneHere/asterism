@@ -23,6 +23,7 @@ from asterism_worker.contracts import (
     PatchApplyRequest,
     PatchApplyResult,
 )
+from asterism_worker.providers.claude_sdk_planning import PlanningOutputError
 from asterism_worker.providers.factory import build_execution_provider
 from asterism_worker.repo_source import (
     TeamWorkspace,
@@ -69,7 +70,20 @@ async def generate_coding_plan(request: dict) -> dict:
         "启动 Claude SDK 只读规划 work_item=%s revision=%s",
         parsed.work_item_id, parsed.plan_revision,
     )
-    return (await provider.plan(parsed, workspace)).model_dump()
+    try:
+        return (await provider.plan(parsed, workspace)).model_dump()
+    except PlanningOutputError as error:
+        # 输出契约已由 SDK 内部尝试修复，外层重跑同一 Activity 没有意义。
+        log.warning(
+            "Claude SDK 规划输出契约无效 work_item=%s category=%s",
+            parsed.work_item_id,
+            str(error),
+        )
+        raise ApplicationError(
+            str(error),
+            type="PLAN_OUTPUT_INVALID",
+            non_retryable=True,
+        ) from None
 
 
 @activity.defn

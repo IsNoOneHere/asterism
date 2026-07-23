@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PrdDraftCodecTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -32,5 +33,16 @@ class PrdDraftCodecTest {
         });
         assertThat(roundTrip).containsEntry("legacyFlag", Map.of("enabled", true));
         assertThat(roundTrip).doesNotContainKey("extras");
+    }
+
+    @Test
+    void reportsAcceptanceCriteriaFieldAndActualType() {
+        assertThatThrownBy(() -> codec.fromMap(Map.of(
+                "title", "登录页",
+                "goal", "修复错误提示",
+                "acceptanceCriteria", Map.of("text", "显示中文错误")
+        )))
+                .isInstanceOf(PrdDraftCodec.DraftFieldTypeException.class)
+                .hasMessageContaining("acceptanceCriteria", "List<String>", "java.util");
     }
 }

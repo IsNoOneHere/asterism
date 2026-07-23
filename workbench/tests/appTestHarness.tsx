@@ -97,9 +97,11 @@ export function resetAppTestState() {
   conversationMessages = [];
   workItems = [];
   agentConfiguration = {
-    modelProfiles: [{ id: 'mp-1', name: 'Claude 主模型', provider: 'anthropic', model: 'claude-sonnet', baseUrl: '', apiKeySet: true }],
+    modelProfiles: [{ id: 'mp-1', name: 'Claude 主模型', provider: 'anthropic', model: 'claude-sonnet',
+      baseUrl: '', apiKeySet: true, imageInput: true, supportsVision: true, structuredOutput: 'json_object' }],
     agents: [
       { name: 'product', kind: 'builtin', engine: '', modelProfileRef: 'mp-1', pathScope: [], prompt: '' },
+      { name: 'vision', kind: 'builtin', engine: '', modelProfileRef: 'mp-1', pathScope: [], prompt: '' },
       { name: 'developer', kind: 'builtin', engine: 'claude_sdk_team', modelProfileRef: 'mp-1', pathScope: [], prompt: '', maxTurns: 40, timeoutSeconds: 900 },
     ],
     maxRevisions: 5,

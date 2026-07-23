@@ -243,7 +243,9 @@ export type ModelProfile = {
   baseUrl: string;
   model: string;
   apiKeySet: boolean;
-  supportsVision: boolean;
+  supportsVision?: boolean;
+  imageInput: boolean;
+  structuredOutput: 'json_schema' | 'json_object' | 'prompt_only';
 };
 
 export type Agent = {
@@ -268,6 +270,15 @@ export type AgentConfiguration = {
 export type ModelConnectionTestResult = {
   connected: boolean;
   message: string;
+  checkedAt?: string;
+  code?: string;
+};
+
+export type ModelCapabilityTestResult = {
+  supported: boolean;
+  message: string;
+  checkedAt?: string;
+  code?: string;
 };
 
 export class ApiError extends Error {
@@ -344,6 +355,8 @@ export const api = {
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-profiles/' + encodeURIComponent(profileId), { method: 'DELETE' }),
   testModelProfileConnection: (systemId: string, profileId: string) =>
     request<ModelConnectionTestResult>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-profiles/' + encodeURIComponent(profileId) + '/connection-test', { method: 'POST' }),
+  testModelProfileCapability: (systemId: string, profileId: string, capability: 'structured_output' | 'image_input') =>
+    request<ModelCapabilityTestResult>('/api/v5/systems/' + encodeURIComponent(systemId) + '/model-profiles/' + encodeURIComponent(profileId) + '/capability-test?capability=' + capability, { method: 'POST' }),
   updateAgent: (systemId: string, agentName: string, body: unknown) =>
     request<AgentConfiguration>('/api/v5/systems/' + encodeURIComponent(systemId) + '/agents/' + encodeURIComponent(agentName), {
       method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),

@@ -176,6 +176,36 @@ test('imported waiting input stays editable even with a reserved work item id', 
   expect(screen.queryByRole('heading', { name: '工作项已生成' })).not.toBeInTheDocument();
 });
 
+test('failed model turn keeps the draft editable for manual recovery', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-failed') {
+      return jsonResponse({
+        prdId: 'prd-failed', systemId: 'alpha-system', conversationId: 'conv-failed',
+        title: '登录提示', goal: '明确展示错误', status: 'turn_failed', createdBy: 'admin',
+        draft: { title: '登录提示', goal: '明确展示错误', acceptanceCriteria: [] },
+        missingFields: ['acceptance_criteria'],
+      });
+    }
+    if (path === '/api/v5/conversations/conv-failed') return jsonResponse({
+      messages: [{
+        messageId: 'failed-message', conversationId: 'conv-failed', senderType: 'assistant',
+        content: 'AI 生成失败，本轮未修改草稿。你可以重试或手工编辑。',
+      }],
+      pendingAssistant: false,
+    });
+    return fallback(input, init);
+  });
+
+  renderApp('/work-items/new/prd-failed');
+
+  expect(await screen.findByText('AI 生成失败')).toBeInTheDocument();
+  expect(screen.getByLabelText('PRD 标题')).toBeEnabled();
+  expect(screen.getByRole('button', { name: '添加验收标准' })).toBeEnabled();
+  expect(await screen.findByText('AI 生成失败，本轮未修改草稿。你可以重试或手工编辑。')).toBeInTheDocument();
+});
+
 test('draft deletion requires confirmation and sends DELETE', async () => {
   const fallback = vi.mocked(fetch).getMockImplementation()!;
   let deleted = false;

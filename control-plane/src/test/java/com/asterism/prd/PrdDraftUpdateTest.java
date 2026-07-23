@@ -66,6 +66,28 @@ class PrdDraftUpdateTest {
     }
 
     @Test
+    void failedTurnCanBeCompletedManually() {
+        var sessions = mock(PrdSessionRepository.class);
+        var aggregate = mock(JdbcAggregateTemplate.class);
+        var savedSession = new AtomicReference<PrdSession>();
+        when(sessions.findById("prd-1")).thenReturn(Optional.of(session("turn_failed")));
+        when(aggregate.update(any(PrdSession.class))).thenAnswer(call -> {
+            savedSession.set(call.getArgument(0));
+            return call.getArgument(0);
+        });
+        when(aggregate.insert(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
+        var service = service(sessions, mock(ConversationMessageRepository.class), mock(SystemAccessService.class),
+                aggregate, mock(DomainEventService.class));
+
+        var response = service.updateDraft("prd-1", "登录提示", "明确展示错误",
+                List.of("错误密码时显示中文提示"), actor);
+
+        assertThat(response.status()).isEqualTo("waiting_user_confirm");
+        assertThat(savedSession.get().status()).isEqualTo("waiting_user_confirm");
+        assertThat(savedSession.get().draftJson()).contains("错误密码时显示中文提示");
+    }
+
+    @Test
     void rejectsManualUpdateOutsideEditableStates() {
         var sessions = mock(PrdSessionRepository.class);
         when(sessions.findById("prd-1")).thenReturn(Optional.of(session("waiting_owner_approval")));

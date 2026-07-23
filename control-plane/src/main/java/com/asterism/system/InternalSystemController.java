@@ -27,12 +27,7 @@ public class InternalSystemController {
                                     @RequestParam(name = "profile_id", defaultValue = "") String profileId) {
         var config = configurations.internal(systemId);
         String selectedId = profileId;
-        if (selectedId.isBlank() && "vision".equals(agent)) {
-            selectedId = config.modelProfiles().stream()
-                    .filter(AgentConfigurationService.ModelProfile::supportsVision)
-                    .map(AgentConfigurationService.ModelProfile::id)
-                    .findFirst().orElse("");
-        } else if (selectedId.isBlank()) {
+        if (selectedId.isBlank()) {
             selectedId = config.agents().stream()
                     .filter(item -> item.name().equals(agent))
                     .map(AgentConfigurationService.Agent::modelProfileRef)
@@ -88,7 +83,9 @@ public class InternalSystemController {
         item.put("base_url", profile.baseUrl());
         item.put("api_key", profile.apiKey());
         item.put("model", profile.model());
-        item.put("supports_vision", profile.supportsVision());
+        item.put("image_input", profile.imageInputEnabled());
+        item.put("structured_output", profile.structuredOutput());
+        item.put("supports_vision", profile.imageInputEnabled());
         return item;
     }
 
@@ -112,6 +109,8 @@ public class InternalSystemController {
         response.put("model", profile.model());
         response.put("base_url", profile.baseUrl());
         response.put("api_key", profile.apiKey());
-        response.put("supports_vision", profile.supportsVision());
+        response.put("image_input", profile.imageInputEnabled());
+        response.put("structured_output", profile.structuredOutput());
+        response.put("supports_vision", profile.imageInputEnabled());
     }
 }

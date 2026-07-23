@@ -1,5 +1,6 @@
 package com.asterism.prd;
 
+import com.asterism.common.ModelInvocationException;
 import com.asterism.context.ContextItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
@@ -15,6 +16,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class HttpProductAgentAdapterContractTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -53,6 +55,7 @@ class HttpProductAgentAdapterContractTest {
             authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
             var response = Files.readString(Path.of("../docs/fixtures/prd-draft-response.json"))
                     .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
             exchange.getResponseBody().write(response);
             exchange.close();
@@ -62,11 +65,44 @@ class HttpProductAgentAdapterContractTest {
             var adapter = new HttpProductAgentAdapter(
                     RestClient.builder(),
                     "http://127.0.0.1:" + server.getAddress().getPort() + "/prd-draft",
-                    "internal-token");
+                    "internal-token", new ObjectMapper());
 
             adapter.updateDraft("sys-1", "做登录页", Map.of(), List.of(), List.of(), List.of());
 
             assertThat(authorization.get()).isEqualTo("Bearer internal-token");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void mapsStructuredAgentServiceError() throws Exception {
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/prd-draft", exchange -> {
+            var response = """
+                    {"code":"MODEL_OUTPUT_INVALID","message":"模型输出不符合业务契约"}
+                    """.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(422, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var adapter = new HttpProductAgentAdapter(
+                    RestClient.builder(),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/prd-draft",
+                    "internal-token", objectMapper);
+
+            assertThatThrownBy(() ->
+                    adapter.updateDraft("sys-1", "做登录页", Map.of(), List.of(), List.of(), List.of()))
+                    .isInstanceOf(ModelInvocationException.class)
+                    .satisfies(error -> {
+                        var modelError = (ModelInvocationException) error;
+                        assertThat(modelError.code()).isEqualTo("MODEL_OUTPUT_INVALID");
+                        assertThat(modelError.status()).isEqualTo(422);
+                        assertThat(modelError.getMessage()).isEqualTo("模型输出不符合业务契约");
+                    });
         } finally {
             server.stop(0);
         }

@@ -17,6 +17,7 @@ import com.asterism.system.SystemProfileRepository;
 import com.asterism.temporal.TemporalCasePort;
 import com.asterism.vision.ImageAnalysisService;
 import com.asterism.vision.UiObservation;
+import com.asterism.vision.UiElement;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -71,7 +72,8 @@ class PrdScreenshotFlowTest {
         when(attachments.read(attachment)).thenReturn(new byte[]{1});
         var imageAnalysis = mock(ImageAnalysisService.class);
         when(imageAnalysis.analyze(eq("sys-1"), eq(attachment), any(byte[].class))).thenReturn(new UiObservation(
-                "订单列表", List.of("待发货订单"), List.of("搜索按钮"), List.of(), "订单列表页"));
+                "订单列表", List.of("待发货订单"), List.of(new UiElement("button", "搜索按钮")),
+                List.of(), "订单列表页"));
         var knowledge = mock(KnowledgeMatchService.class);
         var target = new KnowledgeMatchService.SuspectedTarget("knowledge-1", "page", "订单列表", "/orders",
                 List.of("GET /api/orders"), List.of("src/orders.tsx"), 0.92);

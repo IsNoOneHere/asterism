@@ -1,17 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react';
-import { Agent, AgentConfiguration, api, ModelConnectionTestResult, ModelProfile } from '../api/client';
+import { Agent, AgentConfiguration, api, ModelCapabilityTestResult, ModelConnectionTestResult, ModelProfile } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { errorMessage, ErrorState } from '../components/Display';
 import { useCurrentSystem } from '../SystemContext';
 
-type ProfileDraft = { name: string; provider: string; model: string; baseUrl: string; apiKey: string; supportsVision: boolean };
+type ProfileDraft = { name: string; provider: string; model: string; baseUrl: string; apiKey: string; imageInput: boolean; structuredOutput: 'json_schema' | 'json_object' | 'prompt_only' };
 type AgentDraft = { name: string; engine: string; modelProfileRef: string; pathScope: string; prompt: string; maxTurns: number; timeoutSeconds: number };
 
-const emptyProfile: ProfileDraft = { name: '', provider: 'openai-compat', model: '', baseUrl: '', apiKey: '', supportsVision: false };
+const emptyProfile: ProfileDraft = { name: '', provider: 'openai-compat', model: '', baseUrl: '', apiKey: '', imageInput: false, structuredOutput: 'json_object' };
 const emptyAgent: AgentDraft = { name: '', engine: 'claude_sdk_team', modelProfileRef: '', pathScope: '', prompt: '', maxTurns: 50, timeoutSeconds: 600 };
-const builtinPurpose: Record<string, string> = { product: 'PRD 对话', developer: 'Claude SDK 团队执行' };
+const builtinPurpose: Record<string, string> = { product: 'PRD 对话', vision: '图片理解', developer: 'Claude SDK 团队执行' };
 
 export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const { systemId, canManageCurrentSystem, systemAccessLoading, systemAccessError } = useCurrentSystem();
@@ -25,6 +25,8 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const [message, setMessage] = useState('');
   const [maxRevisions, setMaxRevisions] = useState(5);
   const [connectionTests, setConnectionTests] = useState<Record<string, ModelConnectionTestResult>>({});
+  const [capabilityTests, setCapabilityTests] = useState<Record<string, ModelCapabilityTestResult>>({});
+  const [openTestMenu, setOpenTestMenu] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const config = useQuery({
     queryKey: ['agent-config', systemId],
@@ -43,8 +45,19 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
     onSuccess: (value) => {
       accept(value, '模型 Profile 保存成功');
       setConnectionTests({});
+      setCapabilityTests({});
       profileDialogRef.current?.close();
     },
+  });
+  const testCapability = useMutation({
+    mutationFn: ({ id, capability }: { id: string; capability: 'structured_output' | 'image_input' }) =>
+      api.testModelProfileCapability(systemId, id, capability),
+    onSuccess: (result, input) => setCapabilityTests((current) => ({
+      ...current, [`${systemId}:${input.id}:${input.capability}`]: result,
+    })),
+    onError: (error, input) => setCapabilityTests((current) => ({
+      ...current, [`${systemId}:${input.id}:${input.capability}`]: { supported: false, message: errorMessage(error) },
+    })),
   });
   const testProfile = useMutation({
     mutationFn: (id: string) => api.testModelProfileConnection(systemId, id),
@@ -61,7 +74,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   const saveAgent = useMutation({
     mutationFn: () => {
       const name = agentName;
-      const modelOnly = name === 'product';
+      const modelOnly = name === 'product' || name === 'vision';
       const body = {
         ...agent,
         name,
@@ -82,17 +95,21 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   useEffect(() => {
     if (value?.maxRevisions) setMaxRevisions(value.maxRevisions);
   }, [value?.maxRevisions]);
+  useEffect(() => {
+    setOpenTestMenu('');
+  }, [section, systemId]);
   const saveSettings = useMutation({
     mutationFn: () => api.updateExecutionSettings(systemId, { maxRevisions }),
     onSuccess: (next) => accept(next, '执行策略保存成功'),
   });
   const modelSection = section === 'models';
-  const modelOnly = agentName === 'product';
+  const modelOnly = agentName === 'product' || agentName === 'vision';
   const openProfile = (item?: ModelProfile) => {
     saveProfile.reset();
     setProfileId(item?.id ?? '');
     setProfile(item
-      ? { name: item.name, provider: item.provider, model: item.model, baseUrl: item.baseUrl, apiKey: '', supportsVision: Boolean(item.supportsVision) }
+      ? { name: item.name, provider: item.provider, model: item.model, baseUrl: item.baseUrl, apiKey: '',
+          imageInput: Boolean(item.imageInput ?? item.supportsVision), structuredOutput: item.structuredOutput || 'json_object' }
       : emptyProfile);
     // 原生 dialog 负责焦点约束和遮罩，不引入额外弹窗库。
     profileDialogRef.current?.showModal();
@@ -127,20 +144,50 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
           <div><h2>模型列表</h2><p>API Key 只维护一次，页面不会回显明文。</p></div>
           <button type="button" className="icon-text-button" disabled={!canManageCurrentSystem} onClick={() => openProfile()}><Plus size={16} />新增 Profile</button>
         </div>
-        <div className="table-frame"><table className="data-table model-profile-table"><thead><tr><th>名称</th><th>协议 / 模型</th><th>状态</th><th>操作</th></tr></thead><tbody>
+        <div className={`table-frame model-profile-table-frame${openTestMenu ? ' menu-open' : ''}`}><table className="data-table model-profile-table"><thead><tr><th>名称</th><th>协议 / 模型</th><th>状态</th><th>操作</th></tr></thead><tbody>
           {(value?.modelProfiles ?? []).map((item) => {
             const result = connectionTests[`${systemId}:${item.id}`];
             const pending = testProfile.isPending && testProfile.variables === item.id;
+            const structure = capabilityTests[`${systemId}:${item.id}:structured_output`];
+            const image = capabilityTests[`${systemId}:${item.id}:image_input`];
             return <tr key={item.id}>
             <td title={`${item.name || item.id} · ${item.baseUrl || '默认端点'}`}><strong>{item.name || item.id}</strong><small>{item.baseUrl || '默认端点'}</small></td>
             <td title={`${providerName(item.provider)} · ${item.model}`}>{providerName(item.provider)} · {item.model}</td>
-            <td><span className={`key-status ${item.apiKeySet ? 'configured' : ''}`}><KeyRound size={14} aria-hidden="true" />{item.apiKeySet ? 'Key 已配置' : 'Key 未配置'}{item.supportsVision ? ' · Vision' : ''}</span></td>
+            <td><span className={`key-status ${item.apiKeySet ? 'configured' : ''}`}><KeyRound size={14} aria-hidden="true" />{item.apiKeySet ? 'Key 已配置' : 'Key 未配置'}{item.imageInput ? ' · 图片' : ''} · {structuredOutputName(item.structuredOutput)}</span></td>
             <td className="config-action-cell table-action-cell"><div className="button-row compact-actions">
-              <button type="button" className={`secondary connection-test ${result ? result.connected ? 'connected' : 'failed' : ''}`}
-                aria-label={`测试 ${item.name || item.id}连通性`} aria-live="polite" title={result?.message || '测试模型连通性'}
-                disabled={!canManageCurrentSystem || testProfile.isPending} onClick={() => testProfile.mutate(item.id)}>
-                {pending ? '测试中…' : result ? result.connected ? '连接正常' : '连接失败' : '测试连接'}
-              </button>
+              {/* 多种诊断动作收进同一菜单，避免操作列被横向按钮挤满。 */}
+              <div className="row-action-menu profile-test-menu" onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpenTestMenu('');
+              }} onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  setOpenTestMenu('');
+                  event.currentTarget.querySelector('button')?.focus();
+                }
+              }}>
+                <button type="button" className="secondary profile-test-menu-trigger"
+                  aria-label={`测试 ${item.name || item.id}`} aria-haspopup="menu"
+                  aria-expanded={openTestMenu === item.id}
+                  onClick={() => setOpenTestMenu((current) => current === item.id ? '' : item.id)}>测试</button>
+                {openTestMenu === item.id && <div className="system-select-menu row-action-menu-panel profile-test-menu-panel"
+                  role="menu" aria-label={`${item.name || item.id} 的测试操作`}>
+                  <button type="button" role="menuitem"
+                    className={`system-select-option row-action-menu-item connection-test ${result ? result.connected ? 'connected' : 'failed' : ''}`}
+                    aria-label={`测试 ${item.name || item.id}连通性`} aria-live="polite"
+                    title={result?.message || '测试模型连通性'}
+                    disabled={!canManageCurrentSystem || testProfile.isPending}
+                    onClick={() => testProfile.mutate(item.id)}>
+                    {pending ? '测试中…' : result ? result.connected ? '连接正常' : '连接失败' : '测试连接'}
+                  </button>
+                  <CapabilityTestButton profile={item} capability="structured_output" result={structure}
+                    pending={testCapability.isPending && testCapability.variables?.id === item.id && testCapability.variables.capability === 'structured_output'}
+                    disabled={!canManageCurrentSystem || testCapability.isPending}
+                    onClick={() => testCapability.mutate({ id: item.id, capability: 'structured_output' })} />
+                  {item.imageInput && <CapabilityTestButton profile={item} capability="image_input" result={image}
+                    pending={testCapability.isPending && testCapability.variables?.id === item.id && testCapability.variables.capability === 'image_input'}
+                    disabled={!canManageCurrentSystem || testCapability.isPending}
+                    onClick={() => testCapability.mutate({ id: item.id, capability: 'image_input' })} />}
+                </div>}
+              </div>
               <button type="button" className="icon-button" title="编辑 Profile" aria-label={`编辑 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => openProfile(item)}><Pencil size={16} /></button>
               <button type="button" className="icon-button danger" title="删除 Profile" aria-label={`删除 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => { deleteProfile.reset(); setDeleteTarget({ id: item.id, name: item.name || item.id }); }}><Trash2 size={16} /></button>
             </div></td>
@@ -163,7 +210,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
           {(value?.agents ?? []).map((item) => <tr key={item.name}>
             <td title={item.name}><strong>{item.name}</strong>{item.kind === 'builtin' && <span className="default-badge">内置 · {builtinPurpose[item.name]}</span>}</td>
             <td title={agentRuntimeLabel(item, value?.modelProfiles ?? [])}>{agentRuntimeLabel(item, value?.modelProfiles ?? [])}</td>
-            <td title={item.pathScope.join(', ') || (item.name === 'product' ? '不执行代码' : '跟随系统')}>{item.pathScope.join(', ') || (item.name === 'product' ? '不执行代码' : '跟随系统')}</td>
+            <td title={item.pathScope.join(', ') || (item.name !== 'developer' ? '不执行代码' : '跟随系统')}>{item.pathScope.join(', ') || (item.name !== 'developer' ? '不执行代码' : '跟随系统')}</td>
             <td className="config-action-cell table-action-cell"><div className="button-row compact-actions">
               <button type="button" className="icon-button" title="编辑 Agent" aria-label={`编辑 ${item.name}`} disabled={!canManageCurrentSystem} onClick={() => openAgent(item)}><Pencil size={16} /></button>
             </div></td>
@@ -180,7 +227,8 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
           <label>模型名称<input required value={profile.model} onChange={(event) => setProfile({ ...profile, model: event.target.value })} /></label>
           <label>Base URL<input value={profile.baseUrl} onChange={(event) => setProfile({ ...profile, baseUrl: event.target.value })} /></label>
           <label>API Key<input type="password" autoComplete="new-password" placeholder={profileId ? '留空保留现有 Key' : ''} value={profile.apiKey} onChange={(event) => setProfile({ ...profile, apiKey: event.target.value })} /></label>
-          <label className="checkbox-field"><input type="checkbox" checked={profile.supportsVision} onChange={(event) => setProfile({ ...profile, supportsVision: event.target.checked })} /><span>支持图片理解</span></label>
+          <label>结构化输出<select value={profile.structuredOutput} onChange={(event) => setProfile({ ...profile, structuredOutput: event.target.value as ProfileDraft['structuredOutput'] })}><option value="json_schema">JSON Schema</option><option value="json_object">JSON Object</option><option value="prompt_only">仅提示词</option></select></label>
+          <label className="checkbox-field"><input type="checkbox" checked={profile.imageInput} onChange={(event) => setProfile({ ...profile, imageInput: event.target.checked })} /><span>支持图片输入</span></label>
         </div>
         {saveProfile.error && <div className="error-text">{errorMessage(saveProfile.error)}</div>}
         <div className="button-row"><button type="button" className="secondary" onClick={() => profileDialogRef.current?.close()}>取消</button><button type="submit" disabled={!canManageCurrentSystem || saveProfile.isPending}>保存 Profile</button></div>
@@ -193,7 +241,7 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
         <div className="agent-role-fields">
           <label>Agent 名称<input required disabled value={agent.name} /></label>
           {!modelOnly && <label>执行内核<select value={agent.engine} onChange={(event) => setAgent({ ...agent, engine: event.target.value })}>{agentEngineOptions(value?.engines).map((engine) => <option key={engine} value={engine}>{engine}</option>)}</select></label>}
-          <label>Model Profile<select value={agent.modelProfileRef} onChange={(event) => setAgent({ ...agent, modelProfileRef: event.target.value })}><option value="">回落部署默认</option>{profileOptions(value?.modelProfiles)}</select></label>
+          <label>Model Profile<select required={agentName === 'vision'} value={agent.modelProfileRef} onChange={(event) => setAgent({ ...agent, modelProfileRef: event.target.value })}><option value="">{agentName === 'vision' ? '请选择图片模型' : '回落部署默认'}</option>{profileOptions(value?.modelProfiles, agentName === 'vision')}</select></label>
           {!modelOnly && <><label>Path Scope（每行一条）<textarea value={agent.pathScope} onChange={(event) => setAgent({ ...agent, pathScope: event.target.value })} /></label>
             <label className="wide-field">Supervisor 提示词<textarea value={agent.prompt} onChange={(event) => setAgent({ ...agent, prompt: event.target.value })} /></label>
             <label>最大轮次<input type="number" min="1" value={agent.maxTurns} onChange={(event) => setAgent({ ...agent, maxTurns: Number(event.target.value) })} /></label></>}
@@ -226,8 +274,26 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
   </section>;
 }
 
-function profileOptions(profiles: ModelProfile[] | undefined) {
-  return (profiles ?? []).map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>);
+function profileOptions(profiles: ModelProfile[] | undefined, imageOnly = false) {
+  return (profiles ?? []).filter((item) => !imageOnly || item.imageInput).map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>);
+}
+
+function CapabilityTestButton({ profile, capability, result, pending, disabled, onClick }: {
+  profile: ModelProfile;
+  capability: 'structured_output' | 'image_input';
+  result?: ModelCapabilityTestResult;
+  pending: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const label = capability === 'structured_output' ? '结构化' : '图片';
+  return <button type="button" role="menuitem"
+    className={`system-select-option row-action-menu-item connection-test ${result ? result.supported ? 'connected' : 'failed' : ''}`}
+    aria-label={`测试 ${profile.name || profile.id}${label}能力`} aria-live="polite"
+    title={result ? `${result.message}${result.checkedAt ? ` · ${result.checkedAt}` : ''}` : `测试${label}能力`}
+    disabled={disabled} onClick={onClick}>
+    {pending ? '测试中…' : result ? result.supported ? `${label}正常` : `${label}失败` : `测${label}`}
+  </button>;
 }
 
 function profileName(profiles: ModelProfile[], id: string) {
@@ -244,6 +310,10 @@ function agentEngineOptions(engines: string[] | undefined) {
 
 function providerName(provider: string) {
   return provider === 'openai-compat' ? 'OpenAI Compatible' : 'Anthropic';
+}
+
+function structuredOutputName(value: ModelProfile['structuredOutput']) {
+  return value === 'json_schema' ? 'Schema' : value === 'prompt_only' ? 'Prompt' : 'JSON';
 }
 
 function lines(value: string) {

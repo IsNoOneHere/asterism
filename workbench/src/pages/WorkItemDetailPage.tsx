@@ -397,48 +397,50 @@ function StageDetail({ stage, flow, workItem, actions, pending, pendingAction, o
         <div><dt>参与角色</dt><dd>{stageParticipants(stage, workItem)}</dd></div>
       </dl>
 
-      {stage.id === 'execution' && <>
-        {flow.codingPlan && <CodingPlanDetail plan={flow.codingPlan} />}
-        <ExecutionDetail agents={stage.agents ?? []} plan={flow.codingPlan} />
-      </>}
-      {stage.id === 'patch' && <PatchDetail flow={flow} />}
-      {stage.id === 'validation' && <ValidationChecks checks={stage.checks ?? []} status={stage.status} />}
-      {stage.id === 'release' && <RepositoryLanes repositories={stage.repositories ?? []} />}
+      <div className="stage-detail-body">
+        {stage.id === 'execution' && <>
+          {flow.codingPlan && <CodingPlanDetail plan={flow.codingPlan} />}
+          <ExecutionDetail agents={stage.agents ?? []} plan={flow.codingPlan} />
+        </>}
+        {stage.id === 'patch' && <PatchDetail flow={flow} />}
+        {stage.id === 'validation' && <ValidationChecks checks={stage.checks ?? []} status={stage.status} />}
+        {stage.id === 'release' && <RepositoryLanes repositories={stage.repositories ?? []} />}
 
-      {stage.events.length > 0 && (
-        <div className="stage-events">
-          <h3>关键事件</h3>
-          <ol className="flow-event-list">
-            {stage.events.map((event) => (
-              <li key={event.eventId || event.sequence}>
-                <span className="event-dot" aria-hidden="true" />
-                <div><strong>{eventName(event.eventType)}</strong><p>{eventSummary(event)}</p></div>
-                <time>{formatDateTime(event.createdAt)}</time>
-              </li>
+        {stage.events.length > 0 && (
+          <div className="stage-events">
+            <h3>关键事件</h3>
+            <ol className="flow-event-list">
+              {stage.events.map((event) => (
+                <li key={event.eventId || event.sequence}>
+                  <span className="event-dot" aria-hidden="true" />
+                  <div><strong>{eventName(event.eventType)}</strong><p>{eventSummary(event)}</p></div>
+                  <time>{formatDateTime(event.createdAt)}</time>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+
+        {(stageAttempts.length > 1 || stageAttempts.some((attempt) => attempt.status === 'failed')) && <AttemptHistory attempts={stageAttempts} />}
+
+        {pendingAction && <div className="notice action-pending" role="status">“{actionLabel(pendingAction)}”已提交，等待 Worker 完成；期间不能提交其它阶段操作。</div>}
+
+        {workItem.canControl && actions.length > 0 && (
+          <div className="stage-actions" aria-label="当前阶段操作">
+            {actions.map((action) => (
+              <button
+                key={action.code}
+                type="button"
+                className={action.danger ? 'danger-action' : action.code === primaryAction ? undefined : 'secondary'}
+                disabled={pending}
+                onClick={() => onAction(action)}
+              >
+                {action.label}
+              </button>
             ))}
-          </ol>
-        </div>
-      )}
-
-      {(stageAttempts.length > 1 || stageAttempts.some((attempt) => attempt.status === 'failed')) && <AttemptHistory attempts={stageAttempts} />}
-
-      {pendingAction && <div className="notice action-pending" role="status">“{actionLabel(pendingAction)}”已提交，等待 Worker 完成；期间不能提交其它阶段操作。</div>}
-
-      {workItem.canControl && actions.length > 0 && (
-        <div className="stage-actions" aria-label="当前阶段操作">
-          {actions.map((action) => (
-            <button
-              key={action.code}
-              type="button"
-              className={action.danger ? 'danger-action' : action.code === primaryAction ? undefined : 'secondary'}
-              disabled={pending}
-              onClick={() => onAction(action)}
-            >
-              {action.label}
-            </button>
-          ))}
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -479,13 +481,19 @@ function ExecutionDetail({ agents, plan }: { agents: AgentStageView[]; plan: Cod
 
 function PatchDetail({ flow }: { flow: WorkItemFlow }) {
   if (!flow.modification) return null;
-  const changed = flow.repositories.reduce((total, repo) => total + repo.changedPaths.length, 0);
+  const result = modificationPresentation(flow);
   return (
-    <div className="change-summary">
-      <strong>{flow.modification.summary || 'Agent 修改已生成'}</strong>
-      <span>{flow.modification.provider || '-'} · {changed} 个文件 · {formatTokenUsage(flow.modification.tokenUsage)}</span>
-      <p>完整文件列表和 diff 已移至“代码变更”Tab。</p>
-    </div>
+    <section className="change-summary" aria-labelledby="change-summary-title">
+      <header>
+        <div>
+          <span>修改结果</span>
+          <strong id="change-summary-title">{result.title}</strong>
+        </div>
+        <span>{flow.modification.provider || '-'} · {result.changedPathCount} 个文件 · {formatTokenUsage(flow.modification.tokenUsage)}</span>
+      </header>
+      {result.detail && <p className="change-summary-detail">{result.detail}</p>}
+      <p className="change-summary-note">完整文件列表和 Diff 请在“代码变更”Tab 中查看。</p>
+    </section>
   );
 }
 
@@ -545,7 +553,7 @@ function CodeChanges({ flow, actions, pending, reviewNote, onReviewNoteChange, o
   return (
     <div className="code-change-list">
       {flow.modification && <div className="panel code-change-summary">
-        <div><span>执行摘要</span><strong>{flow.modification.summary || '修改已完成'}</strong></div>
+        <div><span>执行摘要</span><strong>{modificationPresentation(flow).title}</strong></div>
         <div><span>执行内核</span><strong>{flow.modification.provider || '-'}</strong></div>
         <div><span>轮次</span><strong>{flow.modification.turns ?? '-'}</strong></div>
         <div><span>Token</span><strong>{formatTokenUsage(flow.modification.tokenUsage)}</strong></div>
@@ -683,7 +691,11 @@ function stageSummary(stage: FlowStage, workItem: WorkItem, flow: WorkItemFlow) 
     if (stage.agents?.length) return `Claude SDK Supervisor 正在调度 ${Math.max(0, stage.agents.length - 1)} 个仓库子 Agent。`;
     return '等待 Coding Supervisor 启动。';
   }
-  if (stage.id === 'patch') return flow.modification ? flow.modification.summary || '代码修改已生成，等待确认。' : '等待 Agent 生成代码修改。';
+  if (stage.id === 'patch') {
+    if (!flow.modification) return '等待 Agent 生成代码修改。';
+    const result = modificationPresentation(flow);
+    return `${result.title}${result.changedPathCount ? `，涉及 ${result.changedPathCount} 个文件` : ''}，等待负责人确认。`;
+  }
   if (stage.id === 'validation') return stage.status === 'skipped' ? '本次没有自动检查命令。' : flow.checks.length ? `${flow.checks.filter((check) => check.passed).length} / ${flow.checks.length} 项自动检查通过。` : '等待自动检查或人工验证。';
   if (stage.id === 'release') return flow.repositories.length ? `${flow.repositories.filter((repo) => ['merged', 'released'].includes(repo.status)).length} / ${flow.repositories.length} 个仓库已完成。` : '等待创建提交或合并请求。';
   return workItem.lifecycleStatus === 'cancelled' ? '工作项已取消。' : workItem.lifecycleStatus === 'rejected' ? '工作项已拒绝。' : '工作项生命周期已结束。';
@@ -698,12 +710,76 @@ function stageParticipants(stage: FlowStage, workItem: WorkItem) {
   return '系统';
 }
 
+function modificationPresentation(flow: WorkItemFlow) {
+  const rawSummary = flow.modification?.summary?.trim() || '';
+  const fallbackChangedPaths = uniqueStrings(flow.repositories.flatMap((repo) => repo.changedPaths));
+  return summarizeModification(rawSummary, fallbackChangedPaths);
+}
+
+function summarizeModification(rawSummary: string, fallbackChangedPaths: string[]) {
+  let structured: Record<string, unknown> | null = null;
+
+  // Coding Agent 可能把结构化执行结果放进 summary；这里只提取可读信息，不把原始 JSON 塞进流程卡片。
+  if (rawSummary.startsWith('{')) {
+    try {
+      const value = JSON.parse(rawSummary);
+      structured = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+    } catch {
+      structured = null;
+    }
+  }
+
+  if (!structured) {
+    return {
+      title: compactText(rawSummary || 'Agent 修改已生成', 180),
+      detail: '',
+      changedPathCount: fallbackChangedPaths.length,
+    };
+  }
+
+  const taskValues = structured.task_outcomes ?? structured.taskOutcomes;
+  const tasks = Array.isArray(taskValues)
+    ? taskValues.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    : [];
+  const completedTasks = tasks.filter((task) => String(task.status || '').toLowerCase() === 'completed').length;
+  const taskSummaries = tasks.map((task) => compactText(typeof task.summary === 'string' ? task.summary : '', 90)).filter(Boolean);
+  const changedPaths = uniqueStrings([
+    ...stringArray(structured.changed_paths ?? structured.changedPaths),
+    ...tasks.flatMap((task) => stringArray(task.changed_paths ?? task.changedPaths)),
+    ...fallbackChangedPaths,
+  ]);
+  const title = tasks.length
+    ? completedTasks === tasks.length ? `${tasks.length} 个任务已完成` : `${completedTasks} / ${tasks.length} 个任务完成`
+    : compactText(typeof structured.summary === 'string' ? structured.summary : '', 180) || 'Agent 修改已生成';
+  return {
+    title,
+    detail: taskSummaries.length ? `${taskSummaries.slice(0, 2).join('；')}${taskSummaries.length > 2 ? '等' : ''}` : '',
+    changedPathCount: changedPaths.length,
+  };
+}
+
+function compactText(value: string, maxLength: number) {
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
 function eventSummary(event: WorkItemEvent) {
   const payload = eventPayload(event);
   const failed = failureReason(event);
   if (failed) return failed;
   if (event.eventType === 'AgentStageCompleted') return String(payload?.summary || `${payload?.role || 'Agent'} 执行完成`);
-  if (event.eventType === 'ModificationCompleted') return String(payload?.summary || '已生成代码修改');
+  if (event.eventType === 'ModificationCompleted') {
+    const summary = typeof payload?.summary === 'string' ? payload.summary : '';
+    return summarizeModification(summary, stringArray(payload?.changedPaths ?? payload?.changed_paths)).title;
+  }
   if (event.eventType.startsWith('MergeRequest')) return `${payload?.repo || '仓库'}${payload?.mrIid ? ` · MR !${payload.mrIid}` : ''}`;
   if (event.eventType.startsWith('Validation')) return Array.isArray(payload?.commands) ? `${payload.commands.length} 项自动检查` : '验证结果已记录';
   return `${event.actorId || event.source || '系统'} · ${event.eventType}`;

@@ -1,11 +1,14 @@
 package com.asterism.vision;
 
 import com.asterism.attachment.Attachment;
+import com.asterism.common.ModelInvocationException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 
 @Service
@@ -13,13 +16,16 @@ public class ImageAnalysisService {
     private final RestClient client;
     private final String endpoint;
     private final String workerToken;
+    private final ObjectMapper objectMapper;
 
     public ImageAnalysisService(RestClient.Builder builder,
                                 @Value("${asterism.image-analysis.url:http://127.0.0.1:8090/analyze-image}") String endpoint,
-                                @Value("${asterism.worker-callback.token:dev-worker-token}") String workerToken) {
+                                @Value("${asterism.worker-callback.token:dev-worker-token}") String workerToken,
+                                ObjectMapper objectMapper) {
         this.client = builder.build();
         this.endpoint = endpoint;
         this.workerToken = workerToken;
+        this.objectMapper = objectMapper;
     }
 
     public UiObservation analyze(String systemId, Attachment attachment, byte[] content) {
@@ -27,12 +33,16 @@ public class ImageAnalysisService {
         var uri = UriComponentsBuilder.fromUriString(endpoint)
                 .queryParam("system_id", systemId)
                 .build().toUri();
-        return client.post()
-                .uri(uri)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + workerToken)
-                .contentType(MediaType.parseMediaType(attachment.contentType()))
-                .body(content)
-                .retrieve()
-                .body(UiObservation.class);
+        try {
+            return client.post()
+                    .uri(uri)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + workerToken)
+                    .contentType(MediaType.parseMediaType(attachment.contentType()))
+                    .body(content)
+                    .retrieve()
+                    .body(UiObservation.class);
+        } catch (RestClientResponseException error) {
+            throw ModelInvocationException.from(error, objectMapper);
+        }
     }
 }

@@ -82,6 +82,39 @@ class PrdControllerMultiTurnTest {
     }
 
     @Test
+    void modelMissingSuggestionCannotOverrideCompleteDraft() throws Exception {
+        var saved = completeSingleTurn(new ProductAgentPort.DraftResult(
+                "登录页",
+                Map.of(
+                        "title", "登录页",
+                        "goal", "修复错误提示",
+                        "scope", "code_change",
+                        "acceptanceCriteria", List.of("错误密码时显示中文提示")),
+                List.of("goal", "acceptance_criteria"),
+                "请补充信息"));
+
+        assertThat(saved.status()).isEqualTo("waiting_user_confirm");
+        assertThat(objectMapper.readValue(saved.missingFields(), List.class)).isEmpty();
+    }
+
+    @Test
+    void modelCompleteSuggestionCannotHideMissingDraftFields() throws Exception {
+        var saved = completeSingleTurn(new ProductAgentPort.DraftResult(
+                "登录页",
+                Map.of(
+                        "title", "登录页",
+                        "goal", "",
+                        "scope", "code_change",
+                        "acceptanceCriteria", List.of()),
+                List.of(),
+                "已完成"));
+
+        assertThat(saved.status()).isEqualTo("need_clarification");
+        assertThat(objectMapper.readValue(saved.missingFields(), List.class))
+                .containsExactly("goal", "acceptance_criteria");
+    }
+
+    @Test
     void rejectsChangingSystemAfterPrdWasCreated() {
         var sessions = mock(PrdSessionRepository.class);
         var current = new PrdSession("prd-1", "sys-1", "conv-1", null, null, "标题", "目标", "{}", "[]",
@@ -135,7 +168,7 @@ class PrdControllerMultiTurnTest {
     }
 
     @Test
-    void productAgentFailureKeepsUserMessageAndNextTurnCanSucceed() {
+    void productAgentFailureKeepsUserMessageAndNextTurnCanSucceed() throws Exception {
         var sessions = mock(PrdSessionRepository.class);
         var messages = mock(ConversationMessageRepository.class);
         var productAgent = mock(ProductAgentPort.class);
@@ -161,7 +194,11 @@ class PrdControllerMultiTurnTest {
         when(aggregate.update(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
         when(productAgent.updateDraft(anyString(), anyString(), any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("agent down"))
-                .thenReturn(new ProductAgentPort.DraftResult("登录提示", Map.of("title", "登录提示"), List.of(), "已完成"));
+                .thenReturn(new ProductAgentPort.DraftResult("登录提示", Map.of(
+                        "title", "登录提示",
+                        "goal", "修复登录页",
+                        "scope", "code_change",
+                        "acceptanceCriteria", List.of("错误可见")), List.of(), "已完成"));
         var memories = mock(MemoryItemRepository.class);
         when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
@@ -172,15 +209,60 @@ class PrdControllerMultiTurnTest {
         var actor = new UsernamePasswordAuthenticationToken("user", "n/a");
 
         var failed = service.message("sys-1", new PrdConversationService.PrdMessageRequest(null, "登录页报错"), actor);
+        var failedSession = savedSession.get();
         var retried = service.message("sys-1", new PrdConversationService.PrdMessageRequest(failed.prdId(), "请重试"), actor);
 
         assertThat(failed.assistantPending()).isTrue();
+        assertThat(failedSession.status()).isEqualTo("turn_failed");
+        assertThat(objectMapper.readValue(failedSession.draftJson(), Map.class))
+                .isEqualTo(Map.of("acceptanceCriteria", List.of()));
         assertThat(retried.assistantPending()).isTrue();
+        assertThat(savedSession.get().status()).isEqualTo("waiting_user_confirm");
         assertThat(savedMessages).extracting(ConversationMessage::senderType)
                 .containsExactly("user", "assistant_pending", "user", "assistant_pending");
         org.mockito.Mockito.verify(messages).completePending(anyString(),
-                org.mockito.ArgumentMatchers.eq("AI 暂时不可用，请重试"));
+                org.mockito.ArgumentMatchers.eq("AI 生成失败，本轮未修改草稿。你可以重试或手工编辑。"));
         assertThat(savedSession.get().draftJson()).contains("登录提示");
+    }
+
+    @Test
+    void invalidDraftPatchMovesToTurnFailedWithoutPollutingAccumulatedDraft() throws Exception {
+        var sessions = mock(PrdSessionRepository.class);
+        var messages = mock(ConversationMessageRepository.class);
+        var aggregate = mock(JdbcAggregateTemplate.class);
+        var saved = new AtomicReference<PrdSession>();
+        var now = java.time.Instant.now();
+        var originalDraft = """
+                {"title":"旧标题","goal":"旧目标","scope":"code_change",
+                 "acceptanceCriteria":["旧标准"],"legacy":{"keep":true}}
+                """;
+        var current = new PrdSession("prd-1", "sys-1", "conv-1", null, null, "旧标题", "旧目标",
+                originalDraft, "[]", "need_clarification", "user", null, null, now, now);
+        when(sessions.findById("prd-1")).thenReturn(Optional.of(current));
+        when(messages.countByConversationIdAndSenderType(anyString(), anyString())).thenReturn(1L);
+        when(messages.findByConversationIdOrderByCreatedAtAsc("conv-1")).thenReturn(List.of());
+        when(messages.completePending(anyString(), anyString())).thenReturn(1);
+        when(aggregate.insert(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
+        when(aggregate.update(any(PrdSession.class))).thenAnswer(call -> {
+            saved.set(call.getArgument(0));
+            return call.getArgument(0);
+        });
+        var productAgent = mock(ProductAgentPort.class);
+        when(productAgent.updateDraft(anyString(), anyString(), any(), any(), any(), any()))
+                .thenReturn(new ProductAgentPort.DraftResult(
+                        "新标题", Map.of("acceptanceCriteria", Map.of("text", "非法对象")), List.of(), "已完成"));
+        var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
+                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class),
+                contextRecall(), new PrdCitationService(), aggregate,
+                mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
+                mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
+
+        service.message("sys-1", new PrdConversationService.PrdMessageRequest("prd-1", "继续完善"),
+                new UsernamePasswordAuthenticationToken("user", "n/a"));
+
+        assertThat(saved.get().status()).isEqualTo("turn_failed");
+        assertThat(objectMapper.readValue(saved.get().draftJson(), Map.class))
+                .isEqualTo(objectMapper.readValue(originalDraft, Map.class));
     }
 
     @Test
@@ -256,6 +338,36 @@ class PrdControllerMultiTurnTest {
 
         assertThat(accepted.assistantPending()).isTrue();
         org.mockito.Mockito.verify(messages).completePending("pending-old", "AI 暂时不可用，请重试");
+    }
+
+    private PrdSession completeSingleTurn(ProductAgentPort.DraftResult result) {
+        var sessions = mock(PrdSessionRepository.class);
+        var messages = mock(ConversationMessageRepository.class);
+        var aggregate = mock(JdbcAggregateTemplate.class);
+        var saved = new AtomicReference<PrdSession>();
+        var productAgent = mock(ProductAgentPort.class);
+        when(messages.countByConversationIdAndSenderType(anyString(), anyString())).thenReturn(0L);
+        when(messages.completePending(anyString(), anyString())).thenReturn(1);
+        when(aggregate.insert(any(PrdSession.class))).thenAnswer(call -> {
+            saved.set(call.getArgument(0));
+            return call.getArgument(0);
+        });
+        when(aggregate.update(any(PrdSession.class))).thenAnswer(call -> {
+            saved.set(call.getArgument(0));
+            return call.getArgument(0);
+        });
+        when(aggregate.insert(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
+        when(aggregate.update(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
+        when(productAgent.updateDraft(anyString(), anyString(), any(), any(), any(), any())).thenReturn(result);
+        var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
+                objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class),
+                contextRecall(), new PrdCitationService(), aggregate,
+                mock(com.asterism.attachment.AttachmentService.class), mock(com.asterism.vision.ImageAnalysisService.class),
+                mock(com.asterism.knowledge.KnowledgeMatchService.class), Runnable::run);
+
+        service.message("sys-1", new PrdConversationService.PrdMessageRequest(null, "修复登录页"),
+                new UsernamePasswordAuthenticationToken("user", "n/a"));
+        return saved.get();
     }
 
     private TransactionOperations directTransactions() {

@@ -44,7 +44,11 @@ public interface TemporalCasePort {
     }
 
     record ModelProfileSnapshot(String id, String name, String provider, String baseUrl, String model,
-                                boolean supportsVision) {
+                                boolean supportsVision, boolean imageInput, String structuredOutput) {
+        public ModelProfileSnapshot(String id, String name, String provider, String baseUrl, String model,
+                                    boolean supportsVision) {
+            this(id, name, provider, baseUrl, model, supportsVision, supportsVision, "json_object");
+        }
     }
 
     record AgentSnapshot(String name, String kind, String engine, String modelProfileRef, List<String> pathScope,

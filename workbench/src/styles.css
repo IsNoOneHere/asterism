@@ -2004,6 +2004,25 @@ button.danger-action:hover:not(:disabled) {
   width: 220px;
 }
 
+.model-profile-table-frame.menu-open {
+  min-height: 280px;
+}
+
+.profile-test-menu-trigger {
+  min-height: 36px;
+  padding: 0 13px;
+}
+
+.profile-test-menu-panel {
+  min-width: 180px;
+}
+
+/* 多行列表最后一行的菜单向上展开，避免被表格滚动容器裁切。 */
+.model-profile-table tbody tr:last-child:not(:first-child) .profile-test-menu-panel {
+  bottom: calc(100% + 6px);
+  top: auto;
+}
+
 .agent-role-table th:last-child {
   width: 120px;
 }
@@ -3353,7 +3372,10 @@ button.requirement-attachment-card:hover:not(:disabled) {
 }
 
 .stage-detail {
-  padding: 24px;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
 }
 
 .stage-detail-head {
@@ -3361,7 +3383,14 @@ button.requirement-attachment-card:hover:not(:disabled) {
   display: flex;
   gap: 20px;
   justify-content: space-between;
-  margin-bottom: 20px;
+  margin: 0;
+  min-width: 0;
+  padding: 24px 26px 22px;
+}
+
+.stage-detail-head > div {
+  max-width: 920px;
+  min-width: 0;
 }
 
 .stage-detail-head h2 {
@@ -3371,7 +3400,9 @@ button.requirement-attachment-card:hover:not(:disabled) {
 
 .stage-detail-head p {
   color: var(--muted);
+  line-height: 1.65;
   margin-bottom: 0;
+  overflow-wrap: anywhere;
 }
 
 .flow-status-label {
@@ -3419,22 +3450,20 @@ button.requirement-attachment-card:hover:not(:disabled) {
 }
 
 .stage-metadata {
+  background: var(--surface-subtle);
   border-bottom: 1px solid var(--border);
   border-top: 1px solid var(--border);
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin: 0 0 22px;
+  margin: 0;
 }
 
 .stage-metadata > div {
   border-right: 1px solid var(--border);
   display: grid;
   gap: 5px;
-  padding: 13px 16px;
-}
-
-.stage-metadata > div:first-child {
-  padding-left: 0;
+  min-width: 0;
+  padding: 14px 18px;
 }
 
 .stage-metadata > div:last-child {
@@ -3448,6 +3477,26 @@ button.requirement-attachment-card:hover:not(:disabled) {
 
 .stage-metadata dd {
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.stage-detail-body {
+  min-width: 0;
+  padding: 24px 26px 26px;
+}
+
+.stage-detail-body > .coding-plan,
+.stage-detail-body > .change-summary,
+.stage-detail-body > .repository-lanes,
+.stage-detail-body > .stage-events,
+.stage-detail-body > .attempt-history,
+.stage-detail-body > .action-pending,
+.stage-detail-body > .stage-actions {
+  margin: 0;
+}
+
+.stage-detail-body > * + * {
+  margin-top: 22px;
 }
 
 .coding-plan {
@@ -3610,19 +3659,63 @@ button.requirement-attachment-card:hover:not(:disabled) {
 }
 
 .change-summary {
-  background: var(--surface-subtle);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-control);
+  border-left: 4px solid #8fa0ed;
+  border-radius: var(--radius-panel);
   display: grid;
-  gap: 6px;
-  margin-bottom: 20px;
-  padding: 14px 16px;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px 20px;
+}
+
+.change-summary > header {
+  align-items: flex-start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.change-summary > header > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.change-summary > header > div > span {
+  font-size: 12px;
+}
+
+.change-summary strong {
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.change-summary > header > span {
+  background: var(--surface-subtle);
+  border-radius: 999px;
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding: 6px 10px;
+  white-space: nowrap;
 }
 
 .change-summary span,
 .change-summary p {
   color: var(--muted);
   margin: 0;
+}
+
+.change-summary-detail {
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.change-summary-note {
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  padding-top: 12px;
 }
 
 .validation-checks,
@@ -3961,8 +4054,10 @@ button.requirement-attachment-card:hover:not(:disabled) {
 .code-diff-scroll {
   max-height: 520px;
   max-width: 100%;
+  min-width: 0;
   overflow: auto;
   scrollbar-gutter: stable;
+  width: 100%;
 }
 
 .code-diff pre {
@@ -3972,6 +4067,7 @@ button.requirement-attachment-card:hover:not(:disabled) {
   font-size: 12px;
   line-height: 1.55;
   margin: 0;
+  max-width: none;
   min-height: 100%;
   min-width: 100%;
   overflow: visible;
@@ -4382,6 +4478,10 @@ button.requirement-attachment-card:hover:not(:disabled) {
     flex-direction: column;
   }
 
+  .change-summary > header {
+    flex-direction: column;
+  }
+
   .revision-history li,
   .code-review-actions {
     grid-template-columns: 1fr;
@@ -4506,6 +4606,15 @@ button.requirement-attachment-card:hover:not(:disabled) {
 
   .panel {
     padding: 16px;
+  }
+
+  .stage-detail {
+    padding: 0;
+  }
+
+  .stage-detail-head,
+  .stage-detail-body {
+    padding: 18px;
   }
 
   .home-metrics {

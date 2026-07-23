@@ -188,7 +188,7 @@ public class PrdConfirmationService {
         return new TemporalCasePort.AgentConfigSnapshot(
                 config.modelProfiles().stream().map(profile -> new TemporalCasePort.ModelProfileSnapshot(
                         profile.id(), profile.name(), profile.provider(), profile.baseUrl(), profile.model(),
-                        profile.supportsVision())).toList(),
+                        profile.imageInputEnabled(), profile.imageInputEnabled(), profile.structuredOutput())).toList(),
                 config.agents().stream().map(agent -> new TemporalCasePort.AgentSnapshot(
                         agent.name(), agent.kind(), agent.engine(), agent.modelProfileRef(), agent.pathScope(),
                         agent.prompt(), agent.maxTurns(), agent.timeoutSeconds())).toList());

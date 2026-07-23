@@ -13,6 +13,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 
 @Component
 public class ModelConnectionClient {
@@ -20,6 +21,7 @@ public class ModelConnectionClient {
     private final HttpClient http;
     private final ObjectMapper objectMapper;
     private final String endpoint;
+    private final String capabilityEndpoint;
     private final String token;
 
     public ModelConnectionClient(ObjectMapper objectMapper,
@@ -28,6 +30,7 @@ public class ModelConnectionClient {
         this.http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
         this.objectMapper = objectMapper;
         this.endpoint = URI.create(productAgentEndpoint).resolve("/model-connection-test").toString();
+        this.capabilityEndpoint = URI.create(productAgentEndpoint).resolve("/model-capability-test").toString();
         this.token = token;
     }
 
@@ -42,18 +45,51 @@ public class ModelConnectionClient {
                     .build();
             var response = http.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                return new ConnectionResult(false, "连接失败（HTTP " + response.statusCode() + "）");
+                return new ConnectionResult(false, "连接失败（HTTP " + response.statusCode() + "）",
+                        Instant.now().toString(), "MODEL_CONNECTION_FAILED");
             }
             var result = objectMapper.readValue(response.body(), ConnectionResult.class);
             log.info("模型连通性测试 system={} profileId={} connected={}", systemId, profileId, result.connected());
             return result;
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
-            return new ConnectionResult(false, "连接测试被中断");
+            return new ConnectionResult(false, "连接测试被中断", Instant.now().toString(),
+                    "MODEL_CONNECTION_FAILED");
         } catch (Exception error) {
             log.warn("模型连通性测试失败 system={} profileId={} type={}",
                     systemId, profileId, error.getClass().getSimpleName());
-            return new ConnectionResult(false, "连接失败（" + error.getClass().getSimpleName() + "）");
+            return new ConnectionResult(false, "连接失败（" + error.getClass().getSimpleName() + "）",
+                    Instant.now().toString(), "MODEL_CONNECTION_FAILED");
+        }
+    }
+
+    public CapabilityResult testCapability(String systemId, String profileId, String capability) {
+        try {
+            var uri = URI.create(capabilityEndpoint + "?system_id=" + encode(systemId)
+                    + "&profile_id=" + encode(profileId) + "&capability=" + encode(capability));
+            var request = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofSeconds(45))
+                    .header("Authorization", "Bearer " + token)
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build();
+            var response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return new CapabilityResult(false, "能力测试失败（HTTP " + response.statusCode() + "）",
+                        Instant.now().toString(), "MODEL_PROVIDER_ERROR");
+            }
+            var result = objectMapper.readValue(response.body(), CapabilityResult.class);
+            log.info("模型能力测试 system={} profileId={} capability={} supported={}",
+                    systemId, profileId, capability, result.supported());
+            return result;
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return new CapabilityResult(false, "能力测试被中断", Instant.now().toString(),
+                    "MODEL_CONNECTION_FAILED");
+        } catch (Exception error) {
+            log.warn("模型能力测试失败 system={} profileId={} capability={} type={}",
+                    systemId, profileId, capability, error.getClass().getSimpleName());
+            return new CapabilityResult(false, "能力测试失败（" + error.getClass().getSimpleName() + "）",
+                    Instant.now().toString(), "MODEL_CONNECTION_FAILED");
         }
     }
 
@@ -61,6 +97,12 @@ public class ModelConnectionClient {
         return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
     }
 
-    public record ConnectionResult(boolean connected, String message) {
+    public record ConnectionResult(boolean connected, String message, String checkedAt, String code) {
+        public ConnectionResult(boolean connected, String message) {
+            this(connected, message, Instant.now().toString(), connected ? "" : "MODEL_CONNECTION_FAILED");
+        }
+    }
+
+    public record CapabilityResult(boolean supported, String message, String checkedAt, String code) {
     }
 }

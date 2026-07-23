@@ -50,6 +50,13 @@ public class AgentConfigurationController {
         return config.testProfile(systemId, profileId);
     }
 
+    @PostMapping("/model-profiles/{profileId}/capability-test")
+    ModelConnectionClient.CapabilityResult testProfileCapability(@PathVariable String systemId,
+            @PathVariable String profileId, @RequestParam String capability, Authentication actor) {
+        access.requireOwnerOrAdmin(systemId, actor);
+        return config.testCapability(systemId, profileId, capability);
+    }
+
     @PatchMapping("/agents/{agentName}")
     AgentConfigurationService.AgentConfigurationResponse updateAgent(@PathVariable String systemId,
             @PathVariable String agentName, @RequestBody AgentConfigurationService.AgentRequest request,

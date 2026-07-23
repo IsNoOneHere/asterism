@@ -53,12 +53,48 @@ test.each([
   setApiResponse(path, { connected, message: connected ? '连接正常' : '连接失败（HTTP 401）' });
   renderApp('/models');
 
-  const button = await screen.findByRole('button', { name: '测试 Claude 主模型连通性' });
+  fireEvent.click(await screen.findByRole('button', { name: '测试 Claude 主模型' }));
+  const button = await screen.findByRole('menuitem', { name: '测试 Claude 主模型连通性' });
   fireEvent.click(button);
 
   await waitFor(() => expect(button).toHaveTextContent(label));
   expect(button).toHaveClass(className);
   expect(fetch).toHaveBeenCalledWith(path, expect.objectContaining({ method: 'POST' }));
+});
+
+test.each([
+  { capability: 'structured_output', button: '测试 Claude 主模型结构化能力', label: '结构化正常' },
+  { capability: 'image_input', button: '测试 Claude 主模型图片能力', label: '图片正常' },
+])('model $capability capability test is independent from connection status', async ({ capability, button, label }) => {
+  const path = `/api/v5/systems/alpha-system/model-profiles/mp-1/capability-test?capability=${capability}`;
+  setApiResponse(path, { supported: true, message: label, checkedAt: '2026-07-22T00:00:00Z', code: '' });
+  renderApp('/models');
+
+  fireEvent.click(await screen.findByRole('button', { name: '测试 Claude 主模型' }));
+  const action = await screen.findByRole('menuitem', { name: button });
+  fireEvent.click(action);
+
+  await waitFor(() => expect(action).toHaveTextContent(label));
+  expect(action).toHaveClass('connected');
+  expect(action.getAttribute('title')).toContain('2026-07-22');
+  expect(fetch).toHaveBeenCalledWith(path, expect.objectContaining({ method: 'POST' }));
+});
+
+test('model profile keeps only compact primary actions and groups diagnostics in a menu', async () => {
+  renderApp('/models');
+  const trigger = await screen.findByRole('button', { name: '测试 Claude 主模型' });
+  const row = trigger.closest('tr')!;
+
+  expect(within(row).getByRole('button', { name: '编辑 Claude 主模型' })).toBeInTheDocument();
+  expect(within(row).getByRole('button', { name: '删除 Claude 主模型' })).toBeInTheDocument();
+  expect(within(row).queryByRole('button', { name: '测试 Claude 主模型连通性' })).not.toBeInTheDocument();
+
+  fireEvent.click(trigger);
+
+  const menu = within(row).getByRole('menu', { name: 'Claude 主模型 的测试操作' });
+  expect(within(menu).getByRole('menuitem', { name: '测试 Claude 主模型连通性' })).toBeInTheDocument();
+  expect(within(menu).getByRole('menuitem', { name: '测试 Claude 主模型结构化能力' })).toBeInTheDocument();
+  expect(within(menu).getByRole('menuitem', { name: '测试 Claude 主模型图片能力' })).toBeInTheDocument();
 });
 
 test('developer exposes only terminal engines and saves supervisor constraints', async () => {
@@ -106,6 +142,19 @@ test('builtin product only edits its profile and cannot be deleted', async () =>
   expect(screen.queryByLabelText('执行内核')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '保存 Agent' }));
   await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/agents/product', expect.objectContaining({ method: 'PATCH' })));
+});
+
+test('builtin vision uses an explicit image-capable profile', async () => {
+  renderApp('/agents');
+  await screen.findAllByText('vision');
+  fireEvent.click(screen.getByRole('button', { name: '编辑 vision' }));
+
+  const select = screen.getByLabelText('Model Profile');
+  expect(select).toBeRequired();
+  expect(within(select).getByRole('option', { name: 'Claude 主模型' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '保存 Agent' }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/agents/vision', expect.objectContaining({ method: 'PATCH' })));
 });
 
 test('model configuration asks for confirmation before deleting a profile', async () => {

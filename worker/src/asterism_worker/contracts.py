@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 PLAN_BASE_CHANGED_ERROR = "PlanBaseChanged"
 
@@ -29,6 +29,8 @@ class ModelProfileSnapshot(BaseModel):
     base_url: str = ""
     model: str = ""
     supports_vision: bool = False
+    image_input: bool = False
+    structured_output: Literal["json_schema", "json_object", "prompt_only"] = "json_object"
 
 
 class AgentSnapshot(BaseModel):
@@ -182,6 +184,28 @@ class CodingPlanTask(BaseModel):
     objective: str
     acceptance_criteria_refs: list[str] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
+
+
+class CodingPlanTaskProposal(BaseModel):
+    """模型只负责提出业务任务，不得生成系统身份字段。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    repo: str
+    objective: str
+    acceptance_criteria_refs: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+
+
+class CodingPlanProposal(BaseModel):
+    """Claude SDK 结构化输出的唯一规划契约。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    summary: str
+    tasks: list[CodingPlanTaskProposal] = Field(min_length=1)
+    risks: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
 
 
 class CodingPlanDraft(BaseModel):

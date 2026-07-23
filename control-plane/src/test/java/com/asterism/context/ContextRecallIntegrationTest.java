@@ -164,8 +164,9 @@ class ContextRecallIntegrationTest {
     private void memory(String systemId, String memoryId, String status, String audience, String content) {
         jdbc.sql("""
                         insert into memory_items(
-                            memory_id, system_id, content, status, audience, metadata_json, created_by)
-                        values (:memoryId, :systemId, :content, :status, :audience,
+                            memory_id, system_id, content, status, audience, stable_candidate_id,
+                            metadata_json, created_by)
+                        values (:memoryId, :systemId, :content, :status, :audience, :memoryId,
                                 '{"category":"constraint","title":"登录约束"}'::jsonb, 'test')
                         """)
                 .param("memoryId", memoryId)

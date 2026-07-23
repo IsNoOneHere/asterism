@@ -18,10 +18,12 @@ public class FakeProductAgentAdapter implements ProductAgentPort {
         var hadAcceptance = previousAcceptance instanceof List<?> list && !list.isEmpty();
         var answersAcceptance = missingFields.contains("acceptance_criteria");
         var hasAcceptance = hadAcceptance || answersAcceptance || content.contains("验收") || content.toLowerCase().contains("acceptance");
+        var title = (String) currentDraft.getOrDefault("title", "PRD-" + Math.abs(String.valueOf(currentDraft.getOrDefault("goal", content)).hashCode()));
         var missing = hasAcceptance ? List.<String>of() : List.of("acceptance_criteria");
         var goal = currentDraft.getOrDefault("goal", content);
         var acceptance = hasAcceptance ? List.of(content) : List.of();
         var draft = Map.<String, Object>of(
+                "title", title,
                 "goal", goal,
                 "scope", "code_change",
                 "acceptanceCriteria", acceptance);
@@ -31,7 +33,6 @@ public class FakeProductAgentAdapter implements ProductAgentPort {
         var citations = hasAcceptance
                 ? Map.of("goal", source, "AC-1", source)
                 : Map.of("goal", source);
-        return new DraftResult((String) currentDraft.getOrDefault("title", "PRD-" + Math.abs(String.valueOf(goal).hashCode())),
-                draft, missing, message, source, citations, List.of());
+        return new DraftResult(title, draft, missing, message, source, citations, List.of());
     }
 }

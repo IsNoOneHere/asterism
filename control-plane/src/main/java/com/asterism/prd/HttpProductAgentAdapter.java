@@ -1,7 +1,9 @@
 package com.asterism.prd;
 
 import com.asterism.context.ContextItem;
+import com.asterism.common.ModelInvocationException;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpHeaders;
@@ -15,13 +17,16 @@ public class HttpProductAgentAdapter implements ProductAgentPort {
     private final RestClient client;
     private final String endpoint;
     private final String workerToken;
+    private final ObjectMapper objectMapper;
 
     public HttpProductAgentAdapter(RestClient.Builder builder,
                                    @Value("${asterism.product-agent.url}") String endpoint,
-                                   @Value("${asterism.worker-callback.token:dev-worker-token}") String workerToken) {
+                                   @Value("${asterism.worker-callback.token:dev-worker-token}") String workerToken,
+                                   ObjectMapper objectMapper) {
         this.client = builder.build();
         this.endpoint = endpoint;
         this.workerToken = workerToken;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -38,7 +43,7 @@ public class HttpProductAgentAdapter implements ProductAgentPort {
                     .retrieve()
                     .body(ProductAgentPort.DraftResult.class);
         } catch (RestClientResponseException error) {
-            throw new IllegalStateException("ProductAgent 调用失败: " + error.getStatusCode() + " " + error.getResponseBodyAsString(), error);
+            throw ModelInvocationException.from(error, objectMapper);
         }
     }
 

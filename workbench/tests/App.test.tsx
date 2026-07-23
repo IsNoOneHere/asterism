@@ -180,7 +180,7 @@ test('knowledge list requests one server page instead of the full dataset', asyn
 test.each([
   { path: '/systems', control: 'Git 配置' },
   { path: '/users', control: '编辑用户 admin' },
-  { path: '/models', control: '测试 Claude 主模型连通性' },
+  { path: '/models', control: '测试 Claude 主模型' },
   { path: '/agents', control: '编辑 product' },
 ])('$path keeps row actions in the shared centered cell', async ({ path, control }) => {
   renderApp(path);
@@ -375,6 +375,37 @@ test('work item polling keeps the stage selected by the user', async () => {
   await waitFor(() => expect(screen.getByRole('button', { name: /Git 提交与 MR/ })).toHaveAttribute('aria-current', 'step'), { timeout: 4500 });
   expect(screen.getByRole('heading', { name: '计划与执行' })).toBeInTheDocument();
 }, 7000);
+
+test('code confirmation summarizes structured execution output instead of rendering raw JSON', async () => {
+  const structuredSummary = JSON.stringify({
+    status: 'completed',
+    task_outcomes: [
+      { task_id: 'task-01', status: 'completed', summary: '完成数据库字段迁移', changed_paths: ['backend/V23.sql'] },
+      { task_id: 'task-02', status: 'completed', summary: '完成课程页面适配', changed_paths: ['frontend/Course.tsx'] },
+    ],
+    changed_paths: ['backend/V23.sql', 'frontend/Course.tsx'],
+  });
+  setApiResponse('/api/v5/work-items/wi-1/events', [{
+    sequence: 1,
+    eventId: 'evt-modification',
+    eventType: 'ModificationCompleted',
+    payloadJson: JSON.stringify({
+      summary: structuredSummary,
+      executionProvider: 'claude_sdk_team',
+      tokenUsage: { input_tokens: 320, output_tokens: 80 },
+    }),
+    createdAt: '2026-07-05T12:01:00Z',
+    actorId: 'worker',
+  }]);
+
+  renderApp('/work-items/wi-1');
+
+  expect(await screen.findByRole('heading', { name: '代码确认' })).toBeInTheDocument();
+  expect(screen.getByText('2 个任务已完成，涉及 2 个文件，等待负责人确认。')).toBeInTheDocument();
+  expect(screen.getByText('完成数据库字段迁移；完成课程页面适配')).toBeInTheDocument();
+  expect(screen.queryByText(/task_outcomes/)).not.toBeInTheDocument();
+  expect(document.querySelector('.stage-detail-body .change-summary')).toBeInTheDocument();
+});
 
 test('work item detail keeps long Git content inside the code tab', async () => {
   renderApp('/work-items/wi-1');

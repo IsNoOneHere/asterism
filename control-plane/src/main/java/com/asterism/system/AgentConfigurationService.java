@@ -23,7 +23,8 @@ public class AgentConfigurationService {
     private static final Logger log = LoggerFactory.getLogger(AgentConfigurationService.class);
     private static final List<String> ENGINES = List.of("claude_sdk_team", "fake");
     private static final List<String> PROVIDERS = List.of("anthropic", "openai-compat");
-    private static final List<String> BUILTIN_AGENTS = List.of("product", "developer");
+    private static final List<String> STRUCTURED_OUTPUTS = List.of("json_schema", "json_object", "prompt_only");
+    private static final List<String> BUILTIN_AGENTS = List.of("product", "vision", "developer");
     private static final int DEFAULT_MAX_REVISIONS = 5;
 
     private final SystemProfileRepository systems;
@@ -60,12 +61,20 @@ public class AgentConfigurationService {
         return connections.test(systemId, profileId);
     }
 
+    public ModelConnectionClient.CapabilityResult testCapability(String systemId, String profileId, String capability) {
+        var profiles = load(systemId).profiles();
+        profileIndex(profiles, profileId);
+        return connections.testCapability(systemId, profileId, capability);
+    }
+
     @Transactional
     public AgentConfigurationResponse createProfile(String systemId, ModelProfileRequest request) {
         var state = locked(systemId);
         requireProvider(request.provider());
+        var imageInput = request.imageInputEnabled();
         var profile = new ModelProfile("mp-" + UUID.randomUUID(), value(request.name()), request.provider(),
-                value(request.baseUrl()), value(request.apiKey()), value(request.model()), request.supportsVision());
+                value(request.baseUrl()), value(request.apiKey()), value(request.model()), imageInput,
+                structuredOutput(request.structuredOutput()), imageInput);
         state.profiles().add(profile);
         save(state);
         log.info("模型 Profile 已新增 system={} profileId={}", systemId, profile.id());
@@ -79,8 +88,15 @@ public class AgentConfigurationService {
         var index = profileIndex(state.profiles(), profileId);
         var current = state.profiles().get(index);
         var apiKey = value(request.apiKey()).isBlank() ? current.apiKey() : request.apiKey();
+        var imageInput = request.imageInputEnabled();
+        if (!imageInput && state.agents().stream()
+                .anyMatch(agent -> "vision".equals(agent.name()) && profileId.equals(agent.modelProfileRef()))) {
+            throw new ApiException(HttpStatus.CONFLICT, "MODEL_PROFILE_IN_USE",
+                    "Vision Agent 正在使用该 Profile，不能关闭图片输入能力");
+        }
         state.profiles().set(index, new ModelProfile(profileId, value(request.name()), request.provider(),
-                value(request.baseUrl()), apiKey, value(request.model()), request.supportsVision()));
+                value(request.baseUrl()), apiKey, value(request.model()), imageInput,
+                structuredOutput(request.structuredOutput()), imageInput));
         save(state);
         log.info("模型 Profile 已更新 system={} profileId={}", systemId, profileId);
         return get(systemId);
@@ -110,6 +126,12 @@ public class AgentConfigurationService {
         if ("product".equals(agentName)) {
             requireOptionalProfile(state.profiles(), request.modelProfileRef());
             updated = builtinModelAgent(agentName, value(request.modelProfileRef()));
+        } else if ("vision".equals(agentName)) {
+            var profileId = value(request.modelProfileRef());
+            if (profileId.isBlank()) throw new IllegalArgumentException("Vision Agent 必须绑定 Model Profile");
+            var profile = state.profiles().get(profileIndex(state.profiles(), profileId));
+            if (!profile.imageInputEnabled()) throw new IllegalArgumentException("Vision Agent 只能绑定支持图片输入的 Profile");
+            updated = builtinModelAgent(agentName, profileId);
         } else if ("developer".equals(agentName)) {
             updated = executionAgent(request, state.profiles());
         } else {
@@ -140,9 +162,10 @@ public class AgentConfigurationService {
     private State load(String systemId) {
         var profile = systems.findById(systemId).orElseThrow(() -> new IllegalArgumentException("系统不存在"));
         var config = new LinkedHashMap<>(readMap(profile.modelProviderConfig()));
+        var profiles = readProfiles(config.get("modelProfiles"));
         var agents = readAgents(config.get("agents"));
-        ensureBuiltinAgents(agents);
-        return new State(profile, config, readProfiles(config.get("modelProfiles")), agents);
+        ensureBuiltinAgents(agents, profiles);
+        return new State(profile, config, profiles, agents);
     }
 
     private void save(State state) {
@@ -155,7 +178,15 @@ public class AgentConfigurationService {
     }
 
     private List<ModelProfile> readProfiles(Object value) {
-        return convertList(value, ModelProfile.class);
+        var profiles = convertList(value, ModelProfile.class);
+        for (var index = 0; index < profiles.size(); index++) {
+            var profile = profiles.get(index);
+            var imageInput = profile.imageInputEnabled();
+            profiles.set(index, new ModelProfile(profile.id(), profile.name(), profile.provider(), profile.baseUrl(),
+                    profile.apiKey(), profile.model(), imageInput,
+                    structuredOutput(profile.structuredOutput()), imageInput));
+        }
+        return profiles;
     }
 
     private List<Agent> readAgents(Object value) {
@@ -174,8 +205,19 @@ public class AgentConfigurationService {
         return result;
     }
 
-    private void ensureBuiltinAgents(List<Agent> agents) {
+    private void ensureBuiltinAgents(List<Agent> agents, List<ModelProfile> profiles) {
         if (findAgentIndex(agents, "product") < 0) agents.add(builtinModelAgent("product", ""));
+        if (findAgentIndex(agents, "vision") < 0) {
+            // 旧配置迁移优先复用 Product 的图片模型，迁移后运行时只读取显式绑定。
+            var productRef = agents.stream().filter(agent -> "product".equals(agent.name()))
+                    .map(Agent::modelProfileRef).findFirst().orElse("");
+            var visionRef = profiles.stream()
+                    .filter(profile -> profile.id().equals(productRef) && profile.imageInputEnabled())
+                    .map(ModelProfile::id).findFirst()
+                    .orElseGet(() -> profiles.stream().filter(ModelProfile::imageInputEnabled)
+                            .map(ModelProfile::id).findFirst().orElse(""));
+            agents.add(builtinModelAgent("vision", visionRef));
+        }
         if (findAgentIndex(agents, "developer") < 0) {
             agents.add(new Agent("developer", "builtin", "claude_sdk_team", "", List.of(), "", 50, 600));
         }
@@ -185,7 +227,7 @@ public class AgentConfigurationService {
 
     private Agent normalized(Agent agent) {
         var name = value(agent.name());
-        if ("product".equals(name)) {
+        if ("product".equals(name) || "vision".equals(name)) {
             return builtinModelAgent(name, value(agent.modelProfileRef()));
         }
         var engine = ENGINES.contains(value(agent.engine())) ? value(agent.engine()) : "claude_sdk_team";
@@ -221,6 +263,11 @@ public class AgentConfigurationService {
 
     private void requireProvider(String provider) {
         if (!PROVIDERS.contains(provider)) throw new IllegalArgumentException("不支持的模型 provider: " + provider);
+    }
+
+    private String structuredOutput(String mode) {
+        var normalized = value(mode);
+        return STRUCTURED_OUTPUTS.contains(normalized) ? normalized : "json_object";
     }
 
     private void requireOptionalProfile(List<ModelProfile> profiles, String profileId) {
@@ -264,17 +311,37 @@ public class AgentConfigurationService {
     }
 
     public record ModelProfile(String id, String name, String provider, String baseUrl, String apiKey, String model,
-                               boolean supportsVision) {
+                               Boolean imageInput, String structuredOutput, Boolean supportsVision) {
+        public ModelProfile(String id, String name, String provider, String baseUrl, String apiKey, String model,
+                            boolean supportsVision) {
+            this(id, name, provider, baseUrl, apiKey, model, null, "json_object", supportsVision);
+        }
+
+        public boolean imageInputEnabled() {
+            return imageInput != null ? imageInput : Boolean.TRUE.equals(supportsVision);
+        }
+
         ModelProfileView masked() {
-            return new ModelProfileView(id, name, provider, baseUrl, model, apiKey != null && !apiKey.isBlank(), supportsVision);
+            return new ModelProfileView(id, name, provider, baseUrl, model, apiKey != null && !apiKey.isBlank(),
+                    imageInputEnabled(), imageInputEnabled(), structuredOutput);
         }
     }
     public record ModelProfileView(String id, String name, String provider, String baseUrl, String model,
-                                   boolean apiKeySet, boolean supportsVision) {}
+                                   boolean apiKeySet, boolean supportsVision, boolean imageInput,
+                                   String structuredOutput) {}
     public record Agent(String name, String kind, String engine, String modelProfileRef, List<String> pathScope,
                         String prompt, Integer maxTurns, Integer timeoutSeconds) {}
     public record ModelProfileRequest(String name, String provider, String baseUrl, String apiKey, String model,
-                                      boolean supportsVision) {}
+                                      Boolean supportsVision, Boolean imageInput, String structuredOutput) {
+        public ModelProfileRequest(String name, String provider, String baseUrl, String apiKey, String model,
+                                   boolean supportsVision) {
+            this(name, provider, baseUrl, apiKey, model, supportsVision, null, "json_object");
+        }
+
+        boolean imageInputEnabled() {
+            return imageInput != null ? imageInput : Boolean.TRUE.equals(supportsVision);
+        }
+    }
     public record AgentRequest(String name, String engine, String modelProfileRef, List<String> pathScope,
                                String prompt, Integer maxTurns, Integer timeoutSeconds) {}
     public record ExecutionSettingsRequest(Integer maxRevisions) {}

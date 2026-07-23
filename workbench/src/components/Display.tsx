@@ -19,6 +19,7 @@ const labels: Record<string, string> = {
   waiting_input: '待输入',
   need_clarification: '待补充',
   waiting_user_confirm: '待确认',
+  turn_failed: 'AI 生成失败',
   case_start_failed: '启动失败',
   case_starting: '启动中',
   confirmed: '已确认',
@@ -28,7 +29,7 @@ const labels: Record<string, string> = {
   unknown: '未知',
 };
 
-const danger = new Set(['worker_blocked', 'patch_rejected', 'validation_failed', 'case_start_failed', 'rejected']);
+const danger = new Set(['worker_blocked', 'patch_rejected', 'validation_failed', 'turn_failed', 'case_start_failed', 'rejected']);
 const warning = new Set(['waiting_owner_approval', 'pending', 'need_clarification', 'waiting_user_confirm']);
 const success = new Set(['completed', 'validation_passed', 'approved', 'confirmed']);
 const info = new Set(['activated', 'modification_completed', 'patch_applied', 'waiting_merge', 'case_starting']);
