@@ -5,7 +5,7 @@
 
     <groupId>com.asterism</groupId>
     <artifactId>asterism-control-plane</artifactId>
-    <version>0.1.4</version>
+    <version>0.1.5</version>
     <name>asterism-control-plane</name>
 
     <parent>

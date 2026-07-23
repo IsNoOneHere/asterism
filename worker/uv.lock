@@ -41,7 +41,7 @@ wheels = [
 
 [[package]]
 name = "asterism-agent-service"
-version = "0.1.4"
+version = "0.1.5"
 source = { directory = "../agent-service" }
 dependencies = [
     { name = "fastapi" },
@@ -65,7 +65,7 @@ provides-extras = ["test"]
 
 [[package]]
 name = "asterism-worker"
-version = "0.1.4"
+version = "0.1.5"
 source = { editable = "." }
 dependencies = [
     { name = "asterism-agent-service" },
