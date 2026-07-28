@@ -79,7 +79,8 @@ class PrdControllerTransactionBoundaryTest {
         when(productAgent.updateDraft(any(), any(), any(), any(), any(), any())).thenAnswer(call -> {
             assertThat(inTransaction).isFalse();
             order.add("llm");
-            return new ProductAgentPort.DraftResult("登录提示", Map.of("title", "登录提示"), List.of(), "已完成");
+            return new ProductAgentPort.DraftResult(
+                    new ProductAgentPort.PrdPatch("登录提示", null, null, null), "已完成", Map.of());
         });
         when(aggregate.insert(any())).thenAnswer(call -> {
             assertThat(inTransaction).isTrue();
@@ -124,6 +125,7 @@ class PrdControllerTransactionBoundaryTest {
         assertThat(order.indexOf("tx-end")).isLessThan(order.indexOf("temporal-start"));
         assertThat(order).containsSubsequence("tx-start", "save:case_starting", "event:PRDConfirmed", "tx-end", "temporal-start");
         assertThat(order).contains("event:OwnerApprovalRequested");
+        assertThat(order.indexOf("event:OwnerApprovalRequested")).isLessThan(order.indexOf("memory-extract"));
     }
 
     @Test
@@ -173,7 +175,7 @@ class PrdControllerTransactionBoundaryTest {
                 .hasMessageContaining("可重试");
 
         assertThat(order).contains("save:case_start_failed", "event:TemporalCaseStartFailed");
-        assertThat(order).doesNotContain("event:OwnerApprovalRequested");
+        assertThat(order).doesNotContain("event:OwnerApprovalRequested", "memory-extract");
     }
 
     @Test
@@ -239,6 +241,12 @@ class PrdControllerTransactionBoundaryTest {
         var manifests = mock(RequirementContextManifestService.class);
         when(manifests.freeze(any(), any(), any(), any(), any(), any())).thenReturn("manifest-1");
         when(manifests.requirementManifestId("prd-1")).thenReturn("manifest-1");
+        when(manifests.requirementItems(any(), any(), any(), any())).thenReturn(List.of());
+        var memoryCandidates = mock(PrdMemoryCandidateService.class);
+        org.mockito.Mockito.doAnswer(call -> {
+            order.add("memory-extract");
+            return null;
+        }).when(memoryCandidates).extractAsync(any(), any(), any(), any(), any());
         when(readiness.readiness(any())).thenReturn(new ExecutionReadinessService.SystemReadiness(
                 "sys-1", true, Instant.now(), "claude_sdk_team", List.of(), List.of()));
         when(workItemIds.nextId()).thenReturn("WI202607114827");
@@ -287,7 +295,7 @@ class PrdControllerTransactionBoundaryTest {
         var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
                 new PrdDraftCodec(objectMapper), tx, access, systems, configurations, aggregate, workItemIds,
                 readiness, git, manifests, new PrdCitationService(),
-                mock(PrdMemoryCandidateService.class));
+                memoryCandidates);
         return new PrdController(mock(PrdConversationService.class), confirmations);
     }
 

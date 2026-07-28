@@ -3,36 +3,67 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class PrdContent(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+
+    title: str | None = None
+    goal: str | None = None
+    scope: str | None = None
+    acceptance_criteria: list[str] = Field(default_factory=list, alias="acceptanceCriteria")
+
+
 class DraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     system_id: str
     content: str
-    current_draft: dict[str, Any] = Field(default_factory=dict)
+    current_draft: PrdContent = Field(default_factory=PrdContent)
     missing_fields: list[str] = Field(default_factory=list)
     conversation_history: list[dict[str, Any]] = Field(default_factory=list)
     context_items: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class PrdDraftPayload(BaseModel):
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+class PrdPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
-    title: str
-    goal: str
-    scope: str
-    acceptance_criteria: list[str] = Field(alias="acceptanceCriteria")
+    title: str | None = None
+    goal: str | None = None
+    scope: str | None = None
+    acceptance_criteria: list[str] | None = Field(default=None, alias="acceptanceCriteria")
 
 
 class DraftResult(BaseModel):
-    title: str
-    draft: PrdDraftPayload
-    # 仅用于辅助模型组织追问文案，生命周期状态由 Java 根据 draft 内容重新计算。
-    missing_fields: list[str] = Field(
-        default_factory=list,
-        description="Suggestion for assistant_message only; never authoritative for lifecycle state.",
-    )
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    patch: PrdPatch
     assistant_message: str
-    used_context_refs: list[str] = Field(default_factory=list)
-    citations: dict[str, list[str]] = Field(default_factory=dict)
-    memory_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    citations: dict[str, list[str]]
+
+
+class MemoryCandidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    system_id: str
+    draft: PrdContent
+    target_refs: list[str] = Field(default_factory=list)
+    context_items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class MemoryCandidateProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    category: Literal["constraint", "convention", "lesson"]
+    audience: Literal["product", "execution", "both"]
+    title: str
+    content: str
+    target_refs: list[str]
+    evidence_refs: list[str]
+
+
+class MemoryCandidateResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    candidates: list[MemoryCandidateProposal]
 
 
 class UiElement(BaseModel):
@@ -51,42 +82,6 @@ class UiObservation(BaseModel):
 class StructuredOutputProbe(BaseModel):
     marker: Literal["asterism"]
     count: Literal[1]
-
-
-def normalize_draft_result(value: Any) -> Any:
-    # 仅修复已确认安全且可枚举的形态，其他非法结构交给 Pydantic 拒绝。
-    if not isinstance(value, dict):
-        return value
-    normalized = dict(value)
-    draft = value.get("draft")
-    if isinstance(draft, dict) and "acceptanceCriteria" in draft:
-        normalized_draft = dict(draft)
-        normalized_draft["acceptanceCriteria"] = _normalize_acceptance_criteria(
-            draft["acceptanceCriteria"],
-        )
-        normalized["draft"] = normalized_draft
-    if isinstance(value.get("citations"), dict):
-        normalized["citations"] = {
-            key: [refs] if isinstance(refs, str) else refs
-            for key, refs in value["citations"].items()
-        }
-    return normalized
-
-
-def _normalize_acceptance_criteria(value: Any) -> Any:
-    if isinstance(value, str):
-        return [line.strip() for line in value.splitlines() if line.strip()]
-    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
-        return value
-    normalized: list[str] = []
-    for item in value:
-        text = item.get("text")
-        if not isinstance(text, str):
-            text = item.get("description")
-        if not isinstance(text, str):
-            return value
-        normalized.append(text)
-    return normalized
 
 
 def normalize_ui_observation(value: Any) -> Any:

@@ -84,20 +84,9 @@ export type RevisionHistoryView = {
   status: 'running' | 'completed' | 'failed';
 };
 
-export type CodingPlanTaskView = {
-  taskId: string;
-  repo: string;
-  objective: string;
-  acceptanceCriteriaRefs: string[];
-  evidence: string[];
-};
-
 export type CodingPlanView = {
   revision: number;
-  summary: string;
-  tasks: CodingPlanTaskView[];
-  risks: string[];
-  openQuestions: string[];
+  planMarkdown: string;
   baseRevisions: Record<string, string>;
   status: 'planning' | 'proposed' | 'approved' | 'rejected';
 };
@@ -118,7 +107,7 @@ export type WorkItemFlow = {
 export const FLOW_STAGES: ReadonlyArray<{ id: FlowStageId; label: string }> = [
   { id: 'created', label: '工作项创建' },
   { id: 'approval', label: '负责人审批' },
-  { id: 'execution', label: '计划与执行' },
+  { id: 'execution', label: '计划审批与代码开发' },
   { id: 'patch', label: '代码确认' },
   { id: 'validation', label: '验证' },
   { id: 'release', label: 'Git 提交与 MR' },
@@ -249,8 +238,8 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
       case 'CodingPlanStarted':
         codingPlan = {
           revision: numberValue(payload?.planRevision ?? payload?.plan_revision) ?? 1,
-          summary: 'Supervisor 正在检查真实仓库并生成计划',
-          tasks: [], risks: [], openQuestions: [], baseRevisions: {}, status: 'planning',
+          planMarkdown: 'Supervisor 正在检查真实仓库并生成计划',
+          baseRevisions: {}, status: 'planning',
         };
         break;
       case 'CodingPlanProposed':
@@ -588,20 +577,10 @@ function parseModification(payload: Record<string, unknown> | null): Modificatio
 }
 
 function parseCodingPlan(payload: Record<string, unknown> | null): CodingPlanView {
-  const tasks = arrayRecords(payload?.tasks).map((task) => ({
-    taskId: stringValue(task.taskId ?? task.task_id),
-    repo: stringValue(task.repo),
-    objective: stringValue(task.objective),
-    acceptanceCriteriaRefs: stringList(task.acceptanceCriteriaRefs ?? task.acceptance_criteria_refs),
-    evidence: stringList(task.evidence),
-  }));
   const revisions = recordValue(payload?.baseRevisions ?? payload?.base_revisions) ?? {};
   return {
     revision: numberValue(payload?.planRevision ?? payload?.plan_revision) ?? 1,
-    summary: stringValue(payload?.summary),
-    tasks,
-    risks: stringList(payload?.risks),
-    openQuestions: stringList(payload?.openQuestions ?? payload?.open_questions),
+    planMarkdown: stringValue(payload?.planMarkdown ?? payload?.plan_markdown),
     baseRevisions: Object.fromEntries(Object.entries(revisions).map(([repo, value]) => [repo, stringValue(value)])),
     status: 'proposed',
   };

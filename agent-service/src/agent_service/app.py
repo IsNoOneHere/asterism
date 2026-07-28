@@ -13,9 +13,10 @@ from starlette.responses import JSONResponse
 from agent_service.contracts import (
     DraftRequest,
     DraftResult,
+    MemoryCandidateRequest,
+    MemoryCandidateResult,
     StructuredOutputProbe,
     UiObservation,
-    normalize_draft_result,
     normalize_ui_observation,
 )
 from agent_service.llm import LlmClient, ModelConfig, RoutedLlmClient, default_model_config, merge_model_config
@@ -55,9 +56,12 @@ def create_app(
     @app.post("/prd-draft", dependencies=[Depends(require_internal_token)])
     def prd_draft(request: DraftRequest) -> DraftResult:
         model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "product")
-        return structured.run(
-            prd_draft_prompt(request), model_config, DraftResult, normalizer=normalize_draft_result,
-        )
+        return structured.run(prd_draft_prompt(request), model_config, DraftResult)
+
+    @app.post("/prd-memory-candidates", dependencies=[Depends(require_internal_token)])
+    def prd_memory_candidates(request: MemoryCandidateRequest) -> MemoryCandidateResult:
+        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "product")
+        return structured.run(memory_candidate_prompt(request), model_config, MemoryCandidateResult)
 
     @app.post("/analyze-image", dependencies=[Depends(require_internal_token)])
     async def analyze_image(system_id: str, request: Request) -> UiObservation:
@@ -213,24 +217,38 @@ def resolve_model_config(settings: AgentSettings, fetch_model_config: Callable[.
 
 
 def prd_draft_prompt(request: DraftRequest) -> str:
-    # ProductAgent 只产 PRD 草稿；引用必须复用 context_items 中已有的 refId。
+    # Product Agent 只提交语义 Patch；系统字段和生命周期由控制面维护。
     return (
-        "Return strict JSON with keys title,draft,missing_fields,assistant_message,used_context_refs,citations,memory_candidates.\n"
-        "draft must include title, goal, scope, acceptanceCriteria. acceptanceCriteria must be an array of strings.\n"
-        "Use stable citation keys title,goal,scope,AC-1,AC-2... . citations maps each key to source refIds.\n"
+        "Return strict JSON with keys patch,assistant_message,citations.\n"
+        "patch may only contain title,goal,scope,acceptanceCriteria and must include only fields changed by this turn.\n"
+        "A missing or null patch field means keep the current value. acceptanceCriteria must be an array of strings.\n"
+        "Never return targets,suspectedTargets,status,missingFields,usedContextRefs,IDs,revision or audit fields.\n"
+        "Use citation keys title,goal,scope,AC-1,AC-2... only for fields included in patch.\n"
+        "citations maps each key to source refIds. A changed field without a source must omit its citation.\n"
         "Only cite refId values present in context_items. Never invent a refId.\n"
         "Content without a source must have no citation and is treated as AI_SUGGESTION.\n"
-        "memory_candidates is optional. Each item uses category,audience,title,content,target_refs,evidence_refs.\n"
-        "category is constraint|convention|lesson; audience is product|execution|both.\n"
-        "evidence_refs may only use refIds from context_items; target_refs may only use targetRefs from context_items.\n"
-        "Only propose reusable rules; never include secrets, logs, diffs, temporary errors or one-off goals.\n"
-        "missing_fields only suggests what assistant_message should ask; the control plane recomputes lifecycle state from draft.\n"
-        "If acceptance criteria are missing, set missing_fields to [\"acceptance_criteria\"] and ask in Chinese.\n"
-        "If the previous round missed acceptance criteria, merge this user message into draft.acceptanceCriteria.\n"
+        "Use assistant_message to ask in Chinese for any information still missing from the final PRD.\n"
+        "If the previous round missed acceptance criteria, merge this user message into patch.acceptanceCriteria.\n"
         f"User content: {request.content}\n"
-        f"Current draft: {json.dumps(request.current_draft, ensure_ascii=False)}\n"
+        f"Current semantic draft: {request.current_draft.model_dump_json(by_alias=True)}\n"
         f"Missing fields: {request.missing_fields}\n"
         f"Conversation history: {json.dumps(request.conversation_history, ensure_ascii=False)}\n"
+        f"Structured context items: {json.dumps(request.context_items, ensure_ascii=False)}\n"
+    )
+
+
+def memory_candidate_prompt(request: MemoryCandidateRequest) -> str:
+    # 记忆候选是确认后的独立建议，失败不得影响 PRD 或工作项创建。
+    return (
+        "Return strict JSON with key candidates. candidates may be empty.\n"
+        "Each candidate must contain category,audience,title,content,target_refs,evidence_refs.\n"
+        "category is constraint|convention|lesson; audience is product|execution|both.\n"
+        "Only propose durable reusable knowledge supported by the supplied evidence.\n"
+        "Never include secrets, logs, diffs, temporary errors, one-off goals or facts already obvious from the PRD.\n"
+        "evidence_refs may only contain refId values present in context_items.\n"
+        "target_refs may only contain values from Allowed target refs.\n"
+        f"Confirmed PRD: {request.draft.model_dump_json(by_alias=True)}\n"
+        f"Allowed target refs: {json.dumps(request.target_refs, ensure_ascii=False)}\n"
         f"Structured context items: {json.dumps(request.context_items, ensure_ascii=False)}\n"
     )
 

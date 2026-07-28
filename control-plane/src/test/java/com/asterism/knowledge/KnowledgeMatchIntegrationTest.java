@@ -40,6 +40,7 @@ class KnowledgeMatchIntegrationTest {
 
         assertThat(result.targets()).isNotEmpty();
         assertThat(result.targets().getFirst().entryId()).isEqualTo(order.entryId());
+        assertThat(result.targets().getFirst().anchorTexts()).contains("订单列表", "待发货订单");
         assertThat(result.targets()).noneMatch(target -> target.title().contains("候选精确命中"));
     }
 

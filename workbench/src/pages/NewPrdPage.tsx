@@ -1,15 +1,16 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Plus, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, Check, CheckCircle2, MessageSquare, Paperclip, Sparkles, X } from 'lucide-react';
 import { Link, useBlocker, useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
-import { api, ContextItem, PrdMessageResult, SuspectedTarget, UiObservation } from '../api/client';
+import { api, ConversationMessage, PrdMessageResult } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { errorMessage, ErrorState, StatusBadge } from '../components/Display';
+import { MarkdownContent } from '../components/MarkdownContent';
 import { SystemSelect } from '../components/SystemSelect';
-import { hasGeneratedWorkItem, isResumablePrd } from '../prd';
+import { hasGeneratedWorkItem } from '../prd';
 import { useCurrentSystem } from '../SystemContext';
 
 const schema = z.object({
@@ -18,7 +19,18 @@ const schema = z.object({
 });
 
 type FormValue = z.infer<typeof schema>;
-type DraftEditorValue = { title: string; goal: string; acceptanceCriteria: string[] };
+type DraftSummary = { title: string; goal: string; acceptanceCriteria: string[] };
+type UploadStatus = 'uploading' | 'uploaded' | 'failed';
+type UploadItem = {
+  key: string;
+  file: File;
+  previewUrl: string;
+  status: UploadStatus;
+  attachmentId?: string;
+};
+type SendValue = FormValue & { attachmentIds: string[] };
+type UserMessageLabel = '你的描述' | '你的回答' | '你的补充';
+type OptimisticUser = { content: string; display: string; label: UserMessageLabel; question?: string };
 
 const fieldNames: Record<string, string> = {
   acceptanceCriteria: '验收标准',
@@ -27,6 +39,9 @@ const fieldNames: Record<string, string> = {
   goal: '目标',
 };
 const unsavedMessage = '内容尚未保存，是否离开？';
+const steps = ['描述想法', '理解与澄清', '生成工作项', '执行准备'];
+const maxMessageAttachments = 3;
+const questionAnswerPattern = /^针对问题「(.+?)」的回答：\s*\n?([\s\S]*)$/;
 
 export function NewPrdPage() {
   const queryClient = useQueryClient();
@@ -36,16 +51,20 @@ export function NewPrdPage() {
   const [prdId, setPrdId] = useState<string | undefined>(routePrdId);
   const [conversationId, setConversationId] = useState<string>();
   const [result, setResult] = useState<PrdMessageResult>({ status: 'waiting_input' });
-  const [files, setFiles] = useState<File[]>([]);
-  const [optimisticUser, setOptimisticUser] = useState<{ content: string; display: string }>();
-  const [draftEditor, setDraftEditor] = useState<DraftEditorValue>({ title: '', goal: '', acceptanceCriteria: [] });
-  const [savedDraftEditor, setSavedDraftEditor] = useState<DraftEditorValue>({ title: '', goal: '', acceptanceCriteria: [] });
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const [dragActive, setDragActive] = useState(false);
+  const [optimisticUser, setOptimisticUser] = useState<OptimisticUser>();
+  const [dismissedQuestion, setDismissedQuestion] = useState<string>();
+  const [draftSummary, setDraftSummary] = useState<DraftSummary>({ title: '', goal: '', acceptanceCriteria: [] });
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState<string>();
   const previewDialogRef = useRef<HTMLDialogElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const completedAssistant = useRef<string>();
   const loadedPrdId = useRef<string>();
   const allowNavigation = useRef(false);
+  const uploadSequence = useRef(0);
+  const uploadsRef = useRef<UploadItem[]>([]);
   const sessionPrdId = routePrdId || prdId;
   const draftSession = useQuery({
     queryKey: ['prd-session', sessionPrdId],
@@ -66,8 +85,7 @@ export function NewPrdPage() {
   });
   const selectedSystemId = form.watch('systemId');
   const content = form.watch('content') ?? '';
-  const draftDirty = Boolean(prdId) && JSON.stringify(draftEditor) !== JSON.stringify(savedDraftEditor);
-  const hasUnsavedChanges = Boolean(content.trim() || files.length || draftDirty);
+  const hasUnsavedChanges = Boolean(content.trim() || uploads.length);
   const shouldBlock = useCallback(() => hasUnsavedChanges && !allowNavigation.current, [hasUnsavedChanges]);
   const blocker = useBlocker(shouldBlock);
   const readinessSystemId = draftSession.data?.systemId || selectedSystemId;
@@ -80,6 +98,14 @@ export function NewPrdPage() {
   const confirmable = ['waiting_user_confirm', 'case_start_failed'].includes(result.status || '');
 
   useEffect(() => {
+    uploadsRef.current = uploads;
+  }, [uploads]);
+
+  useEffect(() => () => {
+    uploadsRef.current.forEach((item) => revokePreview(item.previewUrl));
+  }, []);
+
+  useEffect(() => {
     if (!prdId && !routePrdId && systemId && selectedSystemId !== systemId) form.setValue('systemId', systemId);
   }, [form, prdId, routePrdId, selectedSystemId, systemId]);
 
@@ -88,37 +114,36 @@ export function NewPrdPage() {
     if (!session) return;
     const incomingDraft = editorValue(session.draft, session.title, session.goal);
     const firstLoad = loadedPrdId.current !== session.prdId;
-    // 刷新编辑地址时，恢复草稿原始系统和对话。
+    // 刷新草稿地址时恢复原始系统与对话，不使用当前全局系统覆盖历史数据。
     setSystemId(session.systemId);
     if (firstLoad) form.reset({ systemId: session.systemId, content: '' });
     setPrdId(session.prdId);
     setConversationId(session.conversationId);
     setResult({ status: session.status, draft: session.draft, missingFields: session.missingFields, workItemId: session.workItemId });
-    setDraftEditor((current) => firstLoad || JSON.stringify(current) === JSON.stringify(savedDraftEditor) ? incomingDraft : current);
-    setSavedDraftEditor((current) => JSON.stringify(current) === JSON.stringify(incomingDraft) ? current : incomingDraft);
+    setDraftSummary(incomingDraft);
     loadedPrdId.current = session.prdId;
-  }, [draftSession.data, form, savedDraftEditor, setSystemId]);
+  }, [draftSession.data, form, setSystemId]);
 
   useEffect(() => {
     allowNavigation.current = false;
   }, [routePrdId]);
 
   const send = useMutation({
-    mutationFn: async (value: FormValue) => {
-      const uploaded = await Promise.all(files.map((file) => api.uploadAttachment(value.systemId, file)));
-      return api.sendPrdMessage(value.systemId, { prdId, content: value.content, attachmentIds: uploaded.map((item) => item.attachmentId) });
-    },
+    mutationFn: (value: SendValue) => api.sendPrdMessage(value.systemId, {
+      prdId,
+      content: value.content,
+      attachmentIds: value.attachmentIds,
+    }),
     onSuccess: (data) => {
       console.info('v5 workbench PRD 对话发送成功', { prdId: data.prdId });
       if (data.draft) {
         const nextDraft = editorValue(data.draft);
-        setDraftEditor(nextDraft);
-        setSavedDraftEditor(nextDraft);
+        setDraftSummary(nextDraft);
       }
       form.resetField('content');
-      setFiles([]);
+      clearUploads();
+      setDismissedQuestion(undefined);
       if (!prdId && data.prdId) {
-        // 首次发送后的地址替换是保存流程的一部分，不触发离页确认。
         allowNavigation.current = true;
         navigate('/work-items/new/' + data.prdId, { replace: true });
       }
@@ -129,27 +154,6 @@ export function NewPrdPage() {
       queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
     },
     onError: () => setOptimisticUser(undefined),
-  });
-  const confirmTarget = useMutation({
-    mutationFn: ({ entryId, accepted }: { entryId: string; accepted: boolean }) =>
-      api.confirmPrdTargets(prdId!, [entryId], accepted),
-    onSuccess: (data) => {
-      setResult((current) => ({ ...current, draft: data.draft }));
-      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] });
-      queryClient.invalidateQueries({ queryKey: ['prd-session', prdId] });
-    },
-  });
-  const saveDraft = useMutation({
-    mutationFn: () => api.updatePrdDraft(prdId!, draftEditor),
-    onSuccess: (data) => {
-      const nextDraft = editorValue(data.draft, data.title, data.goal);
-      setResult((current) => ({ ...current, status: data.status, draft: data.draft, missingFields: data.missingFields }));
-      setDraftEditor(nextDraft);
-      setSavedDraftEditor(nextDraft);
-      queryClient.invalidateQueries({ queryKey: ['conversation', conversationId] });
-      queryClient.invalidateQueries({ queryKey: ['prd-session', prdId] });
-      queryClient.invalidateQueries({ queryKey: ['prd-sessions'] });
-    },
   });
   const confirm = useMutation({
     mutationFn: () => api.confirmPrd(prdId!),
@@ -170,6 +174,7 @@ export function NewPrdPage() {
     if (!data.pendingAssistant && latestAssistant && completedAssistant.current !== latestAssistant.messageId) {
       completedAssistant.current = latestAssistant.messageId;
       setResult((current) => ({ ...current, assistantPending: false }));
+      setDismissedQuestion(undefined);
       if (prdId) queryClient.invalidateQueries({ queryKey: ['prd-session', prdId] });
     }
   }, [conversation.data, optimisticUser, prdId, queryClient]);
@@ -184,6 +189,35 @@ export function NewPrdPage() {
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [hasUnsavedChanges]);
 
+  const pendingAssistant = send.isPending || Boolean(result.assistantPending) || Boolean(conversation.data?.pendingAssistant);
+  const conversationMessages = conversation.data?.messages ?? [];
+  const latestAssistant = [...conversationMessages].reverse().find((message) => message.senderType === 'assistant');
+  const clarificationQuestions = useMemo(
+    () => collectClarificationQuestions(conversationMessages),
+    [conversationMessages],
+  );
+  const answeredQuestionKeys = useMemo(
+    () => new Set(conversationMessages
+      .filter((message) => message.senderType === 'user')
+      .flatMap((message) => answeredQuestions(message.content))
+      .map(questionKey)),
+    [conversationMessages],
+  );
+  const activeQuestion = confirmable
+    ? undefined
+    : clarificationQuestions.find((question) => !answeredQuestionKeys.has(questionKey(question)));
+  const selectedQuestion = activeQuestion && dismissedQuestion !== questionKey(activeQuestion)
+    ? activeQuestion
+    : undefined;
+  const confirmationAttachmentIds = useMemo(() => Array.from(new Set(
+    conversationMessages.flatMap((message) => message.attachmentIds || []),
+  )), [conversationMessages]);
+  const workItemGenerated = hasGeneratedWorkItem(result);
+  const uploadsBusy = uploads.some((item) => item.status === 'uploading');
+  const uploadsFailed = uploads.some((item) => item.status === 'failed');
+  const uploadedIds = uploads.flatMap((item) => item.attachmentId ? [item.attachmentId] : []);
+  const activeStep = workItemGenerated ? 4 : confirmable ? 3 : prdId ? 2 : 1;
+
   function reset() {
     navigate('/work-items/new');
   }
@@ -193,179 +227,280 @@ export function NewPrdPage() {
     setConfirmOpen(true);
   }
 
-  function addFiles(values: FileList | File[]) {
-    setFiles((current) => [...current, ...Array.from(values).filter((file) => file.type.startsWith('image/'))].slice(0, 3));
+  function previewUrl(file: File) {
+    return typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : '';
   }
 
-  // 原生 dialog 已提供遮罩、焦点约束和 Esc 关闭，不引入额外图片预览依赖。
-  function openImagePreview(attachmentId: string) {
-    setPreviewImage(api.attachmentUrl(attachmentId));
+  function clearUploads() {
+    setUploads((current) => {
+      current.forEach((item) => revokePreview(item.previewUrl));
+      uploadsRef.current = [];
+      return [];
+    });
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  function removeUpload(key: string) {
+    setUploads((current) => {
+      const removed = current.find((item) => item.key === key);
+      if (removed) revokePreview(removed.previewUrl);
+      const next = current.filter((item) => item.key !== key);
+      uploadsRef.current = next;
+      return next;
+    });
+  }
+
+  function upload(item: UploadItem) {
+    api.uploadAttachment(selectedSystemId, item.file)
+      .then((attachment) => setUploads((current) => current.map((value) =>
+        value.key === item.key ? { ...value, status: 'uploaded', attachmentId: attachment.attachmentId } : value)))
+      .catch(() => setUploads((current) => current.map((value) =>
+        value.key === item.key ? { ...value, status: 'failed', attachmentId: undefined } : value)));
+  }
+
+  function addFiles(values: FileList | File[]) {
+    if (!selectedSystemId) return;
+    // 后端每条消息最多接收三张图片，粘贴、拖拽和文件选择统一遵守该契约。
+    const remaining = Math.max(0, maxMessageAttachments - uploadsRef.current.length);
+    const images = Array.from(values).filter((file) => file.type.startsWith('image/')).slice(0, remaining);
+    const staged = images.map((file) => ({
+      key: `upload-${Date.now()}-${uploadSequence.current++}`,
+      file,
+      previewUrl: previewUrl(file),
+      status: 'uploading' as const,
+    }));
+    if (!staged.length) return;
+    setUploads((current) => {
+      const next = [...current, ...staged].slice(0, maxMessageAttachments);
+      uploadsRef.current = next;
+      return next;
+    });
+    staged.forEach(upload);
+  }
+
+  function retryUpload(item: UploadItem) {
+    const retry = { ...item, status: 'uploading' as const };
+    setUploads((current) => current.map((value) => value.key === item.key ? retry : value));
+    upload(retry);
+  }
+
+  function openImagePreview(url: string) {
+    if (!url) return;
+    setPreviewImage(url);
     if (!previewDialogRef.current?.open) previewDialogRef.current?.showModal();
   }
 
-  const suspectedTargets = targetList(result.draft?.suspectedTargets);
-  const confirmedTargets = targetList(result.draft?.targets);
-  const unconfirmedTargets = suspectedTargets.filter((target) =>
-    !confirmedTargets.some((confirmed) => confirmed.entryId === target.entryId));
-  const pendingAssistant = send.isPending || Boolean(result.assistantPending) || Boolean(conversation.data?.pendingAssistant);
-  const conversationMessages = conversation.data?.messages ?? [];
-  const latestAssistantId = [...conversationMessages].reverse()
-    .find((message) => message.senderType === 'assistant')?.messageId;
-  const acceptanceMissing = result.missingFields?.some((field) => ['acceptanceCriteria', 'acceptance_criteria'].includes(field));
-  const citations = citationMap(result.draft?.citations);
-  const contextItems = new Map(conversationMessages.flatMap((message) => message.contextItems || [])
-    .map((item) => [item.refId, item]));
-  const draftEditable = isResumablePrd(result);
-  const workItemGenerated = hasGeneratedWorkItem(result);
+  function submitMessage(value: FormValue) {
+    const message = value.content.trim();
+    if (!message && uploadedIds.length === 0) return;
+    const answer = message || '见附件';
+    const wireContent = selectedQuestion ? questionAnswerContent(selectedQuestion, answer) : message;
+    const label: UserMessageLabel = selectedQuestion ? '你的回答' : prdId ? '你的补充' : '你的描述';
+    setOptimisticUser({
+      content: wireContent,
+      display: message || `已发送 ${uploadedIds.length} 张图片`,
+      label,
+      question: selectedQuestion,
+    });
+    send.mutate({ ...value, content: wireContent, attachmentIds: uploadedIds });
+  }
 
   return (
-    <section className="create-workspace">
-      <header className="page-head create-workspace-head">
-        <div>
-          <Link className="secondary-action-link" to={routePrdId ? '/work-items/drafts' : '/work-items'}>
-            <ArrowLeft size={16} aria-hidden="true" />
-            {routePrdId ? '返回需求草稿' : '返回工作项中心'}
-          </Link>
+    <section className="create-workspace prd-create-page">
+      <header className="prd-create-head">
+        <Link className="prd-create-back" to={routePrdId ? '/work-items/drafts' : '/work-items'}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          {routePrdId ? '返回需求草稿' : '返回工作项中心'}
+        </Link>
+        <div className="prd-create-title">
           <h1>{routePrdId ? '继续创建工作项' : '创建工作项'}</h1>
-          <p>通过 AI 沟通明确目标和验收标准，确认后生成工作项。</p>
+          {prdId && <span className="prd-draft-tag">草稿 {prdId}</span>}
+          <StatusBadge value={result.lifecycleStatus || result.status || 'waiting_input'} />
         </div>
+        <ol className="prd-create-steps" aria-label="创建工作项进度">
+          {steps.map((step, index) => <li className={index + 1 < activeStep ? 'completed' : index + 1 === activeStep ? 'active' : ''} key={step}
+            aria-current={index + 1 === activeStep ? 'step' : undefined}>
+            <span>{index + 1 < activeStep ? <Check size={14} /> : index + 1}</span>{step}
+          </li>)}
+        </ol>
       </header>
+
       {routePrdId && draftSession.isLoading ? <div className="panel">草稿加载中...</div> :
       routePrdId && draftSession.isError ? <ErrorState title="草稿加载失败" error={draftSession.error} onRetry={() => draftSession.refetch()} /> :
-      <div className="split wide-left create-workspace-grid">
-      <div className="panel chat-panel">
-        <h2>AI 需求沟通</h2>
+      workItemGenerated ? <section className="panel prd-created-panel">
+        <div className="prd-created-state" role="status">
+          <span className="prd-created-icon" aria-hidden="true"><CheckCircle2 size={22} /></span>
+          <div className="prd-created-copy">
+            <h2>工作项已生成</h2>
+            <p>需求已确认，可前往工作项详情查看后续执行状态。</p>
+          </div>
+          <div className="prd-created-actions">
+            <Link className="primary-action-link" to={'/work-items/' + result.workItemId}>查看工作项</Link>
+            <button type="button" className="secondary" onClick={reset}>创建另一项</button>
+          </div>
+        </div>
+      </section> :
+      <div className="prd-create-workspace">
+        <div className="prd-system-field">
+          <SystemSelect systems={systems} value={selectedSystemId} label="所属系统"
+            disabled={Boolean(prdId) || uploads.length > 0}
+            onChange={(value) => { setSystemId(value); form.setValue('systemId', value); }} />
+        </div>
         {systems.length === 0 && <div className="notice">还没有可用系统，请先前往 <Link className="action-link" to="/systems">系统配置</Link> 创建系统。</div>}
-        <SystemSelect systems={systems} value={selectedSystemId} label="所属系统" disabled={Boolean(prdId)} onChange={(value) => { setSystemId(value); form.setValue('systemId', value); }} />
-        <div className="message-list">
-          {conversationMessages.map((message) => (
-            <div className={'bubble ' + (message.senderType === 'user' ? 'user' : 'assistant')} key={message.messageId}>
-              {message.content && <div>{message.content}</div>}
-              {message.attachmentIds?.length > 0 && <div className="message-images">{message.attachmentIds.map((id) => <img key={id} src={api.attachmentUrl(id)} alt="需求截图" role="button" tabIndex={0} title="双击预览"
-                onDoubleClick={() => openImagePreview(id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openImagePreview(id); } }} />)}</div>}
-              {message.observations?.map((observation, index) => <small className="observation-summary" key={index}>{observationSummary(observation)}</small>)}
-              {message.messageId === latestAssistantId && unconfirmedTargets.length > 0 && (
-                <div className="target-confirmation-cards">
-                  {unconfirmedTargets.map((target) => (
-                    <div className="target-confirmation-card" key={target.entryId}>
-                      <strong>{target.title}</strong>
-                      <span>{target.apiEndpoints?.join('、') || target.routePath || target.kind}</span>
-                      <div className="target-confirmation-actions">
-                        <button type="button" disabled={confirmTarget.isPending} onClick={() => confirmTarget.mutate({ entryId: target.entryId, accepted: true })}>是这个</button>
-                        <button type="button" className="secondary" disabled={confirmTarget.isPending} onClick={() => confirmTarget.mutate({ entryId: target.entryId, accepted: false })}>不是</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-          {optimisticUser && !conversationMessages.some((message) => message.senderType === 'user' && message.content === optimisticUser.content)
-            && <div className="bubble user">{optimisticUser.display}</div>}
-          {pendingAssistant && <PendingAssistantBubble />}
-          {confirmable && !pendingAssistant && (
-            <button type="button" className="primary-strong chat-confirm-prd" onClick={confirmPrd} disabled={draftDirty || !readiness.data?.ready || confirm.isPending}>
-              确认 PRD
-            </button>
-          )}
-        </div>
-        {Boolean(result.missingFields?.length) && (
-          <div className="warning">AI 需要你补充：{result.missingFields?.map((field) => fieldNames[field] || field).join('、')}</div>
-        )}
-        {conversation.error && <ErrorState title="对话加载失败" error={conversation.error} onRetry={() => conversation.refetch()} />}
-        {send.error && <ErrorState title="消息发送失败" error={send.error} />}
-        <form onSubmit={form.handleSubmit((value) => {
-          if (value.content.trim() || files.length) {
-            setOptimisticUser({ content: value.content.trim(), display: value.content.trim() || `已发送 ${files.length} 张图片` });
-            send.mutate(value);
-          }
-        })}>
-          <label>
-            需求描述
-            <textarea rows={4} {...form.register('content')} onPaste={(event) => {
-              const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'));
-              if (images.length) addFiles(images);
-            }} />
-          </label>
-          <label className="secondary file-picker">选择图片<input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={(event) => { if (event.target.files) addFiles(event.target.files); event.target.value = ''; }} /></label>
-          {files.length > 0 && <div className="pending-files">{files.map((file, index) => <button type="button" className="secondary" key={file.name + index} onClick={() => setFiles((current) => current.filter((_, itemIndex) => itemIndex !== index))}>{file.name} ×</button>)}</div>}
-          <button type="submit" disabled={pendingAssistant || !selectedSystemId || (!content.trim() && files.length === 0)}>发送</button>
-        </form>
-      </div>
-      <div className="panel prd-preview-panel">
-        <div className="prd-preview-head">
-          <h2>工作项预览</h2>
-          <div className="prd-preview-status">
-            <span>状态</span>
-            <StatusBadge value={result.lifecycleStatus || result.status || 'waiting_input'} />
-          </div>
-        </div>
-        {workItemGenerated ? (
-          <div className="prd-created-state" role="status">
-            <span className="prd-created-icon" aria-hidden="true"><CheckCircle2 size={22} /></span>
-            <div className="prd-created-copy">
-              <h3>工作项已生成</h3>
-              <p>需求已确认，可前往工作项详情查看后续执行状态。</p>
-            </div>
-            <div className="prd-created-actions">
-              <Link className="primary-action-link" to={'/work-items/' + result.workItemId}>查看工作项</Link>
-              <button type="button" className="secondary" onClick={reset}>创建另一项</button>
-            </div>
-          </div>
-        ) : <>
-          <div className="draft-editor">
-            <label>
-              <span className="draft-field-head">标题<CitationChips refs={citations.title} items={contextItems} /></span>
-              <input aria-label="PRD 标题" value={draftEditor.title} disabled={!draftEditable || pendingAssistant}
-                onChange={(event) => setDraftEditor((current) => ({ ...current, title: event.target.value }))} />
-            </label>
-            <label>
-              <span className="draft-field-head">目标<CitationChips refs={citations.goal} items={contextItems} /></span>
-              <textarea aria-label="PRD 目标" rows={3} value={draftEditor.goal} disabled={!draftEditable || pendingAssistant}
-                onChange={(event) => setDraftEditor((current) => ({ ...current, goal: event.target.value }))} />
-            </label>
-            <div className={'draft-acceptance ' + (acceptanceMissing ? 'missing' : '')}>
-              <div className="draft-acceptance-head">
-                <strong>验收标准</strong>
-                {acceptanceMissing && <span className="draft-field-status">待补充</span>}
+
+        <main className="prd-work-panel">
+          {conversation.error && <ErrorState title="对话加载失败" error={conversation.error} onRetry={() => conversation.refetch()} />}
+          <section className="prd-conversation-timeline" aria-label="需求分析对话">
+            {conversationMessages.length === 0 && !optimisticUser && !pendingAssistant && <div className="prd-conversation-empty">
+              <Sparkles size={18} aria-hidden="true" />
+              <div>
+                <h2>AI 需求分析</h2>
+                <p>从一句需求开始，AI 每次只确认一个问题。</p>
               </div>
-              {acceptanceMissing && <div className="draft-field-tip">可以直接在这里填写，不用打字描述</div>}
-              {draftEditor.acceptanceCriteria.map((criterion, index) => (
-                <div className="draft-criterion" key={index}>
-                  <div className="draft-criterion-input"><input aria-label={`验收标准 ${index + 1}`} value={criterion} disabled={!draftEditable || pendingAssistant}
-                    onChange={(event) => setDraftEditor((current) => ({ ...current, acceptanceCriteria: current.acceptanceCriteria.map((item, itemIndex) => itemIndex === index ? event.target.value : item) }))} />
-                    <CitationChips refs={citations[`AC-${index + 1}`]} items={contextItems} /></div>
-                  <button type="button" className="icon-button danger" aria-label={`删除验收标准 ${index + 1}`} disabled={!draftEditable || pendingAssistant}
-                    onClick={() => setDraftEditor((current) => ({ ...current, acceptanceCriteria: current.acceptanceCriteria.filter((_, itemIndex) => itemIndex !== index) }))}><Trash2 size={16} /></button>
-                </div>
-              ))}
-              <button type="button" className="secondary icon-text-button draft-add-criterion" disabled={!draftEditable || pendingAssistant}
-                onClick={() => setDraftEditor((current) => ({ ...current, acceptanceCriteria: [...current.acceptanceCriteria, ''] }))}><Plus size={16} />添加验收标准</button>
+            </div>}
+            {conversationMessages.map((message, index) =>
+              <ConversationMessageCard
+                key={message.messageId}
+                message={message}
+                index={index}
+                messages={conversationMessages}
+                latestAssistantId={latestAssistant?.messageId}
+                onPreview={openImagePreview}
+              />)}
+            {optimisticUser && <article className="prd-message user optimistic" role="status">
+              <header>
+                <MessageSquare size={17} aria-hidden="true" />
+                <strong>{optimisticUser.label}</strong>
+                {optimisticUser.question && <small>回答：{optimisticUser.question}</small>}
+              </header>
+              <p>{optimisticUser.display}</p>
+            </article>}
+            {pendingAssistant && <PendingAssistantBubble />}
+          </section>
+        </main>
+
+        {confirmable && <section className="panel prd-confirmation-card" aria-labelledby="prd-confirmation-title">
+          <header>
+            <span className="prd-confirmation-icon" aria-hidden="true"><CheckCircle2 size={20} /></span>
+            <div>
+              <h2 id="prd-confirmation-title">需求确认</h2>
+              <p>AI 已完成分析，请确认以下内容可以进入开发。</p>
             </div>
+            <span className="prd-confirmation-ready">可确认</span>
+          </header>
+
+          <div className="prd-confirmation-content">
+            <section>
+              <h3>要解决的问题</h3>
+              <p>{draftSummary.title || 'AI 尚未生成问题摘要'}</p>
+            </section>
+            <section>
+              <h3>期望结果</h3>
+              <p>{draftSummary.goal || 'AI 尚未生成期望结果'}</p>
+            </section>
+            <section className="prd-confirmation-wide">
+              <h3>验收标准</h3>
+              {draftSummary.acceptanceCriteria.length > 0
+                ? <ul>{draftSummary.acceptanceCriteria.map((criterion, index) => <li key={`${criterion}-${index}`}>{criterion}</li>)}</ul>
+                : <p>暂无验收标准</p>}
+            </section>
+            <section className="prd-confirmation-wide">
+              <h3>相关图片</h3>
+              {confirmationAttachmentIds.length > 0
+                ? <div className="prd-confirmation-images">
+                  {confirmationAttachmentIds.map((attachmentId, index) => <button type="button" key={attachmentId}
+                    aria-label={`预览相关图片 ${index + 1}`} onClick={() => openImagePreview(api.attachmentUrl(attachmentId))}>
+                    <img src={api.attachmentUrl(attachmentId)} alt="" />
+                  </button>)}
+                </div>
+                : <p>暂无相关图片</p>}
+            </section>
           </div>
-          {suspectedTargets.length > 0 && <div className="suspected-targets"><h3>疑似相关页面</h3>{suspectedTargets.map((target) => <div className="list-item" key={target.entryId}>
-            <div><strong>{target.title}</strong><span>{target.apiEndpoints?.join('、') || target.routePath || target.kind} · 置信度 {Math.round((target.confidence || 0) * 100)}%</span></div>
-            <button type="button" disabled={confirmTarget.isPending || confirmedTargets.some((item) => item.entryId === target.entryId)} onClick={() => confirmTarget.mutate({ entryId: target.entryId, accepted: true })}>{confirmedTargets.some((item) => item.entryId === target.entryId) ? '已确认' : '确认页面'}</button>
-          </div>)}</div>}
-          {draftDirty && <div className="notice prd-preview-notice">预览内容已修改，保存草稿后即可确认。</div>}
+
           {readiness.isLoading && <div className="notice" role="status">正在检查系统执行条件…</div>}
           {readiness.isError && <ErrorState title="执行条件检查失败" error={readiness.error} onRetry={() => readiness.refetch()} />}
           {readiness.data && !readiness.data.ready && <div className="warning">
             <strong>系统尚未具备真实执行条件</strong>
             {readiness.data.issues?.length > 0 && <ul>{readiness.data.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}</ul>}
           </div>}
-          {prdId && <div className="prd-preview-actions">
-            <button type="button" className="secondary" onClick={() => saveDraft.mutate()}
-              disabled={!draftDirty || !draftEditable || pendingAssistant || saveDraft.isPending}>保存草稿</button>
-            <button type="button" className={confirmable ? 'primary-strong' : ''} onClick={confirmPrd} disabled={!confirmable || pendingAssistant || draftDirty || !readiness.data?.ready || confirm.isPending}>
+          <footer className="prd-confirmation-actions">
+            <button type="button" onClick={confirmPrd}
+              disabled={pendingAssistant || !readiness.data?.ready || confirm.isPending}>
               确认并生成工作项
             </button>
+          </footer>
+        </section>}
+
+        <form className={'prd-unified-composer' + (dragActive ? ' drag-active' : '')}
+          onSubmit={form.handleSubmit(submitMessage)}
+          onDragOver={(event) => {
+            if (Array.from(event.dataTransfer.types).includes('Files')) {
+              event.preventDefault();
+              setDragActive(true);
+            }
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={(event) => {
+            const images = Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith('image/'));
+            if (images.length) {
+              event.preventDefault();
+              addFiles(images);
+            }
+            setDragActive(false);
+          }}>
+          {selectedQuestion && <div className="prd-question-context">
+            <span aria-hidden="true" />
+            <strong>正在回答</strong>
+            <p>{selectedQuestion}</p>
+            <button type="button" aria-label="取消回答当前问题"
+              onClick={() => setDismissedQuestion(questionKey(selectedQuestion))}><X size={15} /></button>
           </div>}
-          {confirmTarget.error && <ErrorState title="页面确认失败" error={confirmTarget.error} />}
-          {saveDraft.error && <ErrorState title="草稿保存失败" error={saveDraft.error} />}
-        </>}
-      </div>
+          {uploads.length > 0 && <div className="prd-upload-tray" aria-label={`已上传图片 ${uploads.length} 张`}>
+            <span className="prd-upload-count">已选择 {uploads.length} 张</span>
+            <div className="prd-upload-scroll">{uploads.map((item) => <div className={'prd-upload-tile ' + item.status} key={item.key}>
+              <button type="button" className="prd-upload-preview" title={item.file.name}
+                aria-label={item.status === 'failed' ? `重试上传 ${item.file.name}` : `预览 ${item.file.name}`}
+                onClick={() => item.status === 'failed' ? retryUpload(item) : openImagePreview(item.previewUrl)}>
+                {item.previewUrl ? <img src={item.previewUrl} alt="" /> : <span aria-hidden="true" />}
+                <small>{shortFilename(item.file.name)}</small>
+                <i aria-hidden="true">{item.status === 'uploaded' ? <Check size={10} /> : item.status === 'failed' ? '!' : ''}</i>
+              </button>
+              <button type="button" className="prd-upload-remove" aria-label={`删除图片 ${item.file.name}`}
+                onClick={() => removeUpload(item.key)}><X size={11} /></button>
+            </div>)}</div>
+          </div>}
+          <textarea rows={4} aria-label="需求描述"
+            placeholder={selectedQuestion ? '输入这个问题的回答…' : prdId ? '继续补充需求或要求 AI 修改…' : '描述业务目标、现状和期望结果…'}
+            disabled={pendingAssistant}
+            {...form.register('content')}
+            onPaste={(event) => {
+              const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith('image/'));
+              if (images.length) addFiles(images);
+            }} />
+          <div className="prd-composer-footer">
+            <div className="prd-composer-tools">
+              <input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden
+                onChange={(event) => {
+                  if (event.target.files) addFiles(event.target.files);
+                  event.target.value = '';
+                }} />
+              <button type="button" className="prd-attachment-trigger" aria-label="选择图片"
+                disabled={pendingAssistant || uploads.length >= maxMessageAttachments}
+                onClick={() => fileInputRef.current?.click()}><Paperclip size={18} /></button>
+              <span>{uploadsFailed ? '部分图片上传失败，点击缩略图重试' : uploadsBusy ? '图片上传中…' : `本次最多 ${maxMessageAttachments} 张图片`}</span>
+            </div>
+            <button type="submit"
+              disabled={pendingAssistant || uploadsBusy || uploadsFailed || !selectedSystemId || (!content.trim() && uploadedIds.length === 0)}>
+              {pendingAssistant ? 'AI 分析中…' : selectedQuestion ? '发送回答' : prdId ? '继续分析' : '开始分析'}
+            </button>
+          </div>
+        </form>
+        {send.error && <ErrorState title="消息发送失败" error={send.error} />}
+        {Boolean(result.missingFields?.length) && <div className="warning prd-analysis-missing">
+          AI 建议补充：{result.missingFields?.map((field) => fieldNames[field] || field).join('、')}
+        </div>}
       </div>}
+
       <dialog ref={previewDialogRef} className="confirm-dialog image-preview-dialog" aria-label="图片预览" onClose={() => setPreviewImage(undefined)}>
         {previewImage && <img src={previewImage} alt="需求截图预览" />}
         <button type="button" className="secondary" onClick={() => previewDialogRef.current?.close()}>关闭预览</button>
@@ -404,39 +539,119 @@ export function NewPrdPage() {
 }
 
 export function PendingAssistantBubble() {
-  return <div className="bubble assistant pending" role="status" aria-live="polite">正在分析…</div>;
+  return <article className="prd-message assistant pending" role="status" aria-live="polite">
+    <header>
+      <Sparkles size={17} aria-hidden="true" />
+      <strong>AI 需求分析</strong>
+    </header>
+    <p>正在理解你的回答并整理下一个问题…</p>
+  </article>;
 }
 
-function CitationChips({ refs, items }: { refs?: string[]; items: Map<string, ContextItem> }) {
-  const values = refs?.length ? refs : [];
-  if (!values.length) return <span className="citation-chip ai">AI 建议</span>;
-  return <span className="citation-chips">{values.map((ref) => {
-    const item = items.get(ref);
-    const kind = item?.type || (ref.startsWith('MEM:') ? 'memory' : ref.startsWith('KN:') ? 'system_knowledge' : 'user_message');
-    const label = kind === 'memory' ? '已批准记忆' : kind === 'system_knowledge' ? '系统知识' : '来自用户';
-    const title = item ? [item.title, item.sourceRef].filter(Boolean).join(' · ') : ref;
-    return <span key={ref} className={'citation-chip ' + kind} title={title}>{label}</span>;
-  })}</span>;
+export function extractClarification(content: string) {
+  if (!content.trim()) return { intro: '', questions: [] as string[] };
+  const lines = content.split(/\r?\n/);
+  const questions: string[] = [];
+  const intro: string[] = [];
+  const pattern = /^\s*(?:(?:\d{1,2}[.、)）]|[-*])\s*)?(.+[？?](?:[（(].*[）)])?)(?:\*\*|__)?\s*$/;
+  for (const line of lines) {
+    const match = line.match(pattern);
+    if (match) questions.push(cleanQuestion(match[1]));
+    else intro.push(line);
+  }
+  if (questions.length === 0) return { intro: content, questions: [] as string[] };
+  return {
+    intro: intro.join('\n').replace(/\n{3,}/g, '\n\n').trim(),
+    questions: Array.from(new Set(questions)),
+  };
 }
 
-function citationMap(value: unknown): Record<string, string[]> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .map(([key, refs]) => [key, Array.isArray(refs) ? refs.map(String) : []]));
+function ConversationMessageCard({
+  message,
+  index,
+  messages,
+  latestAssistantId,
+  onPreview,
+}: {
+  message: ConversationMessage;
+  index: number;
+  messages: ConversationMessage[];
+  latestAssistantId?: string;
+  onPreview: (url: string) => void;
+}) {
+  const isUser = message.senderType === 'user';
+  const answer = isUser ? parseQuestionAnswer(message.content) : undefined;
+  const firstUserIndex = messages.findIndex((item) => item.senderType === 'user');
+  const label: UserMessageLabel = answer ? '你的回答' : index === firstUserIndex ? '你的描述' : '你的补充';
+  const clarification = isUser ? undefined : extractClarification(message.content);
+  // 即使模型一次返回多个问题，界面也只推进第一个，避免重新出现批量问卷。
+  const question = clarification?.questions[0];
+  const body = isUser ? answer?.answer ?? message.content : clarification?.intro ?? message.content;
+  const attachments = message.attachmentIds || [];
+
+  return <article className={`prd-message ${isUser ? 'user' : 'assistant'}`}>
+    <header>
+      {isUser ? <MessageSquare size={17} aria-hidden="true" /> : <Sparkles size={17} aria-hidden="true" />}
+      <strong>{isUser ? label : 'AI 需求分析'}</strong>
+      {answer && <small>回答：{answer.question}</small>}
+      {!isUser && question && message.messageId === latestAssistantId && <small>每次只确认一个问题</small>}
+    </header>
+    {body.trim() && (isUser ? <p>{body}</p> : <MarkdownContent markdown={body} />)}
+    {question && <p className="prd-message-question">{question}</p>}
+    {attachments.length > 0 && <div className="prd-message-images">
+      {attachments.map((attachmentId, attachmentIndex) => {
+        const url = api.attachmentUrl(attachmentId);
+        return <button type="button" key={`${attachmentId}-${attachmentIndex}`}
+          aria-label={`预览消息图片 ${attachmentIndex + 1}`} onClick={() => onPreview(url)}>
+          <img src={url} alt="" />
+        </button>;
+      })}
+    </div>}
+  </article>;
 }
 
-function editorValue(draft: Record<string, unknown>, title?: string, goal?: string): DraftEditorValue {
+function collectClarificationQuestions(messages: ConversationMessage[]) {
+  return messages
+    .filter((message) => message.senderType === 'assistant')
+    .flatMap((message) => extractClarification(message.content).questions.slice(0, 1));
+}
+
+function answeredQuestions(content: string) {
+  const answer = parseQuestionAnswer(content);
+  return answer ? [answer.question] : [];
+}
+
+function parseQuestionAnswer(content: string) {
+  const match = content.match(questionAnswerPattern);
+  if (!match) return undefined;
+  return { question: cleanQuestion(match[1]), answer: match[2].trim() };
+}
+
+function questionAnswerContent(question: string, answer: string) {
+  return `针对问题「${cleanQuestion(question)}」的回答：\n${answer.trim()}`;
+}
+
+function questionKey(question: string) {
+  return cleanQuestion(question).replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+function cleanQuestion(question: string) {
+  return question.trim().replace(/^(\*{1,2}|__)/, '').replace(/(\*{1,2}|__)$/, '').trim();
+}
+
+function shortFilename(filename: string) {
+  const stem = filename.replace(/\.[^.]+$/, '');
+  return stem.length > 5 ? stem.slice(0, 5) + '…' : stem;
+}
+
+function revokePreview(url: string) {
+  if (url && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
+}
+
+function editorValue(draft: Record<string, unknown>, title?: string, goal?: string): DraftSummary {
   return {
     title: typeof draft.title === 'string' ? draft.title : title || '',
     goal: typeof draft.goal === 'string' ? draft.goal : goal || '',
     acceptanceCriteria: Array.isArray(draft.acceptanceCriteria) ? draft.acceptanceCriteria.map(String) : [],
   };
-}
-
-function targetList(value: unknown) {
-  return Array.isArray(value) ? value as SuspectedTarget[] : [];
-}
-
-function observationSummary(observation: UiObservation) {
-  return observation.user_visible_summary || observation.userVisibleSummary || [observation.page_title || observation.pageTitle, ...(observation.text_anchors || observation.textAnchors || [])].filter(Boolean).join(' · ');
 }

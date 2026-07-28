@@ -5,9 +5,7 @@ from asterism_worker.contracts import (
     CodingAttemptResult,
     CodingPlanDraft,
     CodingPlanRequest,
-    CodingPlanTask,
     ExecutionOutcome,
-    ExecutionTaskOutcome,
     RepoChangeResult,
     SubagentRun,
 )
@@ -19,10 +17,8 @@ log = logging.getLogger(__name__)
 
 class FakeExecutionProvider(ExecutionProvider):
     async def plan(self, request: CodingPlanRequest, _workspace: TeamWorkspace) -> CodingPlanDraft:
-        repo = request.repos[0].repo_id
         return CodingPlanDraft(
-            summary="fake coding plan",
-            tasks=[CodingPlanTask(task_id="task-01", repo=repo, objective=request.goal)],
+            plan_markdown=f"# 执行计划\n\n{request.goal}",
             revision=request.plan_revision,
             session_id="fake-session",
         )
@@ -34,9 +30,6 @@ class FakeExecutionProvider(ExecutionProvider):
             summary="fake diff generated",
             outcome=ExecutionOutcome(
                 status="completed",
-                task_outcomes=[ExecutionTaskOutcome(
-                    task_id="task-01", status="completed", changed_paths=["README.md"],
-                )],
                 changed_paths=["README.md"],
             ),
             repo_changes=[RepoChangeResult(

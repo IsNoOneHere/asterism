@@ -246,7 +246,7 @@ class WorkItemControllerSignalAttemptTest {
         var patch = fixture(item("worker_blocked", 11));
         when(patch.access.canControl("sys-1", patch.actor)).thenReturn(true);
         when(patch.events.findByWorkItemId("wi-1")).thenReturn(List.of(event(
-                11, "WorkerBlocked", "{\"reason\":\"patch_apply_failed\",\"failedPhase\":\"patch\"}")));
+                11, "PatchApplyBlocked", "{\"reason\":\"error: corrupt patch at line 120\",\"repo\":\"backend\"}")));
 
         assertThat(coding.service.availability(item("worker_blocked", 10), coding.actor).actions())
                 .containsExactly("retry_current_phase", "rework", "rework_with_latest_config", "cancel_case");
@@ -288,6 +288,7 @@ class WorkItemControllerSignalAttemptTest {
         verify(fixture.temporal).signalCase(argThat(command ->
                 "retry_current_phase".equals(command.signalName())
                         && "retry_current_phase-request-004".equals(command.signalId())
+                        && "release".equals(command.context().get("retry_phase"))
                         && !command.context().containsKey("agent_config_snapshot")));
         verifyNoInteractions(fixture.configurations);
     }

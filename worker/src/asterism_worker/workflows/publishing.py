@@ -23,11 +23,12 @@ class PublishingWorkflow:
         repos = self._case_input().effective_repos()
         if not self.completed_stage_results:
             return [(repos[0], self.state.diff_patch)]
-        grouped: dict[str, list[str]] = {}
-        for result in self.completed_stage_results:
-            grouped.setdefault(result.repo or repos[0].repo_id, []).append(result.diff_patch.rstrip())
         by_id = {repo.repo_id: repo for repo in repos}
-        return [(by_id[repo_id], "\n".join(parts) + "\n") for repo_id, parts in grouped.items()]
+        # 每仓 Patch 已在 Coding Activity 中校验，发布阶段直接传递不可变制品。
+        return [
+            (by_id[result.repo or repos[0].repo_id], result.diff_patch)
+            for result in self.completed_stage_results
+        ]
 
     def _diff_paths(self, diff_patch: str) -> list[str]:
         return diff_paths(diff_patch)
@@ -81,9 +82,12 @@ class PublishingWorkflow:
                         signal_id, "patch_revert_failed", RuntimeError(failed), {"repo": repo.repo_id},
                     )
                 else:
+                    # PatchApplyBlocked 同样是可恢复失败，必须保留阶段信息供人工原位重试。
+                    self.failed_phase = ExecutionPhase.patch.value
                     await self._emit(self.state.patch_apply_blocked(), signal_id, {
                         "reason": result.reason,
                         "repo": repo.repo_id,
+                        "failedPhase": self.failed_phase,
                     })
                 return
             applied.append((repo, diff_patch))

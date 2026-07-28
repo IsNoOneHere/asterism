@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 public record PrdDraft(
         String title,
@@ -42,25 +43,25 @@ public record PrdDraft(
                 suspectedTargets, targets, extras);
     }
 
+    /** Product Agent 只能修改 PRD 语义字段，系统目标和扩展事实始终保留。 */
+    public PrdDraft apply(ProductAgentPort.PrdPatch patch) {
+        Objects.requireNonNull(patch, "Product Agent 未返回 PRD Patch");
+        return new PrdDraft(
+                patch.title() == null ? title : patch.title(),
+                patch.goal() == null ? goal : patch.goal(),
+                patch.scope() == null ? scope : patch.scope(),
+                patch.acceptanceCriteria() == null ? acceptanceCriteria : patch.acceptanceCriteria(),
+                suspectedTargets, targets, extras);
+    }
+
+    public ProductAgentPort.PrdContent productContent() {
+        return new ProductAgentPort.PrdContent(title, goal, scope, acceptanceCriteria);
+    }
+
     public PrdDraft withCitations(Map<String, List<String>> citations, List<String> usedContextRefs) {
         var updatedExtras = new LinkedHashMap<>(extras);
         updatedExtras.put("citations", citations == null ? Map.of() : citations);
         updatedExtras.put("usedContextRefs", usedContextRefs == null ? List.of() : usedContextRefs);
         return new PrdDraft(title, goal, scope, acceptanceCriteria, suspectedTargets, targets, updatedExtras);
-    }
-
-    public PrdDraft withMemoryCandidates(List<ProductAgentPort.MemoryCandidateProposal> candidates) {
-        var updatedExtras = new LinkedHashMap<>(extras);
-        updatedExtras.put("memoryCandidates", candidates == null ? List.of() : List.copyOf(candidates));
-        return new PrdDraft(title, goal, scope, acceptanceCriteria, suspectedTargets, targets, updatedExtras);
-    }
-
-    public PrdDraft preserveTargets(PrdDraft current) {
-        var mergedExtras = new LinkedHashMap<>(current.extras);
-        mergedExtras.putAll(extras);
-        return new PrdDraft(title, goal, scope, acceptanceCriteria,
-                suspectedTargets.isEmpty() ? current.suspectedTargets : suspectedTargets,
-                current.targets.isEmpty() ? targets : current.targets,
-                mergedExtras);
     }
 }

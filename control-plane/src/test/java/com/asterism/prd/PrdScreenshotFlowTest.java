@@ -129,7 +129,9 @@ class PrdScreenshotFlowTest {
                 new PrdConversationService.PrdMessageRequest(null, "验收：订单列表可搜索", List.of("att-1")), actor);
         assertThat(message.assistantPending()).isTrue();
         verify(messages).completePending(anyString(), argThat(content ->
-                content.contains("你反馈的是不是【订单列表】") && content.contains("GET /api/orders")));
+                content.contains("AI 定位到可能涉及的系统位置【订单列表】")
+                        && content.contains("仅供 Agent 定位参考")
+                        && content.contains("GET /api/orders")));
         assertThat(current.get().draftJson()).contains("suspectedTargets");
 
         controller.confirmTargets(message.prdId(),

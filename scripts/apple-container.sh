@@ -328,15 +328,16 @@ up_services() {
   RUNNER_IP="$(container_ip runner)"
   V5_DB_URL="jdbc:postgresql://$POSTGRES_IP:5432/asterism?stringtype=unspecified&currentSchema=control_plane_v5,public"
   V5_PRODUCT_AGENT_URL="http://$RUNNER_IP:8090/prd-draft"
+  V5_PRODUCT_AGENT_MEMORY_URL="http://$RUNNER_IP:8090/prd-memory-candidates"
   V5_IMAGE_ANALYSIS_URL="http://$RUNNER_IP:8090/analyze-image"
   V5_ATTACHMENT_ROOT="/app/runtime/attachments"
-  export V5_DB_URL V5_PRODUCT_AGENT_URL V5_IMAGE_ANALYSIS_URL V5_ATTACHMENT_ROOT
+  export V5_DB_URL V5_PRODUCT_AGENT_URL V5_PRODUCT_AGENT_MEMORY_URL V5_IMAGE_ANALYSIS_URL V5_ATTACHMENT_ROOT
 
   delete_container server
   run_service server \
     --env SPRING_PROFILES_ACTIVE --env V5_DB_URL --env V5_DB_USER --env V5_DB_PASSWORD \
     --env V5_WORKER_CALLBACK_TOKEN --env V5_TEMPORAL_TARGET --env V5_TEMPORAL_NAMESPACE --env V5_TEMPORAL_TASK_QUEUE \
-    --env V5_PRODUCT_AGENT_URL --env V5_IMAGE_ANALYSIS_URL --env V5_ATTACHMENT_ROOT \
+    --env V5_PRODUCT_AGENT_URL --env V5_PRODUCT_AGENT_MEMORY_URL --env V5_IMAGE_ANALYSIS_URL --env V5_ATTACHMENT_ROOT \
     --env V5_PROFILE --env V5_ADMIN_INITIAL_PASSWORD --env ASTERISM_GITLAB_BASE_URL --env ASTERISM_GITLAB_TOKEN \
     --publish 8080:8085 --volume "$ATTACHMENTS_VOLUME:/app/runtime/attachments" "$SERVER_IMAGE"
   wait_http server http://127.0.0.1:8080/healthz

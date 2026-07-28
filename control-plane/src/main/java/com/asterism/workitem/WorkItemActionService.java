@@ -45,6 +45,8 @@ public class WorkItemActionService {
             Map.entry("waiting_merge", List.of("check_merge_status", "rework", "cancel_case")));
     private static final Set<String> VALIDATION_ACTIONS = Set.of("validation_passed", "validation_rejected");
     private static final Set<String> CONFIG_REFRESH_PHASES = Set.of("planning", "coding");
+    private static final Map<String, String> FAILURE_EVENT_PHASES = Map.of(
+            "PatchApplyBlocked", "patch");
     private static final Map<String, Set<String>> NOTE_REQUIRED_STATUSES = Map.of(
             "coding_plan_rejected", Set.of("activated"),
             "patch_apply_rejected", Set.of("modification_completed"),
@@ -206,9 +208,12 @@ public class WorkItemActionService {
         if (!note.isBlank()) payload.put("note", note);
         if (!evidence.isBlank()) payload.put("evidence", evidence);
         Map<String, Object> signalContext = switch (action) {
+            case "retry_current_phase" -> Map.<String, Object>of(
+                    "retry_phase", runtime.failedPhase());
             case "rework_with_latest_config" -> Map.<String, Object>of(
                     "agent_config_snapshot", latestAgentConfig(item.systemId()),
-                    "resume_failed_stage", true);
+                    "resume_failed_stage", true,
+                    "retry_phase", runtime.failedPhase());
             case "rework_with_latest_context" -> Map.<String, Object>of(
                     "requirement_manifest_id", manifests.refresh(
                             item.systemId(), item.prdId(), item.workItemId(), actor.getName(), requestKey));
@@ -277,8 +282,12 @@ public class WorkItemActionService {
                 releaseMode = string(payload.get("releaseMode"));
                 validationMode = string(payload.get("validationMode"));
             }
-            if ("WorkerBlocked".equals(event.eventType())) {
-                failedPhase = string(payload.get("failedPhase"));
+            var eventPhase = string(payload.get("failedPhase"));
+            if (eventPhase.isBlank()) {
+                eventPhase = FAILURE_EVENT_PHASES.getOrDefault(event.eventType(), "");
+            }
+            if (!eventPhase.isBlank()) {
+                failedPhase = eventPhase;
                 failedReason = string(payload.get("reason"));
             }
             if ("ReworkStarted".equals(event.eventType())) {

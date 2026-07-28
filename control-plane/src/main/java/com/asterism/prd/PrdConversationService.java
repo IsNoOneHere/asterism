@@ -274,7 +274,7 @@ public class PrdConversationService {
                 targetRefs, history, actor.getName()));
         append(DomainEventType.UserMessageReceived, systemId, prdId, actor.getName(),
                 "UserMessageReceived:" + prdId + ":" + turn, Map.of("content", content, "turn", turn));
-        return new PreparedTurn(session, current == null, userMessage, pendingMessage, turn, history, bundle,
+        return new PreparedTurn(session, userMessage, pendingMessage, turn, history, bundle,
                 validatedAttachments, currentDraft, readList(session.missingFields()), actor.getName());
     }
 
@@ -282,20 +282,16 @@ public class PrdConversationService {
         var analysis = analyze(turn.session().systemId(), turn.attachments());
         var agentContent = turn.userMessage().content() + (analysis.observations().isEmpty() ? "" : "\n截图观察："
                 + analysis.observations().stream().map(UiObservation::contextText).collect(Collectors.joining("\n")));
-        var result = productAgent.updateDraft(turn.session().systemId(), agentContent, draftCodec.toMap(turn.currentDraft()),
+        var result = productAgent.updateDraft(turn.session().systemId(), agentContent, turn.currentDraft().productContent(),
                 turn.currentMissing(), turn.history(), turn.contextBundle().items());
-        var citationResult = citations.validate(turn.contextBundle(), result);
-        // 模型结果按顶层 patch 合并，避免遗漏字段时丢失已积累的草稿内容。
-        var mergedDraft = new LinkedHashMap<>(draftCodec.toMap(turn.currentDraft()));
-        mergedDraft.putAll(result.draft());
-        var draft = draftCodec.fromMap(mergedDraft).withTitle(result.title()).preserveTargets(turn.currentDraft())
-                .withCitations(citationResult.citations(), citationResult.usedRefs())
-                .withMemoryCandidates(result.memoryCandidates());
+        var draft = turn.currentDraft().apply(result.patch());
+        var citationResult = citations.validateAndMerge(turn.contextBundle(), turn.currentDraft(), draft, result);
+        draft = draft.withCitations(citationResult.citations(), citationResult.usedRefs());
         var anchors = analysis.observations().stream().flatMap(observation -> observation.anchors().stream()).toList();
         var match = anchors.isEmpty() ? new KnowledgeMatchService.MatchResult(List.of(), false)
                 : knowledge.match(turn.session().systemId(), anchors);
         if (!match.targets().isEmpty()) draft = draft.withSuspectedTargets(match.targets());
-        return new ProcessedTurn(result, citationResult, draft, analysis,
+        return new ProcessedTurn(citationResult, draft, analysis,
                 assistantMessage(result.assistantMessage(), analysis.failed(), match));
     }
 
@@ -306,8 +302,8 @@ public class PrdConversationService {
                 json(processed.citationResult().usedRefs()), json(processed.citationResult().citations()));
         var missing = computeMissingFields(processed.draft());
         var status = missing.isEmpty() ? "waiting_user_confirm" : "need_clarification";
-        var title = turn.newSession() || turn.session().title() == null ? processed.draft().title() : turn.session().title();
-        var goal = turn.newSession() ? processed.draft().goal() : turn.session().goal();
+        var title = processed.draft().title();
+        var goal = processed.draft().goal();
         var session = new PrdSession(turn.session().prdId(), turn.session().systemId(), turn.session().conversationId(),
                 turn.session().workItemId(), turn.session().caseId(), title, goal, draftCodec.write(processed.draft()),
                 json(missing), status, turn.session().createdBy(), turn.session().confirmedBy(),
@@ -350,7 +346,7 @@ public class PrdConversationService {
     }
 
     private List<String> computeMissingFields(PrdDraft draft) {
-        // 生命周期只由已校验的草稿内容决定，不采信模型声明的 missing_fields。
+        // 缺失字段由控制面根据合并后的草稿确定性计算。
         var missing = new ArrayList<String>();
         if (draft.title() == null || draft.title().isBlank()) missing.add("title");
         if (draft.goal() == null || draft.goal().isBlank()) missing.add("goal");
@@ -387,9 +383,14 @@ public class PrdConversationService {
         if (analysisFailed) message.append("\n图片分析不可用，已保留图片，不影响文字对话。");
         if (!match.targets().isEmpty()) {
             var target = match.targets().getFirst();
-            message.append("\n你反馈的是不是【").append(target.title()).append("】页面？");
-            if (!target.apiEndpoints().isEmpty()) message.append("对应接口 ").append(String.join("、", target.apiEndpoints())).append("。");
-            message.append("请确认。");
+            message.append("\nAI 定位到可能涉及的系统位置【").append(target.title()).append("】");
+            if (target.routePath() != null && !target.routePath().isBlank()) {
+                message.append("，路由 ").append(target.routePath());
+            }
+            if (!target.apiEndpoints().isEmpty()) {
+                message.append("，相关接口 ").append(String.join("、", target.apiEndpoints()));
+            }
+            message.append("。该信息仅供 Agent 定位参考，不限制实际修改范围。");
         } else if (match.knowledgeEmpty()) {
             message.append("\n系统知识库为空，可让管理员运行路由索引。");
         }
@@ -432,15 +433,14 @@ public class PrdConversationService {
                                       List<String> missingFields, String status) {
     }
 
-    private record PreparedTurn(PrdSession session, boolean newSession, ConversationMessage userMessage,
+    private record PreparedTurn(PrdSession session, ConversationMessage userMessage,
                                 ConversationMessage pendingMessage, long turn, List<ConversationMessage> history,
                                 ContextBundle contextBundle,
                                 List<Attachment> attachments, PrdDraft currentDraft,
                                 List<String> currentMissing, String actorId) {
     }
 
-    private record ProcessedTurn(ProductAgentPort.DraftResult result, PrdCitationService.CitationResult citationResult,
-                                 PrdDraft draft,
+    private record ProcessedTurn(PrdCitationService.CitationResult citationResult, PrdDraft draft,
                                  AnalysisResult analysis, String assistantMessage) {
     }
 

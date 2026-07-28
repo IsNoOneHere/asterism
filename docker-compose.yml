@@ -97,6 +97,7 @@ services:
       V5_TEMPORAL_NAMESPACE: ${V5_TEMPORAL_NAMESPACE:-default}
       V5_TEMPORAL_TASK_QUEUE: ${V5_TEMPORAL_TASK_QUEUE:-asterism}
       V5_PRODUCT_AGENT_URL: http://runner:8090/prd-draft
+      V5_PRODUCT_AGENT_MEMORY_URL: http://runner:8090/prd-memory-candidates
       V5_IMAGE_ANALYSIS_URL: http://runner:8090/analyze-image
       V5_ATTACHMENT_ROOT: /app/runtime/attachments
       V5_PROFILE: prod

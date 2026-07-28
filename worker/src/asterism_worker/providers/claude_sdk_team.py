@@ -223,8 +223,7 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
         turns = 0
         token_usage: dict[str, Any] = {}
         session_id = ""
-        result_error = ""
-        structured_outcome: ExecutionOutcome | None = None
+        result_seen = False
         sdk_blockers: list[str] = []
         try:
             resume_session_id, session_store = self._resolve_session(
@@ -253,7 +252,6 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
                 session_store=session_store,
                 session_store_flush="eager",
                 enable_file_checkpointing=False,
-                output_format={"type": "json_schema", "schema": ExecutionOutcome.model_json_schema()},
                 stderr=lambda line: self._write(transcript, {"type": "sdk_stderr", "message": line}),
             )
             async for message in self.query(prompt=self._prompt_stream(self._prompt(request, specs)), options=options):
@@ -309,7 +307,8 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
                         "status": status,
                     })
                 elif isinstance(message, ResultMessage):
-                    summary = message.result or summary
+                    result_seen = True
+                    summary = (message.result or summary).strip()
                     turns = message.num_turns
                     token_usage = dict(message.usage or {})
                     session_id = message.session_id
@@ -319,23 +318,24 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
                         )
                     if message.deferred_tool_use is not None:
                         sdk_blockers.append("SDK deferred_tool_use: 存在未执行的工具请求")
-                    if message.structured_output is not None:
-                        try:
-                            structured_outcome = ExecutionOutcome.model_validate(message.structured_output)
-                        except Exception as error:
-                            sdk_blockers.append(f"structured_output 无效: {type(error).__name__}")
                     self._write(transcript, {
                         "type": "sdk_result_metadata",
+                        "subtype": message.subtype,
+                        "is_error": message.is_error,
                         "stop_reason": message.stop_reason or "",
                         "permission_denial_count": len(message.permission_denials or []),
                         "deferred_tool_use": message.deferred_tool_use is not None,
-                        "structured_output": message.structured_output is not None,
+                        "result_length": len(summary),
                     })
-                    if message.is_error:
+                    # SDK 终态由 subtype 与 is_error 共同裁决，模型自然语言不能覆盖系统失败事实。
+                    if message.subtype != "success" or message.is_error:
                         detail = "; ".join(message.errors or [])
-                        result_error = f"{message.subtype}: {detail}".rstrip(": ")
-            if result_error:
-                raise RuntimeError(f"Claude SDK Supervisor execution failed: {result_error}")
+                        sdk_blockers.append(
+                            f"Claude SDK Supervisor execution failed: "
+                            f"{message.subtype}: {detail}".rstrip(": ")
+                        )
+            if not result_seen:
+                sdk_blockers.append("Claude SDK 未返回 ResultMessage")
             if active_tasks:
                 self._write(transcript, {
                     "type": "subagent_tasks_still_running",
@@ -345,9 +345,7 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
             self._restore_service_owner(workspace.root, runtime_dir, sdk_user, service_owner)
             ownership_restored = True
             repo_changes = self._repo_changes(workspace, summary)
-            outcome = self._finalize_outcome(
-                structured_outcome, request, repo_changes, session_id, sdk_blockers,
-            )
+            outcome = self._finalize_outcome(repo_changes, session_id, sdk_blockers)
             result = CodingAttemptResult(
                 attempt_id=request.attempt_id,
                 summary=summary,
@@ -475,10 +473,7 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
         revision = json.dumps(
             request.revision_context.model_dump() if request.revision_context else {}, ensure_ascii=False,
         )
-        approved_plan = json.dumps(
-            request.approved_plan.model_dump(exclude={"session_id"}) if request.approved_plan else {},
-            ensure_ascii=False,
-        )
+        approved_plan = request.approved_plan.plan_markdown if request.approved_plan else "无"
         return (
             "你是本次 Coding Attempt 唯一的 Root Supervisor。当前计划已经过人工批准；优先承接原会话完成工作。"
             "若原会话不可恢复，以当前持久工作区、已批准计划、候选摘要和人工反馈为权威继续，不得从业务目标外扩。"
@@ -487,16 +482,15 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
             "团队工作区下的仓库目录就是映射中给出的单层目录，不要再次拼接仓库名。"
             "探索时围绕目标目录和关键符号做定向 Glob/Grep/Read，避开 .git 与构建产物，并返回精炼结论。"
             "不要猜文件名，不要提交 Git。已有代码变更覆盖验收标准后立即收尾。"
-            "最终必须通过结构化输出逐项报告已批准 task_id；未完成时返回 blocked 并写明 blockers，"
-            "不得用自然语言总结冒充完成。每个 taskOutcome.changed_paths 必须如实覆盖该任务产生的变更；"
-            "它只用于和系统真实 Diff 核对任务覆盖，不作为权限来源。\n\n"
+            "最终用自然语言简要说明完成内容、验证情况和仍存在的问题，不要输出 JSON、task_id 或 changed_paths；"
+            "系统会直接读取真实 Git Diff、路径门禁和测试结果判断候选状态。\n\n"
             "上一版候选只是待修订基线，不代表已批准；修订时必须逐条落实人工反馈，"
             "人工反馈与候选说明冲突时以人工反馈为准。\n\n"
             f"目标：\n{request.goal}\n\n"
             f"验收标准：\n{criteria}\n\n"
             f"人工反馈：\n{request.feedback or '无'}\n\n"
             f"已批准计划（任务路径只是证据，不是权限边界）：\n{approved_plan}\n\n"
-            f"结构化修订上下文：\n{revision}\n\n"
+            f"修订上下文：\n{revision}\n\n"
             f"上一版候选摘要（代码已恢复到当前工作区；重做时直接按反馈修订，可能为空）：\n{previous}\n\n"
             f"可选子 Agent 与仓库：\n{mappings}\n\n"
             f"Supervisor 补充约束：\n{self.supervisor.prompt or '无'}\n"
@@ -562,82 +556,23 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
 
     def _finalize_outcome(
         self,
-        outcome: ExecutionOutcome | None,
-        request: CodingAttemptRequest,
         changes: list[RepoChangeResult],
         session_id: str,
         sdk_blockers: list[str],
     ) -> ExecutionOutcome:
-        """只用结构化结果和系统事实收敛 Attempt 终态。"""
+        """只用 SDK 终态和真实 Git Diff 收敛 Attempt，不采信模型声明的机器字段。"""
 
         blockers = list(sdk_blockers)
-        if outcome is None:
-            outcome = ExecutionOutcome(status="blocked")
-            blockers.append("Claude SDK 未返回 structured_output")
-        blockers.extend(outcome.blockers)
-        approved_ids = {
-            task.task_id for task in (request.approved_plan.tasks if request.approved_plan else [])
-            if task.task_id
-        }
-        reported_ids = {item.task_id for item in outcome.task_outcomes}
-        missing_ids = sorted(approved_ids - reported_ids)
-        if missing_ids:
-            blockers.append(f"已批准任务未覆盖: {', '.join(missing_ids)}")
-        blocked_ids = [item.task_id for item in outcome.task_outcomes if item.status == "blocked"]
-        if blocked_ids:
-            blockers.append(f"任务执行受阻: {', '.join(blocked_ids)}")
-        task_repos = {
-            task.task_id: task.repo for task in (request.approved_plan.tasks if request.approved_plan else [])
-            if task.task_id and task.repo
-        }
-        reported_changes: set[tuple[str, str]] = set()
-        task_reported_changes: dict[str, set[tuple[str, str]]] = {}
-        for item in outcome.task_outcomes:
-            repo = task_repos.get(item.task_id)
-            if not repo:
-                continue
-            task_changes = task_reported_changes.setdefault(item.task_id, set())
-            for path in item.changed_paths:
-                normalized = path[2:] if path.startswith("./") else path
-                repo_prefix = f"{repo}/"
-                if normalized.startswith(repo_prefix):
-                    normalized = normalized[len(repo_prefix):]
-                if normalized:
-                    change = (repo, normalized)
-                    reported_changes.add(change)
-                    task_changes.add(change)
-        actual_changes = {
-            (change.repo, path) for change in changes for path in change.changed_paths
-        }
-        if task_repos:
-            unreported_changes = sorted(actual_changes - reported_changes)
-            if unreported_changes:
-                detail = ", ".join(f"{repo}:{path}" for repo, path in unreported_changes)
-                blockers.append(f"真实变更未被任务结果声明: {detail}")
-            # 模型声明只作为完成证据，必须能在系统收集的真实 Git Diff 中反向验证。
-            nonexistent_changes = sorted(reported_changes - actual_changes)
-            if nonexistent_changes:
-                detail = ", ".join(f"{repo}:{path}" for repo, path in nonexistent_changes)
-                blockers.append(f"任务结果声明了不存在的变更: {detail}")
-            unsupported_tasks = sorted(
-                task_id for task_id in approved_ids & reported_ids
-                if not task_reported_changes.get(task_id, set()) & actual_changes
-            )
-            if unsupported_tasks:
-                blockers.append(f"任务结果没有真实变更支撑: {', '.join(unsupported_tasks)}")
         actual_paths = sorted({path for change in changes for path in change.changed_paths})
         if not any(change.diff_patch.strip() for change in changes):
             blockers.append("Coding Attempt 未生成有效代码变更")
-        if outcome.status == "blocked" and not blockers:
-            blockers.append("Root Supervisor 报告执行受阻")
         blockers = list(dict.fromkeys(item for item in blockers if item))
-        return outcome.model_copy(update={
-            "status": "blocked" if blockers or outcome.status == "blocked" else "completed",
-            "blockers": blockers,
-            # 模型生成路径不是权限来源，最终只保留真实 Diff 路径。
-            "changed_paths": actual_paths,
-            "session_id": session_id,
-        })
+        return ExecutionOutcome(
+            status="blocked" if blockers else "completed",
+            blockers=blockers,
+            changed_paths=actual_paths,
+            session_id=session_id,
+        )
 
     def _update_task_run(
         self, task_id: str, status: str, runs: dict[str, SubagentRun],

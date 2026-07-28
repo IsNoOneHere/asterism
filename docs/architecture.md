@@ -51,19 +51,19 @@ flowchart LR
     H -->|"批准"| S["优先恢复计划 Session\n不可用则重建"]
     H -->|"打回，新 Session"| P
     S --> A["Root Supervisor\n路径门禁内直接写"]
-    A --> O["ExecutionOutcome\ncompleted / blocked"]
+    A --> O["SDK 自然语言终态"]
     O --> D["按仓库收集 Git Diff"]
     D --> G["路径门禁 + git apply --check"]
     G --> H["人工代码确认 / 验证 / 发布"]
 ```
 
-Workflow 固定执行 `fetch_context → generate_coding_plan → 人工等待 → run_coding_attempt → ModificationCompleted | WorkerBlocked`。Planning Turn 属于同一个 `claude_sdk_team` Provider，不恢复旧 `/plan`、assignments 或独立 Planner Profile。计划只包含稳定 `taskId`、仓库目标、验收标准引用和真实代码证据；模型生成的文件路径不能成为 `target_files/scope_paths` 权限依据。Root Supervisor 可在仓库门禁内直接写；每仓原生子 Agent 只继承同一模型和受限路径，是否使用由 Root 决定，不形成外部 Stage 或 handoff。
+Workflow 固定执行 `fetch_context → generate_coding_plan → 人工等待 → run_coding_attempt → ModificationCompleted | WorkerBlocked`。Planning Turn 属于同一个 `claude_sdk_team` Provider，不恢复旧 `/plan`、assignments 或独立 Planner Profile。模型只返回供人阅读的 Markdown 计划，不生成 `taskId`、路径权限或状态机字段；`revision/sessionId/baseRevisions` 由 Worker 确定性生成。Root Supervisor 可在仓库门禁内直接写；每仓原生子 Agent 只继承同一模型和受限路径，是否使用由 Root 决定，不形成外部 Stage 或 handoff。
 
 Planning Activity 正常结束后 Claude 进程退出，Temporal Workflow 可长期等待人工信号。恢复的权威来源是持久执行上下文：已批准计划与 `baseRevisions`、Case workspace、候选 Diff、人工反馈和轮次；Claude Session 只是优先复用的上下文加速项。本地单 Worker 直接恢复 artifacts 持久卷中的原生 Claude runtime，Session transcript 同时镜像到 Store 供审计和未来共享存储适配器使用。如果本机 runtime 不存在，Provider 会从持久执行上下文创建新 Session，不让工作项卡死，也不会为了读取父进程私有物化目录而取消 Claude CLI 的低权限隔离。计划打回或仓库基线失效时，系统把上一版计划与意见传入一个新的 Planning Session，避免连续打回造成上下文无限膨胀。执行阶段不再读取 Agent 的 15 分钟 `timeoutSeconds` 作为总时限，Temporal 仅保留 24 小时 Activity 失控保护，并通过心跳和一次自动重试恢复 Worker 中断。
 
 SDK 顶层工具列表是整个 Attempt 的能力上限。Root Supervisor 的 Edit/Write 会先按目标文件定位所属仓库，再应用该仓库 `allowedPaths/forbiddenPaths`；未绑定仓库的内置 Agent 默认只读；仓库 Agent 也只能写自己负责的仓库。验证命令由外层 Workflow 执行，Coding 会话不开放 Bash。
 
-Provider 使用 Claude Agent SDK 原生 `output_format/structured_output` 返回顶层 `ExecutionOutcome(status, taskOutcomes, blockers, changedPaths, sessionId)`。`SubagentStart/Stop` 和后台任务终态只作遥测，不参与完成判定。`permission_denials`、`deferred_tool_use`、结构化 blocked、批准任务未覆盖或没有有效 Diff 都会进入 `WorkerBlocked`，并保留 Session、工作区和局部候选。只有结构化 completed、真实 Diff、路径门禁和 `git apply --check` 同时通过才产生 `ModificationCompleted`；模型摘要和模型生成路径都不能放宽门禁。
+Provider 不要求模型生成结构化终态。Claude SDK 的自然语言结果只用于展示；Worker 根据 `ResultMessage`、权限拒绝、延迟工具、真实 Git Diff 和 Session 元数据生成系统 `ExecutionOutcome`。`SubagentStart/Stop` 和后台任务终态只作遥测，不参与完成判定。SDK 受阻或没有有效 Diff 时进入 `WorkerBlocked` 并保留 Session、工作区和局部候选；只有 SDK 正常结束、存在真实 Diff、路径门禁和 `git apply --check` 全部通过才产生 `ModificationCompleted`。
 
 ## 阶段恢复
 
@@ -113,6 +113,14 @@ flowchart LR
 `releaseMode=gitlab` 时，Patch 审批后由 Worker 在临时 shallow clone 中按仓验证、提交 `wi/<workItemId>`、用 `force-with-lease` 幂等推送并创建或复用 MR。Token 仅由 Activity 通过 internal API 实时读取，临时 `0600` credential store 在 Git 命令结束后删除，不进入 Temporal、事件、日志、前端或 `.git/config`。
 
 全部 MR 创建后进入 `waiting_merge`。Temporal timer 主动调用 GitLab API：部分合并继续等待，全部合并产生 `ReleaseCompleted`，MR 被关闭则进入 `worker_blocked`。合并后的 CI/CD、部署和服务重启属于 GitLab Runner，不进入 Asterism 生命周期。
+
+## Product Agent 契约边界
+
+Product Agent 不返回完整 PRD 聚合，只返回严格 `PrdPatch`：`title`、`goal`、`scope`、`acceptanceCriteria`。Patch 中缺失或为 `null` 的字段保持原值；控制面使用闭合类型逐字段合并，不接受额外字段，也不使用通用 `Map.putAll`。
+
+`targets`、`suspectedTargets`、`status`、`missingFields`、`usedContextRefs`、ID 和审计字段归控制面所有。`suspectedTargets` 只能由系统知识匹配产生，`targets` 只能由人工确认接口写入。模型只能为本轮修改的语义字段提出 citations；控制面校验字段键与召回 ref，并从最终 citations 求 `usedContextRefs`。
+
+控制面发送给 Product Agent 的当前草稿同样只包含四个语义字段，避免系统状态被模型回显。记忆候选不属于 PRD 主响应：PRD 确认并成功启动 Case 后，控制面以冻结的需求上下文异步调用独立候选提取；失败仅记录日志，不回滚 PRD 或阻断工作项。
 
 ## 多模态截图管线
 

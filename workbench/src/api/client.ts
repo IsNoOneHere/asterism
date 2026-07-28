@@ -153,6 +153,7 @@ export type SuspectedTarget = {
   repo?: string;
   kind: string;
   title: string;
+  anchorTexts?: string[];
   routePath: string;
   apiEndpoints: string[];
   codeRefs: string[];

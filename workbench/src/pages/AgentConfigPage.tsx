@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { KeyRound, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Agent, AgentConfiguration, api, ModelCapabilityTestResult, ModelConnectionTestResult, ModelProfile } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
@@ -144,54 +144,52 @@ export function AgentConfigPage({ section }: { section: 'models' | 'agents' }) {
           <div><h2>模型列表</h2><p>API Key 只维护一次，页面不会回显明文。</p></div>
           <button type="button" className="icon-text-button" disabled={!canManageCurrentSystem} onClick={() => openProfile()}><Plus size={16} />新增 Profile</button>
         </div>
-        <div className={`table-frame model-profile-table-frame${openTestMenu ? ' menu-open' : ''}`}><table className="data-table model-profile-table"><thead><tr><th>名称</th><th>协议 / 模型</th><th>状态</th><th>操作</th></tr></thead><tbody>
+        <div className="table-frame model-profile-table-frame"><table className="data-table model-profile-table"><thead><tr><th>名称</th><th>协议 / 模型</th><th>状态</th><th>操作</th></tr></thead><tbody>
           {(value?.modelProfiles ?? []).map((item) => {
             const result = connectionTests[`${systemId}:${item.id}`];
             const pending = testProfile.isPending && testProfile.variables === item.id;
             const structure = capabilityTests[`${systemId}:${item.id}:structured_output`];
             const image = capabilityTests[`${systemId}:${item.id}:image_input`];
-            return <tr key={item.id}>
+            return <Fragment key={item.id}><tr>
             <td title={`${item.name || item.id} · ${item.baseUrl || '默认端点'}`}><strong>{item.name || item.id}</strong><small>{item.baseUrl || '默认端点'}</small></td>
             <td title={`${providerName(item.provider)} · ${item.model}`}>{providerName(item.provider)} · {item.model}</td>
             <td><span className={`key-status ${item.apiKeySet ? 'configured' : ''}`}><KeyRound size={14} aria-hidden="true" />{item.apiKeySet ? 'Key 已配置' : 'Key 未配置'}{item.imageInput ? ' · 图片' : ''} · {structuredOutputName(item.structuredOutput)}</span></td>
             <td className="config-action-cell table-action-cell"><div className="button-row compact-actions">
-              {/* 多种诊断动作收进同一菜单，避免操作列被横向按钮挤满。 */}
-              <div className="row-action-menu profile-test-menu" onBlur={(event) => {
-                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpenTestMenu('');
-              }} onKeyDown={(event) => {
-                if (event.key === 'Escape') {
-                  setOpenTestMenu('');
-                  event.currentTarget.querySelector('button')?.focus();
-                }
-              }}>
-                <button type="button" className="secondary profile-test-menu-trigger"
-                  aria-label={`测试 ${item.name || item.id}`} aria-haspopup="menu"
-                  aria-expanded={openTestMenu === item.id}
-                  onClick={() => setOpenTestMenu((current) => current === item.id ? '' : item.id)}>测试</button>
-                {openTestMenu === item.id && <div className="system-select-menu row-action-menu-panel profile-test-menu-panel"
-                  role="menu" aria-label={`${item.name || item.id} 的测试操作`}>
-                  <button type="button" role="menuitem"
-                    className={`system-select-option row-action-menu-item connection-test ${result ? result.connected ? 'connected' : 'failed' : ''}`}
-                    aria-label={`测试 ${item.name || item.id}连通性`} aria-live="polite"
-                    title={result?.message || '测试模型连通性'}
-                    disabled={!canManageCurrentSystem || testProfile.isPending}
-                    onClick={() => testProfile.mutate(item.id)}>
-                    {pending ? '测试中…' : result ? result.connected ? '连接正常' : '连接失败' : '测试连接'}
-                  </button>
-                  <CapabilityTestButton profile={item} capability="structured_output" result={structure}
-                    pending={testCapability.isPending && testCapability.variables?.id === item.id && testCapability.variables.capability === 'structured_output'}
-                    disabled={!canManageCurrentSystem || testCapability.isPending}
-                    onClick={() => testCapability.mutate({ id: item.id, capability: 'structured_output' })} />
-                  {item.imageInput && <CapabilityTestButton profile={item} capability="image_input" result={image}
-                    pending={testCapability.isPending && testCapability.variables?.id === item.id && testCapability.variables.capability === 'image_input'}
-                    disabled={!canManageCurrentSystem || testCapability.isPending}
-                    onClick={() => testCapability.mutate({ id: item.id, capability: 'image_input' })} />}
-                </div>}
-              </div>
+              {/* 测试项在表格内展开，避免浮层被滚动容器裁切。 */}
+              <button type="button" className="secondary profile-test-menu-trigger"
+                aria-label={`测试 ${item.name || item.id}`}
+                aria-expanded={openTestMenu === item.id}
+                aria-controls={`profile-tests-${item.id}`}
+                onClick={() => setOpenTestMenu((current) => current === item.id ? '' : item.id)}>测试</button>
               <button type="button" className="icon-button" title="编辑 Profile" aria-label={`编辑 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => openProfile(item)}><Pencil size={16} /></button>
               <button type="button" className="icon-button danger" title="删除 Profile" aria-label={`删除 ${item.name || item.id}`} disabled={!canManageCurrentSystem} onClick={() => { deleteProfile.reset(); setDeleteTarget({ id: item.id, name: item.name || item.id }); }}><Trash2 size={16} /></button>
             </div></td>
-          </tr>})}
+          </tr>
+          {openTestMenu === item.id && <tr className="model-profile-test-row"><td colSpan={4}>
+            <div id={`profile-tests-${item.id}`} className="profile-test-inline-panel"
+              role="group" aria-label={`${item.name || item.id} 的测试操作`}>
+              <span className="profile-test-inline-label">模型诊断</span>
+              <div className="button-row">
+                <button type="button"
+                  className={`secondary connection-test profile-test-action ${result ? result.connected ? 'connected' : 'failed' : ''}`}
+                  aria-label={`测试 ${item.name || item.id}连通性`} aria-live="polite"
+                  title={result?.message || '测试模型连通性'}
+                  disabled={!canManageCurrentSystem || testProfile.isPending}
+                  onClick={() => testProfile.mutate(item.id)}>
+                  {pending ? '测试中…' : result ? result.connected ? '连接正常' : '连接失败' : '测试连接'}
+                </button>
+                <CapabilityTestButton profile={item} capability="structured_output" result={structure}
+                  pending={testCapability.isPending && testCapability.variables?.id === item.id && testCapability.variables.capability === 'structured_output'}
+                  disabled={!canManageCurrentSystem || testCapability.isPending}
+                  onClick={() => testCapability.mutate({ id: item.id, capability: 'structured_output' })} />
+                {item.imageInput && <CapabilityTestButton profile={item} capability="image_input" result={image}
+                  pending={testCapability.isPending && testCapability.variables?.id === item.id && testCapability.variables.capability === 'image_input'}
+                  disabled={!canManageCurrentSystem || testCapability.isPending}
+                  onClick={() => testCapability.mutate({ id: item.id, capability: 'image_input' })} />}
+              </div>
+            </div>
+          </td></tr>}
+          </Fragment>})}
           {value?.modelProfiles.length === 0 && <tr><td className="empty-cell" colSpan={4}>还没有模型连接</td></tr>}
         </tbody></table></div>
       </div> : <div className="agent-config-stack">
@@ -287,8 +285,8 @@ function CapabilityTestButton({ profile, capability, result, pending, disabled, 
   onClick: () => void;
 }) {
   const label = capability === 'structured_output' ? '结构化' : '图片';
-  return <button type="button" role="menuitem"
-    className={`system-select-option row-action-menu-item connection-test ${result ? result.supported ? 'connected' : 'failed' : ''}`}
+  return <button type="button"
+    className={`secondary connection-test profile-test-action ${result ? result.supported ? 'connected' : 'failed' : ''}`}
     aria-label={`测试 ${profile.name || profile.id}${label}能力`} aria-live="polite"
     title={result ? `${result.message}${result.checkedAt ? ` · ${result.checkedAt}` : ''}` : `测试${label}能力`}
     disabled={disabled} onClick={onClick}>

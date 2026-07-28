@@ -19,11 +19,13 @@ from asterism_worker.agent_config import AgentConstraints, EngineConfig, ModelPr
 from asterism_worker.contracts import (
     CodingAttemptRequest,
     CodingPlanDraft,
-    CodingPlanProposal,
     CodingPlanRequest,
-    CodingPlanTask,
 )
-from asterism_worker.providers.claude_sdk_planning import ClaudeSdkPlanningMixin, PlanningOutputError
+from asterism_worker.providers.claude_sdk_planning import (
+    PLANNING_TOOL_MATCHER,
+    ClaudeSdkPlanningMixin,
+    PlanningResultError,
+)
 from asterism_worker.providers.claude_sdk_team import (
     SUBAGENT_TOOLS,
     SUPERVISOR_TOOLS,
@@ -102,7 +104,7 @@ def test_team_provider_uses_native_subagents_and_enforces_repo_write_policy(tmp_
         assert "上一版候选" in text
         assert "已恢复到当前工作区" in text
         assert "人工反馈为准" in text
-        assert "结构化修订上下文" in text
+        assert "修订上下文" in text
         assert "只修订人工意见涉及的部分，不推翻已通过的改动" in text
         assert '"revision": 2' in text
         assert "diff --git" not in text
@@ -115,6 +117,7 @@ def test_team_provider_uses_native_subagents_and_enforces_repo_write_policy(tmp_
         assert options.allowed_tools == TEAM_TOOLS
         assert options.permission_mode == "dontAsk"
         assert options.max_buffer_size == 16 * 1024 * 1024
+        assert options.output_format is None
         assert options.can_use_tool is None
         assert "CLAUDE_CODE_DISABLE_EXPLORE_PLAN_AGENTS" not in options.env
         assert "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" not in options.env
@@ -194,9 +197,6 @@ def test_team_provider_uses_native_subagents_and_enforces_repo_write_policy(tmp_
         yield ResultMessage(
             subtype="success", duration_ms=10, duration_api_ms=8, is_error=False, num_turns=4,
             session_id="session-team", result="实现完成", usage={"input_tokens": 100, "output_tokens": 20},
-            structured_output={
-                "status": "completed", "task_outcomes": [], "blockers": [], "changed_paths": [],
-            },
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -209,6 +209,8 @@ def test_team_provider_uses_native_subagents_and_enforces_repo_write_policy(tmp_
     result = asyncio.run(provider.run(request, workspace))
 
     assert result.session_id == "session-team"
+    assert result.outcome.status == "completed"
+    assert result.outcome.changed_paths == ["src/app.txt"]
     assert result.token_usage == {"input_tokens": 100, "output_tokens": 20}
     assert {item.repo for item in result.repo_changes if item.diff_patch} == {"backend", "frontend"}
     assert {item.agent_type for item in result.subagent_runs} == {"Explore", "repo-backend", "repo-frontend"}
@@ -244,6 +246,8 @@ def test_team_provider_plans_read_only_and_can_resume_the_same_session(tmp_path,
     async def fake_query(*, prompt, options):
         messages = [item async for item in prompt]
         assert "只调整前端提示" in messages[0]["message"]["content"]
+        assert "计划负责确定方向与边界，不代替后续代码开发" in messages[0]["message"]["content"]
+        assert "不要输出完整类、完整函数、可直接复制的实现源码或长代码块" in messages[0]["message"]["content"]
         assert "Requirement manifest: manifest-1" in (workspace.root / "CLAUDE.md").read_text()
         assert "已冻结需求依据" in (workspace.root / "CLAUDE.md").read_text()
         assert "执行阶段补充经验" in (workspace.root / "CLAUDE.md").read_text()
@@ -255,11 +259,11 @@ def test_team_provider_plans_read_only_and_can_resume_the_same_session(tmp_path,
         assert options.session_store is None
         assert options.session_store_flush == "eager"
         assert options.enable_file_checkpointing is False
-        assert options.output_format == {
-            "type": "json_schema",
-            "schema": CodingPlanProposal.model_json_schema(),
-        }
-        gate = options.hooks["PreToolUse"][0].hooks[0]
+        assert options.output_format is None
+        planning_hook = options.hooks["PreToolUse"][0]
+        # 仅读取工具进入路径门禁，SDK 终态控制消息不进入仓库 Hook。
+        assert planning_hook.matcher == PLANNING_TOOL_MATCHER == "Read|Glob|Grep"
+        gate = planning_hook.hooks[0]
         first = await gate({
             "tool_name": "Read", "tool_input": {"file_path": "frontend/src/app.txt"},
         }, None, None)
@@ -271,15 +275,7 @@ def test_team_provider_plans_read_only_and_can_resume_the_same_session(tmp_path,
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=2,
             session_id="22222222-2222-4222-8222-222222222222",
-            result="这段自由文本不是 JSON，但不能再参与规划结果解析。",
-            structured_output={
-                "summary": "只改前端提示",
-                "tasks": [{
-                    "repo": "frontend", "objective": "调整错误提示位置",
-                    "acceptance_criteria_refs": ["AC-1"], "evidence": ["src/app.txt"],
-                }],
-                "risks": ["保持接口不变"], "open_questions": [],
-            },
+            result="# 计划\n\n- 调整前端错误提示位置\n- 保持接口不变",
             usage={"input_tokens": 10, "output_tokens": 5},
         )
 
@@ -298,58 +294,26 @@ def test_team_provider_plans_read_only_and_can_resume_the_same_session(tmp_path,
 
     assert plan.revision == 2
     assert plan.session_id == "22222222-2222-4222-8222-222222222222"
-    assert plan.tasks[0].task_id == "task-01"
-    assert plan.tasks[0].repo == "frontend"
+    assert plan.plan_markdown == "# 计划\n\n- 调整前端错误提示位置\n- 保持接口不变"
     assert set(plan.base_revisions) == {"backend", "frontend"}
     transcript = tmp_path / "artifacts" / "wi-1" / "coding-plan-case-1.jsonl"
-    assert '"usage": {"input_tokens": 10, "output_tokens": 5}' in transcript.read_text()
-
-
-def test_planning_proposal_schema_excludes_system_fields():
-    schema = CodingPlanProposal.model_json_schema()
-
-    assert set(schema["properties"]) == {"summary", "tasks", "risks", "open_questions"}
-    assert set(schema["$defs"]["CodingPlanTaskProposal"]["properties"]) == {
-        "repo", "objective", "acceptance_criteria_refs", "evidence",
+    records = [json.loads(line) for line in transcript.read_text().splitlines()]
+    metadata = next(item for item in records if item["type"] == "sdk_result_metadata")
+    assert metadata == {
+        "type": "sdk_result_metadata",
+        "subtype": "success",
+        "is_error": False,
+        "stop_reason": "",
+        "permission_denial_count": 0,
+        "deferred_tool_use": False,
+        "error_count": 0,
+        "session_id": "22222222-2222-4222-8222-222222222222",
+        "result_length": len(plan.plan_markdown),
     }
+    assert records[-1]["usage"] == {"input_tokens": 10, "output_tokens": 5}
 
 
-@pytest.mark.parametrize(
-    ("structured_output", "category"),
-    [
-        (None, "structured_output_missing"),
-        ({
-            "summary": 1,
-            "tasks": [{"repo": "backend", "objective": "修复保存"}],
-            "risks": [],
-            "open_questions": [],
-        }, "structured_output_invalid"),
-        ({
-            "summary": "空计划",
-            "tasks": [],
-            "risks": [],
-            "open_questions": [],
-        }, "structured_output_invalid"),
-        ({
-            "summary": "模型越权生成身份",
-            "tasks": [{"task_id": "model-task", "repo": "backend", "objective": "修复保存"}],
-            "risks": [],
-            "open_questions": [],
-        }, "structured_output_invalid"),
-        ({
-            "summary": "未知仓库",
-            "tasks": [{"repo": "missing", "objective": "修复保存"}],
-            "risks": [],
-            "open_questions": [],
-        }, "unknown_repo"),
-    ],
-)
-def test_planning_rejects_invalid_structured_output(
-    tmp_path,
-    monkeypatch,
-    structured_output,
-    category,
-):
+def test_planning_rejects_empty_result_text(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 501)
     team_root = tmp_path / "team"
     team_root.mkdir()
@@ -362,8 +326,7 @@ def test_planning_rejects_invalid_structured_output(
     async def fake_query(**_kwargs):
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
-            session_id="session-invalid", result='{"ignored": true}',
-            structured_output=structured_output,
+            session_id="session-empty", result="",
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -374,11 +337,11 @@ def test_planning_rejects_invalid_structured_output(
         {"query": fake_query},
     )
 
-    with pytest.raises(PlanningOutputError, match=f"^{category}$"):
+    with pytest.raises(PlanningResultError, match="^planning_text_missing$"):
         asyncio.run(provider.plan(request, workspace))
 
 
-def test_planning_maps_sdk_structured_output_retry_exhaustion(tmp_path, monkeypatch):
+def test_planning_surfaces_sdk_terminal_error(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 501)
     team_root = tmp_path / "team"
     team_root.mkdir()
@@ -390,13 +353,13 @@ def test_planning_maps_sdk_structured_output_retry_exhaustion(tmp_path, monkeypa
 
     async def fake_query(**_kwargs):
         yield ResultMessage(
-            subtype="error_max_structured_output_retries",
+            subtype="error_max_turns",
             duration_ms=1,
             duration_api_ms=1,
             is_error=True,
             num_turns=1,
             session_id="session-invalid",
-            result="模型多次修复后仍不符合 Schema",
+            result="规划回合达到最大轮次",
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -407,17 +370,22 @@ def test_planning_maps_sdk_structured_output_retry_exhaustion(tmp_path, monkeypa
         {"query": fake_query},
     )
 
-    with pytest.raises(PlanningOutputError, match="^structured_output_retry_exhausted$"):
+    with pytest.raises(RuntimeError, match="Claude SDK Planning failed: error_max_turns"):
         asyncio.run(provider.plan(request, workspace))
 
+    transcript = tmp_path / "artifacts" / "wi-1" / "coding-plan-case-1.jsonl"
+    records = [json.loads(line) for line in transcript.read_text().splitlines()]
+    metadata = next(item for item in records if item["type"] == "sdk_result_metadata")
+    assert metadata["subtype"] == "error_max_turns"
+    assert metadata["is_error"] is True
 
-def test_planning_source_has_no_free_text_json_fallback():
+
+def test_planning_source_has_no_model_structured_output_contract():
     source = inspect.getsource(ClaudeSdkPlanningMixin)
 
-    assert "json.loads" not in source
-    assert "re.search" not in source
-    assert "_parse_plan" not in source
-    assert "只输出 JSON" not in source
+    assert "output_format" not in source
+    assert "structured_output" not in source
+    assert "CodingPlanProposal" not in source
 
 
 def test_session_resolution_prefers_local_and_rebuilds_from_durable_context(tmp_path):
@@ -482,18 +450,10 @@ def test_planning_reserves_turns_for_plan_synthesis(tmp_path, monkeypatch):
             "tool_name": "Read", "tool_input": {"file_path": "backend/src/app.txt"},
         }, None, None)
         assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "立即提交结构化执行计划" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "立即提交可审批计划" in decision["hookSpecificOutput"]["permissionDecisionReason"]
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=5,
-            session_id="session-plan-budget", result="忽略这段文本",
-            structured_output={
-                "summary": "后端修复",
-                "tasks": [{
-                    "repo": "backend", "objective": "修复设置保存",
-                    "acceptance_criteria_refs": ["AC-1"], "evidence": ["src/app.txt"],
-                }],
-                "risks": [], "open_questions": [],
-            },
+            session_id="session-plan-budget", result="# 计划\n\n修复后端设置保存",
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -545,9 +505,6 @@ def test_team_provider_allows_unchanged_repository(tmp_path, monkeypatch):
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
             session_id="session-one", result="只需前端修改",
-            structured_output={
-                "status": "completed", "task_outcomes": [], "blockers": [], "changed_paths": [],
-            },
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -577,15 +534,7 @@ def test_planning_captures_git_baseline_before_switching_sdk_user(tmp_path, monk
     async def fake_query(**_kwargs):
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
-            session_id="session-plan-owner", result="忽略这段文本",
-            structured_output={
-                "summary": "后端修复",
-                "tasks": [{
-                    "repo": "backend", "objective": "修复设置保存",
-                    "acceptance_criteria_refs": ["AC-1"], "evidence": ["src/app.txt"],
-                }],
-                "risks": [], "open_questions": [],
-            },
+            session_id="session-plan-owner", result="# 计划\n\n修复后端设置保存",
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -625,9 +574,6 @@ def test_team_provider_appends_attempt_boundaries_across_revisions(tmp_path, mon
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
             session_id="session-audit", result="执行完成",
-            structured_output={
-                "status": "completed", "task_outcomes": [], "blockers": [], "changed_paths": [],
-            },
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -662,9 +608,6 @@ def test_team_provider_restores_worker_owner_before_collecting_diff(tmp_path, mo
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
             session_id="session-owner", result="执行完成",
-            structured_output={
-                "status": "completed", "task_outcomes": [], "blockers": [], "changed_paths": [],
-            },
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -733,9 +676,6 @@ def test_team_provider_keeps_background_task_events_as_telemetry(tmp_path, monke
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
             session_id="session-task", result="执行完成",
-            structured_output={
-                "status": "completed", "task_outcomes": [], "blockers": [], "changed_paths": [],
-            },
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -755,9 +695,6 @@ def test_team_provider_keeps_background_task_events_as_telemetry(tmp_path, monke
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
             session_id="session-task", result="提前结束",
-            structured_output={
-                "status": "completed", "task_outcomes": [], "blockers": [], "changed_paths": [],
-            },
         )
 
     provider.query = unfinished_query
@@ -785,9 +722,6 @@ def test_team_provider_closes_builtin_agent_from_task_terminal_event(tmp_path, m
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
             session_id="session-explore", result="探索完成",
-            structured_output={
-                "status": "completed", "task_outcomes": [], "blockers": [], "changed_paths": [],
-            },
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -804,14 +738,13 @@ def test_team_provider_closes_builtin_agent_from_task_terminal_event(tmp_path, m
     ]
 
 
-def test_permission_denial_overrides_completed_structured_outcome(tmp_path, monkeypatch):
+def test_permission_denial_blocks_candidate_even_when_diff_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 501)
     team_root = tmp_path / "team"
     team_root.mkdir()
     request, workspace = team_request(team_root)
     request.approved_plan = CodingPlanDraft(
-        summary="实现后端",
-        tasks=[CodingPlanTask(task_id="task-01", repo="backend", objective="完成后端实现")],
+        plan_markdown="# 计划\n\n实现后端",
     )
 
     async def denied_query(**_kwargs):
@@ -819,13 +752,6 @@ def test_permission_denial_overrides_completed_structured_outcome(tmp_path, monk
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
             session_id="session-denied", result="已完成",
-            structured_output={
-                "status": "completed",
-                "task_outcomes": [{
-                    "task_id": "task-01", "status": "completed", "changed_paths": ["backend/src/app.txt"],
-                }],
-                "blockers": [], "changed_paths": ["src/app.txt"],
-            },
             permission_denials=[{"tool_name": "Edit"}],
         )
 
@@ -844,17 +770,42 @@ def test_permission_denial_overrides_completed_structured_outcome(tmp_path, monk
     assert result.repo_changes[0].diff_patch
 
 
-def test_approved_plan_requires_every_task_outcome(tmp_path, monkeypatch):
+def test_sdk_non_success_terminal_blocks_candidate_even_when_error_flag_is_false(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    team_root = tmp_path / "team"
+    team_root.mkdir()
+    request, workspace = team_request(team_root)
+
+    async def terminal_error_query(**_kwargs):
+        (workspace.repos["backend"] / "src" / "app.txt").write_text("partial backend\n")
+        yield ResultMessage(
+            subtype="error_max_turns", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-terminal-error", result="达到最大轮次",
+        )
+
+    provider = ClaudeSdkTeamProvider(
+        ModelProfile(provider="anthropic", model="claude", api_key="key"),
+        EngineConfig(name="claude_sdk_team"),
+        str(tmp_path / "artifacts"),
+        AgentConstraints(role_id="developer"),
+        {"query": terminal_error_query},
+    )
+
+    result = asyncio.run(provider.run(request, workspace))
+
+    # 系统以 SDK 终态而非模型文本判断完成，异常终态即使有 Diff 也必须保留为可恢复阻塞。
+    assert result.outcome.status == "blocked"
+    assert any("error_max_turns" in blocker for blocker in result.outcome.blockers)
+    assert result.repo_changes[0].diff_patch
+
+
+def test_approved_markdown_plan_does_not_require_model_task_outcomes(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 501)
     team_root = tmp_path / "team"
     team_root.mkdir()
     request, workspace = team_request(team_root)
     request.approved_plan = CodingPlanDraft(
-        summary="实现前后端",
-        tasks=[
-            CodingPlanTask(task_id="task-01", repo="backend", objective="完成后端实现"),
-            CodingPlanTask(task_id="task-02", repo="frontend", objective="完成前端实现"),
-        ],
+        plan_markdown="# 计划\n\n实现前后端",
     )
 
     async def partial_query(**_kwargs):
@@ -862,13 +813,6 @@ def test_approved_plan_requires_every_task_outcome(tmp_path, monkeypatch):
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
             session_id="session-partial", result="前端完成",
-            structured_output={
-                "status": "completed",
-                "task_outcomes": [{
-                    "task_id": "task-02", "status": "completed", "changed_paths": ["frontend/src/app.txt"],
-                }],
-                "blockers": [], "changed_paths": ["src/app.txt"],
-            },
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -881,18 +825,18 @@ def test_approved_plan_requires_every_task_outcome(tmp_path, monkeypatch):
 
     result = asyncio.run(provider.run(request, workspace))
 
-    assert result.outcome.status == "blocked"
-    assert result.outcome.blockers == ["已批准任务未覆盖: task-01"]
+    assert result.outcome.status == "completed"
+    assert result.outcome.blockers == []
+    assert result.outcome.changed_paths == ["src/app.txt"]
 
 
-def test_real_diff_must_be_declared_by_an_approved_task_outcome(tmp_path, monkeypatch):
+def test_system_collects_every_real_diff_without_model_declarations(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 501)
     team_root = tmp_path / "team"
     team_root.mkdir()
     request, workspace = team_request(team_root)
     request.approved_plan = CodingPlanDraft(
-        summary="只实现后端",
-        tasks=[CodingPlanTask(task_id="task-01", repo="backend", objective="完成后端实现")],
+        plan_markdown="# 计划\n\n只实现后端",
     )
 
     async def query_with_stale_change(**_kwargs):
@@ -901,13 +845,6 @@ def test_real_diff_must_be_declared_by_an_approved_task_outcome(tmp_path, monkey
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
             session_id="session-stale", result="后端完成",
-            structured_output={
-                "status": "completed",
-                "task_outcomes": [{
-                    "task_id": "task-01", "status": "completed", "changed_paths": ["backend/src/app.txt"],
-                }],
-                "blockers": [], "changed_paths": ["backend/src/app.txt"],
-            },
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -920,42 +857,26 @@ def test_real_diff_must_be_declared_by_an_approved_task_outcome(tmp_path, monkey
 
     result = asyncio.run(provider.run(request, workspace))
 
-    assert result.outcome.status == "blocked"
-    assert result.outcome.blockers == ["真实变更未被任务结果声明: frontend:src/app.txt"]
+    assert result.outcome.status == "completed"
+    assert {change.repo for change in result.repo_changes if change.diff_patch} == {
+        "backend", "frontend",
+    }
 
 
-def test_approved_task_path_must_exist_in_real_repo_diff(tmp_path, monkeypatch):
+def test_model_summary_cannot_invent_changed_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 501)
     team_root = tmp_path / "team"
     team_root.mkdir()
     request, workspace = team_request(team_root)
     request.approved_plan = CodingPlanDraft(
-        summary="实现前后端",
-        tasks=[
-            CodingPlanTask(task_id="task-01", repo="backend", objective="完成后端实现"),
-            CodingPlanTask(task_id="task-02", repo="frontend", objective="完成前端实现"),
-        ],
+        plan_markdown="# 计划\n\n实现前后端",
     )
 
     async def query_with_invented_backend_path(**_kwargs):
         (workspace.repos["frontend"] / "src" / "app.txt").write_text("new frontend\n")
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
-            session_id="session-invented", result="前后端完成",
-            structured_output={
-                "status": "completed",
-                "task_outcomes": [
-                    {
-                        "task_id": "task-01", "status": "completed",
-                        "changed_paths": ["backend/src/app.txt"],
-                    },
-                    {
-                        "task_id": "task-02", "status": "completed",
-                        "changed_paths": ["frontend/src/app.txt"],
-                    },
-                ],
-                "blockers": [], "changed_paths": ["backend/src/app.txt", "frontend/src/app.txt"],
-            },
+            session_id="session-invented", result="前后端均已修改，包括 backend/src/app.txt",
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -968,8 +889,6 @@ def test_approved_task_path_must_exist_in_real_repo_diff(tmp_path, monkeypatch):
 
     result = asyncio.run(provider.run(request, workspace))
 
-    assert result.outcome.status == "blocked"
-    assert result.outcome.blockers == [
-        "任务结果声明了不存在的变更: backend:src/app.txt",
-        "任务结果没有真实变更支撑: task-01",
-    ]
+    assert result.outcome.status == "completed"
+    assert result.outcome.changed_paths == ["src/app.txt"]
+    assert [change.repo for change in result.repo_changes if change.diff_patch] == ["frontend"]

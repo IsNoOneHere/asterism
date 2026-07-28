@@ -1,8 +1,11 @@
 package com.asterism.prd;
 
 import com.asterism.context.ContextHash;
+import com.asterism.context.ContextItem;
 import com.asterism.memory.MemoryCandidateService;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -12,40 +15,76 @@ import java.util.stream.Collectors;
 
 @Service
 public class PrdMemoryCandidateService {
+    private static final Logger log = LoggerFactory.getLogger(PrdMemoryCandidateService.class);
+
+    private final ProductAgentPort productAgent;
     private final MemoryCandidateService candidates;
     private final PrdCitationService citations;
-    private final ObjectMapper objectMapper;
+    private final TaskExecutor taskExecutor;
 
-    public PrdMemoryCandidateService(MemoryCandidateService candidates, PrdCitationService citations,
-                                     ObjectMapper objectMapper) {
+    public PrdMemoryCandidateService(ProductAgentPort productAgent, MemoryCandidateService candidates,
+                                     PrdCitationService citations, TaskExecutor taskExecutor) {
+        this.productAgent = productAgent;
         this.candidates = candidates;
         this.citations = citations;
-        this.objectMapper = objectMapper;
+        this.taskExecutor = taskExecutor;
     }
 
-    public void createCandidates(PrdSession session, PrdDraft draft, String workItemId, String actorId) {
-        candidates.createAll(inputs(session, draft, workItemId, actorId));
+    public void extractAsync(
+            PrdSession session,
+            PrdDraft draft,
+            String workItemId,
+            String actorId,
+            List<ContextItem> contextItems) {
+        try {
+            taskExecutor.execute(() -> extract(session, draft, workItemId, actorId, contextItems));
+        } catch (RuntimeException error) {
+            log.warn("PRD 记忆候选任务提交失败 prdId={} type={}",
+                    session.prdId(), error.getClass().getSimpleName());
+        }
+    }
+
+    void extract(
+            PrdSession session,
+            PrdDraft draft,
+            String workItemId,
+            String actorId,
+            List<ContextItem> contextItems) {
+        try {
+            var targetRefs = draft.targets().stream()
+                    .map(com.asterism.knowledge.KnowledgeMatchService.SuspectedTarget::entryId)
+                    .toList();
+            var result = productAgent.extractMemoryCandidates(
+                    session.systemId(), draft.productContent(), targetRefs, contextItems);
+            var created = candidates.createAll(inputs(
+                    session, draft, workItemId, actorId, contextItems, result.candidates()));
+            log.info("PRD 记忆候选提取完成 prdId={} proposed={} created={}",
+                    session.prdId(), result.candidates().size(), created.size());
+        } catch (RuntimeException error) {
+            // 记忆沉淀是确认后的附加流程，失败不能回滚 PRD 或阻断工作项创建。
+            log.warn("PRD 记忆候选提取失败 prdId={} type={}",
+                    session.prdId(), error.getClass().getSimpleName());
+        }
     }
 
     List<MemoryCandidateService.CandidateInput> inputs(
-            PrdSession session, PrdDraft draft, String workItemId, String actorId) {
-        var raw = draft.extras().get("memoryCandidates");
-        if (!(raw instanceof List<?> values)) return List.of();
+            PrdSession session,
+            PrdDraft draft,
+            String workItemId,
+            String actorId,
+            List<ContextItem> contextItems,
+            List<ProductAgentPort.MemoryCandidateProposal> proposals) {
+        var recalledRefs = contextItems.stream().map(ContextItem::refId).collect(Collectors.toSet());
         var allowedEvidence = new LinkedHashSet<>(citations.references(draft));
+        allowedEvidence.retainAll(recalledRefs);
         var allowedTargets = draft.targets().stream()
                 .map(com.asterism.knowledge.KnowledgeMatchService.SuspectedTarget::entryId)
                 .collect(Collectors.toSet());
         var result = new ArrayList<MemoryCandidateService.CandidateInput>();
-        for (var value : values) {
-            ProductAgentPort.MemoryCandidateProposal proposal;
-            try {
-                proposal = objectMapper.convertValue(value, ProductAgentPort.MemoryCandidateProposal.class);
-            } catch (IllegalArgumentException error) {
-                continue;
-            }
-            var evidence = safeList(proposal.evidenceRefs()).stream().filter(allowedEvidence::contains).toList();
+        for (var proposal : proposals) {
+            var evidence = proposal.evidenceRefs().stream().filter(allowedEvidence::contains).toList();
             if (evidence.isEmpty()) continue;
-            var targets = safeList(proposal.targetRefs()).stream().filter(allowedTargets::contains).toList();
+            var targets = proposal.targetRefs().stream().filter(allowedTargets::contains).toList();
             var hash = ContextHash.sha256(String.valueOf(proposal.content()));
             result.add(new MemoryCandidateService.CandidateInput(
                     session.systemId(), proposal.category(), proposal.audience(), proposal.title(), proposal.content(),
@@ -53,9 +92,5 @@ public class PrdMemoryCandidateService {
                     workItemId, "", actorId));
         }
         return List.copyOf(result);
-    }
-
-    private List<String> safeList(List<String> values) {
-        return values == null ? List.of() : values;
     }
 }

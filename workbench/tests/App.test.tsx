@@ -354,7 +354,7 @@ test('work item detail shows the Claude SDK supervisor and repository agent', as
   expect(await screen.findByText('登录页错误提示')).toBeInTheDocument();
   expect(screen.queryByLabelText('当前工作系统')).not.toBeInTheDocument();
   expect(await screen.findByText('alpha-system')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: /计划与执行/ }));
+  fireEvent.click(screen.getByRole('button', { name: /计划审批与代码开发/ }));
   const progress = await screen.findByRole('list', { name: 'Agent 执行进度' });
   expect(within(progress).getByText(/developer · Supervisor/)).toBeInTheDocument();
   expect(within(progress).getByText('frontend')).toBeInTheDocument();
@@ -365,34 +365,30 @@ test('work item polling keeps the stage selected by the user', async () => {
   renderApp('/work-items/wi-1');
 
   await screen.findByRole('heading', { name: '代码确认' });
-  fireEvent.click(screen.getByRole('button', { name: /计划与执行/ }));
-  expect(screen.getByRole('heading', { name: '计划与执行' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /计划审批与代码开发/ }));
+  expect(screen.getByRole('heading', { name: '计划审批与代码开发' })).toBeInTheDocument();
   setApiResponse('/api/v5/work-items/wi-1', {
     workItemId: 'wi-1', systemId: 'alpha-system', title: '登录页错误提示', lifecycleStatus: 'validation_passed',
     currentStage: '等待上线确认', waitingFor: 'owner', canControl: true, availableActions: ['release_approved'],
   });
 
   await waitFor(() => expect(screen.getByRole('button', { name: /Git 提交与 MR/ })).toHaveAttribute('aria-current', 'step'), { timeout: 4500 });
-  expect(screen.getByRole('heading', { name: '计划与执行' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '计划审批与代码开发' })).toBeInTheDocument();
 }, 7000);
 
-test('code confirmation summarizes structured execution output instead of rendering raw JSON', async () => {
-  const structuredSummary = JSON.stringify({
-    status: 'completed',
-    task_outcomes: [
-      { task_id: 'task-01', status: 'completed', summary: '完成数据库字段迁移', changed_paths: ['backend/V23.sql'] },
-      { task_id: 'task-02', status: 'completed', summary: '完成课程页面适配', changed_paths: ['frontend/Course.tsx'] },
-    ],
-    changed_paths: ['backend/V23.sql', 'frontend/Course.tsx'],
-  });
+test('code confirmation presents the agent summary and system collected file count', async () => {
   setApiResponse('/api/v5/work-items/wi-1/events', [{
     sequence: 1,
     eventId: 'evt-modification',
     eventType: 'ModificationCompleted',
     payloadJson: JSON.stringify({
-      summary: structuredSummary,
+      summary: '完成数据库字段迁移和课程页面适配',
       executionProvider: 'claude_sdk_team',
       tokenUsage: { input_tokens: 320, output_tokens: 80 },
+      repoDiffs: [
+        { repo: 'backend', diffPatch: 'diff --git a/V23.sql b/V23.sql\n+alter table course;' },
+        { repo: 'frontend', diffPatch: 'diff --git a/Course.tsx b/Course.tsx\n+export const Course = {};' },
+      ],
     }),
     createdAt: '2026-07-05T12:01:00Z',
     actorId: 'worker',
@@ -401,9 +397,8 @@ test('code confirmation summarizes structured execution output instead of render
   renderApp('/work-items/wi-1');
 
   expect(await screen.findByRole('heading', { name: '代码确认' })).toBeInTheDocument();
-  expect(screen.getByText('2 个任务已完成，涉及 2 个文件，等待负责人确认。')).toBeInTheDocument();
-  expect(screen.getByText('完成数据库字段迁移；完成课程页面适配')).toBeInTheDocument();
-  expect(screen.queryByText(/task_outcomes/)).not.toBeInTheDocument();
+  expect(screen.getByText('完成数据库字段迁移和课程页面适配，涉及 2 个文件，等待负责人确认。')).toBeInTheDocument();
+  expect(screen.getAllByText('完成数据库字段迁移和课程页面适配').length).toBeGreaterThan(0);
   expect(document.querySelector('.stage-detail-body .change-summary')).toBeInTheDocument();
 });
 
@@ -501,17 +496,23 @@ test('work item detail reviews a coding plan and requires feedback when rejectin
     { sequence: 1, eventType: 'WorkItemActivated', payloadJson: '{}' },
     { sequence: 2, eventType: 'CodingPlanStarted', payloadJson: JSON.stringify({ planRevision: 1 }) },
     { sequence: 3, eventType: 'CodingPlanProposed', payloadJson: JSON.stringify({
-      planRevision: 1, summary: '只调整登录错误提示',
-      tasks: [{ taskId: 'task-01', repo: 'frontend', objective: '移动提示位置', acceptanceCriteriaRefs: ['AC-1'], evidence: ['src/login.tsx:LoginForm'] }],
-      risks: ['保持后端接口不变'], openQuestions: [], baseRevisions: { frontend: 'abc123' },
+      planRevision: 1,
+      planMarkdown: '# 修改计划\n\n- 移动登录错误提示\n- 保持后端接口不变\n\n证据：src/login.tsx:LoginForm',
+      baseRevisions: { frontend: 'abc123' },
     }) },
   ]);
 
   renderApp('/work-items/wi-1');
 
   expect(await screen.findByRole('heading', { name: 'Coding Plan · 第 1 版' })).toBeInTheDocument();
-  expect(screen.getByText('任务：task-01')).toBeInTheDocument();
-  expect(screen.getByText('src/login.tsx:LoginForm')).toBeInTheDocument();
+  const phases = screen.getByRole('list', { name: '计划审批与代码开发进度' });
+  expect(within(phases).getByText('计划审批')).toBeInTheDocument();
+  expect(within(phases).getByText('等待负责人')).toBeInTheDocument();
+  expect(within(phases).getByText('代码开发')).toBeInTheDocument();
+  expect(within(phases).getByText('等待计划批准')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { level: 1, name: '修改计划' })).toBeInTheDocument();
+  expect(screen.getByText(/移动登录错误提示/)).toBeInTheDocument();
+  expect(screen.getByText(/src\/login.tsx:LoginForm/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '批准计划并执行' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '打回重新规划' }));
   const dialog = screen.getByRole('dialog');
@@ -531,7 +532,7 @@ test('work item detail shows repository agent completion metadata', async () => 
   renderApp('/work-items/wi-1');
 
   await screen.findByRole('heading', { name: '登录页错误提示' });
-  fireEvent.click(screen.getByRole('button', { name: /计划与执行/ }));
+  fireEvent.click(screen.getByRole('button', { name: /计划审批与代码开发/ }));
   expect(await screen.findByText('Agent 阶段已完成')).toBeInTheDocument();
   expect((await screen.findAllByText('frontend')).length).toBeGreaterThan(0);
   expect((await screen.findAllByText('前端修改完成')).length).toBeGreaterThan(0);

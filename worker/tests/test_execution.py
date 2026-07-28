@@ -16,10 +16,11 @@ from asterism_worker.activities.execution import (
 from asterism_worker.agent_config import AgentConstraints, EngineConfig, ModelProfile, ResolvedAgentConfig
 from asterism_worker.contracts import CodingAttemptRequest, RepoSnapshot
 from asterism_worker.providers.claude_sdk_team import ClaudeSdkTeamProvider
-from asterism_worker.providers.claude_sdk_planning import PlanningOutputError
+from asterism_worker.providers.claude_sdk_planning import PlanningResultError
 from asterism_worker.providers.factory import build_execution_provider
 from asterism_worker.providers.fake import FakeExecutionProvider
 from asterism_worker.repo_source import TeamWorkspace
+from asterism_worker.workflows.coding_support import combine_patch_artifacts
 
 
 def _git_repo(path):
@@ -75,15 +76,15 @@ def _planning_request():
     }
 
 
-def test_generate_coding_plan_marks_output_error_non_retryable(tmp_path, monkeypatch):
-    _stub_planning_activity(monkeypatch, tmp_path, PlanningOutputError("structured_output_invalid"))
+def test_generate_coding_plan_marks_missing_text_non_retryable(tmp_path, monkeypatch):
+    _stub_planning_activity(monkeypatch, tmp_path, PlanningResultError("planning_text_missing"))
 
     with pytest.raises(ApplicationError) as caught:
         asyncio.run(generate_coding_plan(_planning_request()))
 
-    assert caught.value.type == "PLAN_OUTPUT_INVALID"
+    assert caught.value.type == "PLAN_RESULT_MISSING"
     assert caught.value.non_retryable is True
-    assert caught.value.message == "structured_output_invalid"
+    assert caught.value.message == "planning_text_missing"
 
 
 def test_generate_coding_plan_keeps_runtime_error_retryable(tmp_path, monkeypatch):
@@ -219,6 +220,34 @@ def test_apply_patch_is_idempotent_and_enforces_paths(tmp_path):
     assert first["blocked"] is False
     assert second["already_applied"] is True
     assert blocked["blocked"] is True
+
+
+def test_combined_patch_preserves_trailing_blank_context_line(tmp_path):
+    repo = tmp_path / "repo"
+    _git_repo(repo)
+    source = repo / "App.java"
+    source.write_text("one\ntwo\nanchor\nreturn row;\ncollect();\n\noutside\n")
+    subprocess.run(["git", "add", "App.java"], cwd=repo, check=True, capture_output=True)
+    subprocess.run([
+        "git", "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+        "commit", "-m", "add app",
+    ], cwd=repo, check=True, capture_output=True)
+    source.write_text("one\ntwo\nanchor\ninserted\nreturn row;\ncollect();\n\noutside\n")
+    patch = subprocess.run(
+        ["git", "diff", "--no-ext-diff", "--binary"],
+        cwd=repo, text=True, check=True, capture_output=True,
+    ).stdout
+
+    # 空白上下文行是 Unified Diff 的有效内容，组合后必须逐字保留。
+    assert patch.endswith(" \n")
+    combined = combine_patch_artifacts([patch])
+    assert combined == patch
+
+    subprocess.run(["git", "restore", "App.java"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "apply", "--check"], cwd=repo, input=combined,
+        text=True, check=True, capture_output=True,
+    )
 
 
 def test_validation_returns_command_evidence(tmp_path):

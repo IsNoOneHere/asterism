@@ -54,7 +54,7 @@ test.each([
   renderApp('/models');
 
   fireEvent.click(await screen.findByRole('button', { name: '测试 Claude 主模型' }));
-  const button = await screen.findByRole('menuitem', { name: '测试 Claude 主模型连通性' });
+  const button = await screen.findByRole('button', { name: '测试 Claude 主模型连通性' });
   fireEvent.click(button);
 
   await waitFor(() => expect(button).toHaveTextContent(label));
@@ -71,7 +71,7 @@ test.each([
   renderApp('/models');
 
   fireEvent.click(await screen.findByRole('button', { name: '测试 Claude 主模型' }));
-  const action = await screen.findByRole('menuitem', { name: button });
+  const action = await screen.findByRole('button', { name: button });
   fireEvent.click(action);
 
   await waitFor(() => expect(action).toHaveTextContent(label));
@@ -80,7 +80,7 @@ test.each([
   expect(fetch).toHaveBeenCalledWith(path, expect.objectContaining({ method: 'POST' }));
 });
 
-test('model profile keeps only compact primary actions and groups diagnostics in a menu', async () => {
+test('model profile keeps compact primary actions and expands diagnostics inside the table', async () => {
   renderApp('/models');
   const trigger = await screen.findByRole('button', { name: '测试 Claude 主模型' });
   const row = trigger.closest('tr')!;
@@ -91,10 +91,10 @@ test('model profile keeps only compact primary actions and groups diagnostics in
 
   fireEvent.click(trigger);
 
-  const menu = within(row).getByRole('menu', { name: 'Claude 主模型 的测试操作' });
-  expect(within(menu).getByRole('menuitem', { name: '测试 Claude 主模型连通性' })).toBeInTheDocument();
-  expect(within(menu).getByRole('menuitem', { name: '测试 Claude 主模型结构化能力' })).toBeInTheDocument();
-  expect(within(menu).getByRole('menuitem', { name: '测试 Claude 主模型图片能力' })).toBeInTheDocument();
+  const group = screen.getByRole('group', { name: 'Claude 主模型 的测试操作' });
+  expect(within(group).getByRole('button', { name: '测试 Claude 主模型连通性' })).toBeInTheDocument();
+  expect(within(group).getByRole('button', { name: '测试 Claude 主模型结构化能力' })).toBeInTheDocument();
+  expect(within(group).getByRole('button', { name: '测试 Claude 主模型图片能力' })).toBeInTheDocument();
 });
 
 test('developer exposes only terminal engines and saves supervisor constraints', async () => {

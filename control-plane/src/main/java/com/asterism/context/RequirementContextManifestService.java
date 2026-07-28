@@ -93,6 +93,11 @@ public class RequirementContextManifestService {
                 .orElse(null);
     }
 
+    public List<ContextItem> requirementItems(
+            String manifestId, String systemId, String prdId, String workItemId) {
+        return require(manifestId, systemId, prdId, workItemId).items();
+    }
+
     public String refresh(String systemId, String prdId, String workItemId, String actorId, String refreshKey) {
         var queryHash = ContextHash.sha256("refresh|" + refreshKey);
         var existing = findByQueryHash(prdId, queryHash);

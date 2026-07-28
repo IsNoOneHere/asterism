@@ -14,6 +14,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.temporal.client.WorkflowExecutionAlreadyStarted;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
@@ -26,6 +28,8 @@ import java.util.Map;
 
 @Service
 public class PrdConfirmationService {
+    private static final Logger log = LoggerFactory.getLogger(PrdConfirmationService.class);
+
     private final PrdSessionRepository sessions;
     private final DomainEventService events;
     private final TemporalCasePort temporal;
@@ -130,6 +134,7 @@ public class PrdConfirmationService {
                             "caseId", caseId,
                             "releaseMode", gitConfig.releaseMode(),
                             "validationMode", gitConfig.validationMode()));
+            extractMemoryCandidates(current, prepared.requirementManifestId(), actor.getName());
         } catch (RuntimeException error) {
             aggregate.update(new PrdSession(
                     current.prdId(), current.systemId(), current.conversationId(), workItemId, caseId,
@@ -164,7 +169,6 @@ public class PrdConfirmationService {
         var draft = draftCodec.read(current.draftJson());
         var requirementManifestId = manifests.freeze(current.systemId(), prdId, workItemId,
                 citations.references(draft), current.draftJson(), actor.getName());
-        memoryCandidates.createCandidates(current, draft, workItemId, actor.getName());
         var starting = new PrdSession(
                 current.prdId(), current.systemId(), current.conversationId(), workItemId, caseId,
                 current.title(), current.goal(), current.draftJson(), current.missingFields(), "case_starting",
@@ -174,6 +178,19 @@ public class PrdConfirmationService {
                 "PRDConfirmed:" + prdId,
                 Map.of("title", current.title(), "requirementManifestId", requirementManifestId));
         return new PreparedConfirmation(starting, true, requirementManifestId);
+    }
+
+    private void extractMemoryCandidates(PrdSession session, String manifestId, String actorId) {
+        try {
+            var items = manifests.requirementItems(
+                    manifestId, session.systemId(), session.prdId(), session.workItemId());
+            memoryCandidates.extractAsync(
+                    session, draftCodec.read(session.draftJson()), session.workItemId(), actorId, items);
+        } catch (RuntimeException error) {
+            // 记忆候选不属于确认事务，调度失败只记录日志。
+            log.warn("PRD 记忆候选未能调度 prdId={} type={}",
+                    session.prdId(), error.getClass().getSimpleName());
+        }
     }
 
     private TemporalCasePort.PrdPayload prdPayload(PrdSession current, String requirementManifestId) {

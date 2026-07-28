@@ -5,16 +5,17 @@
 | Event | 说明 |
 | --- | --- |
 | `PRDUpdated` | PRD 草稿已更新；手工编辑时 payload 含 `source: manual_edit` 和最新 `status` |
+| `PRDConfirmed` / `MemoryCandidateCreated` | PRD 确认冻结需求上下文；确认成功后独立提取记忆候选，候选失败不影响 Case 启动 |
 | `CodingPlanStarted` | Claude SDK Supervisor 开始只读规划，payload 含 planRevision、repositories、contextManifestId |
-| `CodingPlanProposed` | 可人工审批的计划已生成，payload 含 summary、tasks（每项有稳定 taskId）、risks、openQuestions、baseRevisions、sessionId；task evidence 不参与权限裁决 |
+| `CodingPlanProposed` | 可人工审批的 Markdown 计划已生成，payload 含 planMarkdown、baseRevisions、sessionId；模型文本不参与权限裁决 |
 | `CodingPlanApproved` / `CodingPlanRejected` | 计划已批准，或携带必填 note 被人工打回；打回后同一 signal 自动触发下一版规划 |
 | `CodingPlanInvalidated` | 审批后发现仓库基线已变化，旧计划自动失效；Workflow 刷新持久 workspace 并创建新 Planning Session |
 | `CodingAttemptStarted` | Claude SDK Supervisor 已启动，payload 含 architecture、supervisor、repositories、contextManifestId |
 | `AgentStageCompleted` | 可选子 Agent 的审计事件，payload 含 stageIndex、role、repo、engine、changedPaths、agentId，不参与生命周期完成判定 |
 | `RevisionRequested` | 人工带意见请求第 N 轮修订，payload 含 note、revision、requestedBy、phase、revisionMode 和上一轮 Diff 摘要 |
-| `ModificationCompleted` | Root Supervisor 返回 completed，且有效 Diff、路径门禁和 apply 检查全部通过；payload 含 executionOutcome、repoDiffs、revision 与 revisionMode |
-| `WorkerBlocked` | Activity、结构化 outcome、权限、门禁或发布执行被阻塞，payload 含稳定 reason 与 failedPhase；Coding blocked 另含 executionOutcome 和局部 changedPaths |
-| `PatchApplied` / `PatchRejected` | 候选代码已应用或被人工打回 |
+| `ModificationCompleted` | SDK 正常结束，且有效 Diff、路径门禁和 apply 检查全部通过；payload 含系统生成的 executionOutcome、repoDiffs、revision 与 revisionMode |
+| `WorkerBlocked` | Activity、SDK 终态、权限、门禁或发布执行被阻塞，payload 含稳定 reason 与 failedPhase；Coding blocked 另含 executionOutcome 和局部 changedPaths |
+| `PatchApplied` / `PatchApplyBlocked` / `PatchRejected` | 候选代码已应用、应用被阻塞或被人工打回；阻塞事件 payload 含 reason、repo、`failedPhase: patch`，可原位重试 |
 | `ValidationPassed` / `ValidationFailed` | 自动或人工验证结果 |
 | `RepositoryReleasePrepared` | 单仓提交、推送和 MR 元数据已准备 |
 | `MergeRequestCreated` | 每仓 MR 已创建或复用；首个事件把状态推进到 waiting_merge |
@@ -27,9 +28,9 @@
 `WorkerBlocked.payload.reason` 的主要值：
 
 - `context_fetch_failed`：获取需求上下文失败。
-- `coding_plan_failed`：只读规划 Activity、计划 JSON 或仓库证据校验失败。
+- `coding_plan_failed`：只读规划 Activity 异常或没有产生可审批计划文本。
 - `coding_attempt_failed`：Claude SDK Supervisor 异常、未生成 Diff 或 Diff 门禁失败。
-- `coding_attempt_blocked`：Root Supervisor 返回 blocked、权限请求被拒、工具被延迟或批准任务未覆盖；Session 与局部候选保留供续跑。
+- `coding_attempt_blocked`：SDK 终态异常、权限请求被拒、工具被延迟或未生成有效 Diff；Session 与局部候选保留供续跑。
 - `patch_apply_failed` / `patch_revert_failed`：本地 Patch 应用或回滚失败。
 - `validation_activity_failed`：验证 Activity 本身异常；测试不通过使用 `ValidationFailed`。
 - `mr_create_failed` / `mr_ready_failed`：GitLab 推送、MR 创建或 ready 操作失败。

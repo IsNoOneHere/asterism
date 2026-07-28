@@ -76,7 +76,7 @@ def test_legacy_execution_endpoints_are_removed():
 def test_prd_draft_retries_json_and_asks_acceptance_in_chinese():
     llm = FakeLlmClient([
         "not json",
-        '{"title":"登录页错误提示","draft":{"title":"登录页错误提示","goal":"做登录页","scope":"code_change","acceptanceCriteria":[]},"missing_fields":["acceptance_criteria"],"assistant_message":"请补充验收标准。"}',
+        '{"patch":{"title":"登录页错误提示","goal":"做登录页","scope":"code_change","acceptanceCriteria":[]},"assistant_message":"请补充验收标准。","citations":{}}',
     ])
     client = TestClient(create_app(
         llm,
@@ -93,11 +93,11 @@ def test_prd_draft_retries_json_and_asks_acceptance_in_chinese():
     })
 
     assert response.status_code == 200
-    assert response.json()["missing_fields"] == ["acceptance_criteria"]
+    assert response.json()["patch"]["acceptanceCriteria"] == []
     assert "验收标准" in response.json()["assistant_message"]
     assert "只能改 src" in llm.prompts[0]
     assert "Never invent a refId" in llm.prompts[0]
-    assert "evidence_refs may only use refIds" in llm.prompts[0]
+    assert "Never return targets" in llm.prompts[0]
     assert [item.mode for item in llm.output_formats if item] == ["json_object", "json_object"]
     assert "JSONDecodeError" in llm.prompts[1]
     assert "Previous output:\nnot json" in llm.prompts[1]
@@ -107,7 +107,7 @@ def test_prd_draft_retries_json_and_asks_acceptance_in_chinese():
 def test_prd_draft_accepts_shared_fixture():
     fixture = Path(__file__).parents[2] / "docs" / "fixtures" / "prd-draft-request.json"
     llm = FakeLlmClient([
-        '{"title":"登录页","draft":{"title":"登录页","goal":"做登录页","scope":"code_change","acceptanceCriteria":[]},"missing_fields":["acceptance_criteria"],"assistant_message":"还缺验收标准，请补充。"}',
+        '{"patch":{"title":"登录页","goal":"做登录页","scope":"code_change","acceptanceCriteria":[]},"assistant_message":"还缺验收标准，请补充。","citations":{}}',
     ])
     client = TestClient(create_app(
         llm,
@@ -117,100 +117,59 @@ def test_prd_draft_accepts_shared_fixture():
     response = client.post("/prd-draft", headers=INTERNAL_HEADERS, json=json.loads(fixture.read_text()))
 
     assert response.status_code == 200
-    assert response.json()["draft"]["scope"] == "code_change"
+    assert response.json()["patch"]["scope"] == "code_change"
 
 
-def test_prd_draft_normalizes_scalar_citation_to_list():
-    llm = FakeLlmClient([json.dumps({
-        "title": "登录页",
-        "draft": {
+def test_prd_draft_rejects_model_owned_targets_and_accepts_repaired_patch():
+    llm = FakeLlmClient([
+        json.dumps({
+            "patch": {
+                "title": "登录页", "goal": "修复登录页", "scope": "code_change",
+                "acceptanceCriteria": ["错误可见"],
+                "targets": [{"entryId": "model-invented"}],
+            },
+            "assistant_message": "已完成",
+            "citations": {"title": ["MSG:msg-1"]},
+        }, ensure_ascii=False),
+        json.dumps({
+            "patch": {
+                "title": "登录页", "goal": "修复登录页", "scope": "code_change",
+                "acceptanceCriteria": ["错误可见"],
+            },
+            "assistant_message": "已完成",
+            "citations": {"title": ["MSG:msg-1"]},
+        }, ensure_ascii=False),
+    ])
+    client = TestClient(create_app(
+        llm,
+        model_config_fetcher=lambda *args: ModelConfig(managed=True, model="model", api_key="secret"),
+    ))
+
+    response = client.post("/prd-draft", headers=INTERNAL_HEADERS, json={
+        "system_id": "sys-1", "content": "修复登录页",
+    })
+
+    assert response.status_code == 200
+    assert "targets" not in response.json()["patch"]
+    assert "extra_forbidden" in llm.prompts[1]
+
+
+def test_prd_draft_requires_citation_lists():
+    invalid = json.dumps({
+        "patch": {
             "title": "登录页", "goal": "修复登录页", "scope": "code_change",
             "acceptanceCriteria": ["错误可见"],
         },
-        "missing_fields": [],
         "assistant_message": "已完成",
         "citations": {"title": "MSG:msg-1", "goal": ["MEM:mem-1"]},
-    }, ensure_ascii=False)])
-    client = TestClient(create_app(
-        llm,
-        model_config_fetcher=lambda *args: ModelConfig(managed=True, model="model", api_key="secret"),
-    ))
-
-    response = client.post("/prd-draft", headers=INTERNAL_HEADERS, json={
-        "system_id": "sys-1", "content": "修复登录页",
-    })
-
-    assert response.status_code == 200
-    assert response.json()["citations"] == {"title": ["MSG:msg-1"], "goal": ["MEM:mem-1"]}
-
-
-def test_prd_draft_normalizes_multiline_acceptance_criteria():
-    llm = FakeLlmClient([json.dumps({
-        "title": "登录页",
-        "draft": {
-            "title": "登录页", "goal": "修复登录页", "scope": "code_change",
-            "acceptanceCriteria": " 显示中文错误 \n\n 保留用户输入 ",
-        },
-        "missing_fields": [],
-        "assistant_message": "已完成",
-    }, ensure_ascii=False)])
-    client = TestClient(create_app(
-        llm,
-        model_config_fetcher=lambda *args: ModelConfig(managed=True, model="model", api_key="secret"),
-    ))
-
-    response = client.post("/prd-draft", headers=INTERNAL_HEADERS, json={
-        "system_id": "sys-1", "content": "修复登录页",
-    })
-
-    assert response.status_code == 200
-    assert response.json()["draft"]["acceptanceCriteria"] == ["显示中文错误", "保留用户输入"]
-
-
-def test_prd_draft_normalizes_object_acceptance_criteria():
-    llm = FakeLlmClient([json.dumps({
-        "title": "登录页",
-        "draft": {
-            "title": "登录页", "goal": "修复登录页", "scope": "code_change",
-            "acceptanceCriteria": [
-                {"text": "显示中文错误", "priority": "high"},
-                {"description": "保留用户输入"},
-            ],
-        },
-        "missing_fields": [],
-        "assistant_message": "已完成",
-    }, ensure_ascii=False)])
-    client = TestClient(create_app(
-        llm,
-        model_config_fetcher=lambda *args: ModelConfig(managed=True, model="model", api_key="secret"),
-    ))
-
-    response = client.post("/prd-draft", headers=INTERNAL_HEADERS, json={
-        "system_id": "sys-1", "content": "修复登录页",
-    })
-
-    assert response.status_code == 200
-    assert response.json()["draft"]["acceptanceCriteria"] == ["显示中文错误", "保留用户输入"]
-
-
-def test_prd_draft_reprompts_when_acceptance_shape_cannot_be_normalized():
-    invalid = json.dumps({
-        "title": "登录页",
-        "draft": {
-            "title": "登录页", "goal": "修复登录页", "scope": "code_change",
-            "acceptanceCriteria": {"value": "显示中文错误"},
-        },
-        "missing_fields": [],
-        "assistant_message": "已完成",
     }, ensure_ascii=False)
     repaired = json.dumps({
-        "title": "登录页",
-        "draft": {
+        "patch": {
             "title": "登录页", "goal": "修复登录页", "scope": "code_change",
-            "acceptanceCriteria": ["显示中文错误"],
+            "acceptanceCriteria": ["错误可见"],
         },
-        "missing_fields": [],
         "assistant_message": "已完成",
+        "citations": {"title": ["MSG:msg-1"], "goal": ["MEM:mem-1"]},
     }, ensure_ascii=False)
     llm = FakeLlmClient([invalid, repaired])
     client = TestClient(create_app(
@@ -223,20 +182,76 @@ def test_prd_draft_reprompts_when_acceptance_shape_cannot_be_normalized():
     })
 
     assert response.status_code == 200
-    assert response.json()["draft"]["acceptanceCriteria"] == ["显示中文错误"]
-    assert "acceptanceCriteria" in llm.prompts[1]
+    assert response.json()["citations"] == {"title": ["MSG:msg-1"], "goal": ["MEM:mem-1"]}
     assert "list_type" in llm.prompts[1]
+
+
+def test_prd_draft_repairs_multiline_acceptance_criteria_to_strict_list():
+    invalid = json.dumps({
+        "patch": {
+            "title": "登录页", "goal": "修复登录页", "scope": "code_change",
+            "acceptanceCriteria": " 显示中文错误 \n\n 保留用户输入 ",
+        },
+        "assistant_message": "已完成",
+        "citations": {},
+    }, ensure_ascii=False)
+    repaired = json.dumps({
+        "patch": {
+            "title": "登录页", "goal": "修复登录页", "scope": "code_change",
+            "acceptanceCriteria": ["显示中文错误", "保留用户输入"],
+        },
+        "assistant_message": "已完成",
+        "citations": {},
+    }, ensure_ascii=False)
+    llm = FakeLlmClient([invalid, repaired])
+    client = TestClient(create_app(
+        llm,
+        model_config_fetcher=lambda *args: ModelConfig(managed=True, model="model", api_key="secret"),
+    ))
+
+    response = client.post("/prd-draft", headers=INTERNAL_HEADERS, json={
+        "system_id": "sys-1", "content": "修复登录页",
+    })
+
+    assert response.status_code == 200
+    assert response.json()["patch"]["acceptanceCriteria"] == ["显示中文错误", "保留用户输入"]
+    assert "list_type" in llm.prompts[1]
+
+
+def test_prd_draft_rejects_object_acceptance_criteria_after_failed_repair():
+    invalid = json.dumps({
+        "patch": {
+            "title": "登录页", "goal": "修复登录页", "scope": "code_change",
+            "acceptanceCriteria": [
+                {"text": "显示中文错误", "priority": "high"},
+                {"description": "保留用户输入"},
+            ],
+        },
+        "assistant_message": "已完成",
+        "citations": {},
+    }, ensure_ascii=False)
+    llm = FakeLlmClient([invalid, invalid])
+    client = TestClient(create_app(
+        llm,
+        model_config_fetcher=lambda *args: ModelConfig(managed=True, model="model", api_key="secret"),
+    ))
+
+    response = client.post("/prd-draft", headers=INTERNAL_HEADERS, json={
+        "system_id": "sys-1", "content": "修复登录页",
+    })
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "MODEL_OUTPUT_INVALID"
 
 
 def test_prd_draft_returns_typed_error_after_failed_repair():
     invalid = json.dumps({
-        "title": "登录页",
-        "draft": {
+        "patch": {
             "title": "登录页", "goal": "修复登录页", "scope": "code_change",
             "acceptanceCriteria": [{"priority": "high"}],
         },
-        "missing_fields": [],
         "assistant_message": "已完成",
+        "citations": {},
     }, ensure_ascii=False)
     llm = FakeLlmClient([invalid, invalid])
     client = TestClient(create_app(
@@ -253,6 +268,40 @@ def test_prd_draft_returns_typed_error_after_failed_repair():
     assert "acceptanceCriteria" in llm.prompts[1]
 
 
+def test_prd_memory_candidates_use_independent_strict_contract():
+    llm = FakeLlmClient([json.dumps({
+        "candidates": [{
+            "category": "constraint",
+            "audience": "both",
+            "title": "发布权限",
+            "content": "仅负责人可确认发布",
+            "target_refs": ["page-release"],
+            "evidence_refs": ["MEM:rule-1"],
+        }],
+    }, ensure_ascii=False)])
+    client = TestClient(create_app(
+        llm,
+        model_config_fetcher=lambda *args: ModelConfig(managed=True, model="model", api_key="secret"),
+    ))
+
+    response = client.post("/prd-memory-candidates", headers=INTERNAL_HEADERS, json={
+        "system_id": "sys-1",
+        "draft": {
+            "title": "发布流程",
+            "goal": "明确权限",
+            "scope": "code_change",
+            "acceptanceCriteria": ["负责人可确认"],
+        },
+        "target_refs": ["page-release"],
+        "context_items": [{"refId": "MEM:rule-1", "content": "负责人批准后才能发布"}],
+    })
+
+    assert response.status_code == 200
+    assert response.json()["candidates"][0]["evidence_refs"] == ["MEM:rule-1"]
+    assert "Only propose durable reusable knowledge" in llm.prompts[0]
+    assert "page-release" in llm.prompts[0]
+
+
 @pytest.mark.parametrize("mode,has_schema_prompt", [
     ("json_schema", False),
     ("json_object", True),
@@ -260,9 +309,8 @@ def test_prd_draft_returns_typed_error_after_failed_repair():
 ])
 def test_structured_runner_supports_all_profile_modes(mode, has_schema_prompt):
     llm = FakeLlmClient([json.dumps({
-        "title": "t",
-        "draft": {"title": "t", "goal": "g", "scope": "code_change", "acceptanceCriteria": []},
-        "missing_fields": [], "assistant_message": "ok",
+        "patch": {"title": "t", "goal": "g", "scope": "code_change", "acceptanceCriteria": []},
+        "assistant_message": "ok", "citations": {},
     })])
     client = TestClient(create_app(
         llm,
@@ -289,7 +337,7 @@ def test_legacy_supports_vision_populates_image_input():
 
 def test_system_model_config_overrides_global_defaults(caplog):
     llm = FakeLlmClient([
-        '{"title":"t","draft":{"title":"t","goal":"g","scope":"code_change","acceptanceCriteria":[]},"missing_fields":[],"assistant_message":"ok"}',
+        '{"patch":{"title":"t","goal":"g","scope":"code_change","acceptanceCriteria":[]},"assistant_message":"ok","citations":{}}',
     ])
     client = TestClient(create_app(
         llm,
@@ -312,7 +360,7 @@ def test_system_model_config_overrides_global_defaults(caplog):
 
 def test_missing_system_model_config_falls_back_to_global_defaults():
     llm = FakeLlmClient([
-        '{"title":"t","draft":{"title":"t","goal":"g","scope":"code_change","acceptanceCriteria":[]},"missing_fields":[],"assistant_message":"ok"}',
+        '{"patch":{"title":"t","goal":"g","scope":"code_change","acceptanceCriteria":[]},"assistant_message":"ok","citations":{}}',
     ])
     client = TestClient(create_app(
         llm,
@@ -632,6 +680,9 @@ def test_runner_business_endpoints_require_internal_token():
     ))
 
     assert client.post("/prd-draft", json={"system_id": "sys-1", "content": "g"}).status_code == 401
+    assert client.post("/prd-memory-candidates", json={
+        "system_id": "sys-1", "draft": {},
+    }).status_code == 401
     assert client.get("/readiness", params={"system_id": "sys-1"}).status_code == 401
     assert client.post(
         "/model-connection-test", params={"system_id": "sys-1", "profile_id": "mp-1"},

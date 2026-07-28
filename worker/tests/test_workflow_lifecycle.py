@@ -35,18 +35,71 @@ def test_terminal_workflow_runs_local_lifecycle_without_legacy_activities():
                      "run_validation": 1, "run_release": 1}
 
 
+def test_workflow_applies_exact_repo_patch_without_whitespace_cleanup():
+    patch = (
+        "diff --git a/src/app.py b/src/app.py\n"
+        "--- a/src/app.py\n"
+        "+++ b/src/app.py\n"
+        "@@ -1,3 +1,4 @@\n"
+        " old\n"
+        "+new\n"
+        " tail\n"
+        " \n"
+    )
+    apply_requests: list[dict] = []
+    events, result, _, _ = asyncio.run(_run_workflow([
+        ("owner_approved", "approve-1"),
+        ("start_modification", "start-1"),
+        ("coding_plan_approved", "plan-approve-1"),
+        ("patch_apply_approved", "patch-1"),
+        ("release_approved", "release-1"),
+    ], coding_patch=patch, apply_requests=apply_requests))
+
+    assert result == "completed"
+    completed = next(event for event in events if event["eventType"] == "ModificationCompleted")
+    assert completed["payload"]["repoDiffs"] == [{"repo": "main", "diffPatch": patch}]
+    assert apply_requests[0]["diff_patch"] == patch
+
+
+def test_patch_blocked_can_retry_exact_artifact_without_rerunning_coding():
+    patch = (
+        "diff --git a/src/app.py b/src/app.py\n"
+        "--- a/src/app.py\n"
+        "+++ b/src/app.py\n"
+        "@@ -1,2 +1,3 @@\n"
+        " old\n"
+        "+new\n"
+        " \n"
+    )
+    apply_requests: list[dict] = []
+    events, result, calls, _ = asyncio.run(_run_workflow([
+        ("owner_approved", "approve-1"),
+        ("start_modification", "start-1"),
+        ("coding_plan_approved", "plan-approve-1"),
+        ("patch_apply_approved", "patch-1"),
+        ("retry_current_phase", {"signal_id": "retry-1", "retry_phase": "patch"}),
+        ("release_approved", "release-1"),
+    ], coding_patch=patch, apply_requests=apply_requests, patch_blocked_once=True))
+
+    assert result == "completed"
+    assert calls["run_coding_attempt"] == 1
+    assert [request["diff_patch"] for request in apply_requests] == [patch, patch]
+    blocked = next(event for event in events if event["eventType"] == "PatchApplyBlocked")
+    assert blocked["payload"]["failedPhase"] == "patch"
+
+
 def test_terminal_workflow_rejects_removed_architecture():
     with pytest.raises(WorkflowFailureError) as failure:
         asyncio.run(_run_workflow([], execution_architecture="legacy_planner_v1"))
     assert "claude_sdk_team" in str(failure.value.__cause__)
 
 
-def test_plan_output_invalid_is_not_retried_by_temporal():
+def test_missing_plan_text_is_not_retried_by_temporal():
     events, result, calls, _ = asyncio.run(_run_workflow([
         ("owner_approved", "approve-1"),
         ("start_modification", "start-1"),
         ("cancel_case", "cancel-1"),
-    ], plan_output_invalid=True))
+    ], plan_result_missing=True))
 
     assert result == "cancelled"
     assert calls["generate_coding_plan"] == 1
@@ -92,10 +145,13 @@ def test_plan_rejection_automatically_replans_and_approved_plan_resumes_session(
     assert plan_requests[1]["feedback"] == "计划打回意见：不要改接口，只调整前端提示"
     assert plan_requests[1]["resume_session_id"] == ""
     assert plan_requests[1]["previous_plan"]["revision"] == 1
+    assert plan_requests[1]["previous_plan"]["plan_markdown"] == "# 第 1 版计划"
     assert coding_requests[0]["approved_plan"]["revision"] == 2
     assert coding_requests[0]["resume_session_id"] == "plan-session-2"
-    proposed = [event["payload"]["planRevision"] for event in events if event["eventType"] == "CodingPlanProposed"]
-    assert proposed == [1, 2]
+    proposed = [event["payload"] for event in events if event["eventType"] == "CodingPlanProposed"]
+    assert [payload["planRevision"] for payload in proposed] == [1, 2]
+    assert proposed[1]["planMarkdown"] == "# 第 2 版计划"
+    assert "tasks" not in proposed[1]
 
 
 def test_plan_base_drift_refreshes_workspace_and_replans_in_new_session():
@@ -327,14 +383,10 @@ def test_context_stale_requires_explicit_manifest_refresh_and_replans_with_one_s
     assert started["payload"]["requirementManifestId"] == "manifest-2"
 
 
-def test_structured_blocked_with_partial_diff_never_completes_modification_until_retry():
+def test_system_blocked_with_partial_diff_never_completes_modification_until_retry():
     requests: list[dict] = []
     blocked = {
         "status": "blocked",
-        "task_outcomes": [{
-            "task_id": "task-01", "status": "blocked", "summary": "只有 import，业务实现未完成",
-            "changed_paths": ["src/app.py"],
-        }],
         "blockers": ["前后端业务实现和测试未完成"],
         "changed_paths": ["src/app.py"],
         "session_id": "session-1",
@@ -375,7 +427,10 @@ async def _run_workflow(
     coding_outcomes: list[dict] | None = None,
     wait_for_coding_interrupt: bool = False,
     context_stale_once: bool = False,
-    plan_output_invalid: bool = False,
+    plan_result_missing: bool = False,
+    coding_patch: str | None = None,
+    apply_requests: list[dict] | None = None,
+    patch_blocked_once: bool = False,
 ) -> tuple[list[dict], str, dict[str, int], list[dict]]:
     events: list[dict] = []
     calls: dict[str, int] = {}
@@ -386,6 +441,7 @@ async def _run_workflow(
     gitlab_requests = publish_requests if publish_requests is not None else []
     planning_requests = plan_requests if plan_requests is not None else []
     outcomes = list(coding_outcomes or [])
+    remaining_patch_blocks = 1 if patch_blocked_once else 0
 
     def called(name: str) -> None:
         calls[name] = calls.get(name, 0) + 1
@@ -425,14 +481,14 @@ async def _run_workflow(
             "summary": "Supervisor 完成",
             "outcome": outcomes.pop(0) if outcomes else {
                 "status": "completed",
-                "task_outcomes": [{
-                    "task_id": "task-01", "status": "completed", "changed_paths": ["src/app.py"],
-                }],
                 "blockers": [], "changed_paths": ["src/app.py"], "session_id": "session-1",
             },
             "repo_changes": [{
                 "repo": "main", "summary": "仓库修改完成", "changed_paths": ["src/app.py"],
-                "diff_patch": "diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n@@ -1 +1 @@\n-old\n+new\n",
+                "diff_patch": coding_patch or (
+                    "diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n"
+                    "@@ -1 +1 @@\n-old\n+new\n"
+                ),
             }],
             "subagent_runs": [{
                 "agent_id": "agent-main", "agent_type": "repo-main", "repo": "main", "status": "completed",
@@ -448,26 +504,28 @@ async def _run_workflow(
     async def generate_coding_plan(request: dict) -> dict:
         called("generate_coding_plan")
         planning_requests.append(request)
-        if plan_output_invalid:
+        if plan_result_missing:
             raise ApplicationError(
-                "structured_output_invalid",
-                type="PLAN_OUTPUT_INVALID",
+                "planning_text_missing",
+                type="PLAN_RESULT_MISSING",
                 non_retryable=True,
             )
         revision = request["plan_revision"]
         return {
-            "summary": f"第 {revision} 版计划",
-            "tasks": [{
-                "task_id": "task-01", "repo": "main", "objective": "修改登录提示",
-                "acceptance_criteria_refs": ["AC-1"], "evidence": ["src/app.py:login"],
-            }],
-            "risks": [], "open_questions": [], "revision": revision,
+            "plan_markdown": f"# 第 {revision} 版计划",
+            "revision": revision,
             "session_id": f"plan-session-{revision}", "base_revisions": {"main": "base-1"},
         }
 
     @activity.defn(name="apply_patch_to_repo")
-    async def apply_patch_to_repo(_request: dict) -> dict:
+    async def apply_patch_to_repo(request: dict) -> dict:
+        nonlocal remaining_patch_blocks
         called("apply_patch_to_repo")
+        if apply_requests is not None:
+            apply_requests.append(request)
+        if remaining_patch_blocks:
+            remaining_patch_blocks -= 1
+            return {"blocked": True, "already_applied": False, "reason": "temporary patch failure"}
         return {"blocked": False, "already_applied": False}
 
     @activity.defn(name="run_validation")

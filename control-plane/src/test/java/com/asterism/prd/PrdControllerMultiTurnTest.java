@@ -82,32 +82,21 @@ class PrdControllerMultiTurnTest {
     }
 
     @Test
-    void modelMissingSuggestionCannotOverrideCompleteDraft() throws Exception {
+    void systemMarksCompleteDraftReadyRegardlessOfAssistantWording() throws Exception {
         var saved = completeSingleTurn(new ProductAgentPort.DraftResult(
-                "登录页",
-                Map.of(
-                        "title", "登录页",
-                        "goal", "修复错误提示",
-                        "scope", "code_change",
-                        "acceptanceCriteria", List.of("错误密码时显示中文提示")),
-                List.of("goal", "acceptance_criteria"),
-                "请补充信息"));
+                new ProductAgentPort.PrdPatch(
+                        "登录页", "修复错误提示", "code_change", List.of("错误密码时显示中文提示")),
+                "请补充信息", Map.of()));
 
         assertThat(saved.status()).isEqualTo("waiting_user_confirm");
         assertThat(objectMapper.readValue(saved.missingFields(), List.class)).isEmpty();
     }
 
     @Test
-    void modelCompleteSuggestionCannotHideMissingDraftFields() throws Exception {
+    void systemFindsMissingFieldsFromPatchContent() throws Exception {
         var saved = completeSingleTurn(new ProductAgentPort.DraftResult(
-                "登录页",
-                Map.of(
-                        "title", "登录页",
-                        "goal", "",
-                        "scope", "code_change",
-                        "acceptanceCriteria", List.of()),
-                List.of(),
-                "已完成"));
+                new ProductAgentPort.PrdPatch("登录页", "", "code_change", List.of()),
+                "已完成", Map.of()));
 
         assertThat(saved.status()).isEqualTo("need_clarification");
         assertThat(objectMapper.readValue(saved.missingFields(), List.class))
@@ -194,11 +183,10 @@ class PrdControllerMultiTurnTest {
         when(aggregate.update(any(ConversationMessage.class))).thenAnswer(call -> call.getArgument(0));
         when(productAgent.updateDraft(anyString(), anyString(), any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("agent down"))
-                .thenReturn(new ProductAgentPort.DraftResult("登录提示", Map.of(
-                        "title", "登录提示",
-                        "goal", "修复登录页",
-                        "scope", "code_change",
-                        "acceptanceCriteria", List.of("错误可见")), List.of(), "已完成"));
+                .thenReturn(new ProductAgentPort.DraftResult(
+                        new ProductAgentPort.PrdPatch(
+                                "登录提示", "修复登录页", "code_change", List.of("错误可见")),
+                        "已完成", Map.of()));
         var memories = mock(MemoryItemRepository.class);
         when(memories.findBySystemIdAndStatus(anyString(), anyString())).thenReturn(List.of());
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
@@ -226,7 +214,7 @@ class PrdControllerMultiTurnTest {
     }
 
     @Test
-    void invalidDraftPatchMovesToTurnFailedWithoutPollutingAccumulatedDraft() throws Exception {
+    void missingPatchMovesToTurnFailedWithoutPollutingAccumulatedDraft() throws Exception {
         var sessions = mock(PrdSessionRepository.class);
         var messages = mock(ConversationMessageRepository.class);
         var aggregate = mock(JdbcAggregateTemplate.class);
@@ -249,8 +237,7 @@ class PrdControllerMultiTurnTest {
         });
         var productAgent = mock(ProductAgentPort.class);
         when(productAgent.updateDraft(anyString(), anyString(), any(), any(), any(), any()))
-                .thenReturn(new ProductAgentPort.DraftResult(
-                        "新标题", Map.of("acceptanceCriteria", Map.of("text", "非法对象")), List.of(), "已完成"));
+                .thenReturn(new ProductAgentPort.DraftResult(null, "已完成", Map.of()));
         var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
                 objectMapper, new PrdDraftCodec(objectMapper), directTransactions(), mock(SystemAccessService.class),
                 contextRecall(), new PrdCitationService(), aggregate,

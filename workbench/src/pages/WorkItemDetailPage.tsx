@@ -7,6 +7,7 @@ import { Link, useLocation, useParams } from 'react-router-dom';
 import { api, ApiError, MemoryDraft, WorkItem, WorkItemAttachment, WorkItemEvent } from '../api/client';
 import { ActionConfirmDialog } from '../components/ActionConfirmDialog';
 import { errorMessage, ErrorState, formatDateTime, StatusBadge } from '../components/Display';
+import { MarkdownContent } from '../components/MarkdownContent';
 import { MemoryEditorDialog } from '../components/MemoryEditorDialog';
 import {
   AgentStageView, buildWorkItemFlow, CodingPlanView, eventName, eventPayload, failureReason, FlowAttempt, FlowStage, FlowStageId,
@@ -399,6 +400,7 @@ function StageDetail({ stage, flow, workItem, actions, pending, pendingAction, o
 
       <div className="stage-detail-body">
         {stage.id === 'execution' && <>
+          <CodingExecutionPhases plan={flow.codingPlan} agents={stage.agents ?? []} modificationReady={Boolean(flow.modification)} />
           {flow.codingPlan && <CodingPlanDetail plan={flow.codingPlan} />}
           <ExecutionDetail agents={stage.agents ?? []} plan={flow.codingPlan} />
         </>}
@@ -445,19 +447,28 @@ function StageDetail({ stage, flow, workItem, actions, pending, pendingAction, o
   );
 }
 
+function CodingExecutionPhases({ plan, agents, modificationReady }: {
+  plan: CodingPlanView | null;
+  agents: AgentStageView[];
+  modificationReady: boolean;
+}) {
+  const planningCompleted = plan?.status === 'approved' || agents.length > 0 || modificationReady;
+  const planningState = planningCompleted ? 'completed' : plan?.status === 'proposed' ? 'waiting' : plan ? 'running' : 'pending';
+  const codingState = modificationReady ? 'completed' : planningCompleted ? 'running' : 'pending';
+  const planningText = planningCompleted ? '已批准' : plan?.status === 'proposed' ? '等待负责人' : plan ? 'Supervisor 规划中' : '未开始';
+  const codingText = modificationReady ? '修改已生成' : agents.length > 0 ? 'Supervisor / Agent 执行中'
+    : planningCompleted ? '准备启动' : '等待计划批准';
+
+  return <ol className="coding-phase-overview" aria-label="计划审批与代码开发进度">
+    <li className={planningState}><span>1</span><div><strong>计划审批</strong><small>{planningText}</small></div></li>
+    <li className={codingState}><span>2</span><div><strong>代码开发</strong><small>{codingText}</small></div></li>
+  </ol>;
+}
+
 function CodingPlanDetail({ plan }: { plan: CodingPlanView }) {
   return <section className={`coding-plan ${plan.status}`} aria-labelledby="coding-plan-title">
-    <header><div><h3 id="coding-plan-title">Coding Plan · 第 {plan.revision} 版</h3><p>{plan.summary}</p></div><span>{planStatusName(plan.status)}</span></header>
-    {plan.tasks.length > 0 && <ol>{plan.tasks.map((task, index) => <li key={task.taskId || `${task.repo}-${index}`}>
-      <div><strong>{task.repo}</strong><p>{task.objective}</p></div>
-      {task.taskId && <small>任务：{task.taskId}</small>}
-      {task.acceptanceCriteriaRefs.length > 0 && <small>验收：{task.acceptanceCriteriaRefs.join('、')}</small>}
-      {task.evidence.length > 0 && <ul>{task.evidence.map((item) => <li key={item}><code>{item}</code></li>)}</ul>}
-    </li>)}</ol>}
-    {(plan.risks.length > 0 || plan.openQuestions.length > 0) && <div className="coding-plan-notes">
-      {plan.risks.length > 0 && <div><strong>风险</strong><ul>{plan.risks.map((item) => <li key={item}>{item}</li>)}</ul></div>}
-      {plan.openQuestions.length > 0 && <div><strong>待确认</strong><ul>{plan.openQuestions.map((item) => <li key={item}>{item}</li>)}</ul></div>}
-    </div>}
+    <header><h3 id="coding-plan-title">Coding Plan · 第 {plan.revision} 版</h3><span>{planStatusName(plan.status)}</span></header>
+    <MarkdownContent className="coding-plan-markdown" markdown={plan.planMarkdown} />
     <p className="coding-plan-boundary">计划中的文件位置只作为证据，实际写权限仍以仓库允许/禁止路径为准。</p>
   </section>;
 }
@@ -717,44 +728,10 @@ function modificationPresentation(flow: WorkItemFlow) {
 }
 
 function summarizeModification(rawSummary: string, fallbackChangedPaths: string[]) {
-  let structured: Record<string, unknown> | null = null;
-
-  // Coding Agent 可能把结构化执行结果放进 summary；这里只提取可读信息，不把原始 JSON 塞进流程卡片。
-  if (rawSummary.startsWith('{')) {
-    try {
-      const value = JSON.parse(rawSummary);
-      structured = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-    } catch {
-      structured = null;
-    }
-  }
-
-  if (!structured) {
-    return {
-      title: compactText(rawSummary || 'Agent 修改已生成', 180),
-      detail: '',
-      changedPathCount: fallbackChangedPaths.length,
-    };
-  }
-
-  const taskValues = structured.task_outcomes ?? structured.taskOutcomes;
-  const tasks = Array.isArray(taskValues)
-    ? taskValues.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
-    : [];
-  const completedTasks = tasks.filter((task) => String(task.status || '').toLowerCase() === 'completed').length;
-  const taskSummaries = tasks.map((task) => compactText(typeof task.summary === 'string' ? task.summary : '', 90)).filter(Boolean);
-  const changedPaths = uniqueStrings([
-    ...stringArray(structured.changed_paths ?? structured.changedPaths),
-    ...tasks.flatMap((task) => stringArray(task.changed_paths ?? task.changedPaths)),
-    ...fallbackChangedPaths,
-  ]);
-  const title = tasks.length
-    ? completedTasks === tasks.length ? `${tasks.length} 个任务已完成` : `${completedTasks} / ${tasks.length} 个任务完成`
-    : compactText(typeof structured.summary === 'string' ? structured.summary : '', 180) || 'Agent 修改已生成';
   return {
-    title,
-    detail: taskSummaries.length ? `${taskSummaries.slice(0, 2).join('；')}${taskSummaries.length > 2 ? '等' : ''}` : '',
-    changedPathCount: changedPaths.length,
+    title: compactText(rawSummary || 'Agent 修改已生成', 180),
+    detail: '',
+    changedPathCount: fallbackChangedPaths.length,
   };
 }
 

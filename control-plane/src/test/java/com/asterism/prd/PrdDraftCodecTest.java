@@ -45,4 +45,19 @@ class PrdDraftCodecTest {
                 .isInstanceOf(PrdDraftCodec.DraftFieldTypeException.class)
                 .hasMessageContaining("acceptanceCriteria", "List<String>", "java.util");
     }
+
+    @Test
+    void productContentExposesOnlySemanticFields() throws Exception {
+        var draft = codec.read("""
+                {"title":"登录页","goal":"增加错误提示","scope":"code_change",
+                 "acceptanceCriteria":["错误密码时提示"],
+                 "targets":[{"entryId":"page-1","kind":"page","title":"登录页","confidence":1.0}],
+                 "citations":{"goal":["MEM:rule-1"]}}
+                """);
+
+        var json = objectMapper.writeValueAsString(draft.productContent());
+
+        assertThat(json).contains("title", "goal", "scope", "acceptanceCriteria");
+        assertThat(json).doesNotContain("targets", "citations", "extras");
+    }
 }

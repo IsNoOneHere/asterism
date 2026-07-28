@@ -83,18 +83,14 @@ test('projects the latest human-reviewable coding plan without turning evidence 
     event(2, 'CodingPlanStarted', { planRevision: 1 }),
     event(3, 'CodingPlanProposed', {
       planRevision: 1,
-      summary: '只调整登录提示',
-      tasks: [{
-        task_id: 'task-01', repo: 'frontend', objective: '把错误提示放到输入框下方',
-        acceptance_criteria_refs: ['AC-1'], evidence: ['src/login.tsx:LoginForm'],
-      }],
-      risks: ['保持接口不变'], openQuestions: [], baseRevisions: { frontend: 'abc123' },
+      planMarkdown: '# 计划\n\n- 把错误提示放到输入框下方\n- 保持接口不变',
+      baseRevisions: { frontend: 'abc123' },
     }),
   ]);
 
   expect(flow.codingPlan).toEqual(expect.objectContaining({
-    revision: 1, status: 'proposed', summary: '只调整登录提示',
-    tasks: [expect.objectContaining({ taskId: 'task-01', repo: 'frontend', evidence: ['src/login.tsx:LoginForm'] })],
+    revision: 1, status: 'proposed',
+    planMarkdown: '# 计划\n\n- 把错误提示放到输入框下方\n- 保持接口不变',
     baseRevisions: { frontend: 'abc123' },
   }));
   expect(flow.stages.find((stage) => stage.id === 'execution')).toMatchObject({

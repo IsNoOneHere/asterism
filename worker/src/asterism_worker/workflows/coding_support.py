@@ -5,6 +5,12 @@ from asterism_worker.contracts import (
 )
 
 
+def combine_patch_artifacts(patches: list[str]) -> str:
+    """组合展示用 Patch；不清洗任何仓库 Patch 内部的空白字符。"""
+
+    return "\n".join(patches)
+
+
 def candidate_summary(candidates: list[dict]) -> list[dict]:
     """只向修订 Prompt 暴露候选摘要，完整 Patch 留在工作区恢复链。"""
 
@@ -84,7 +90,7 @@ def combined_attempt_result(
 
     return ExecutionResult(
         summary=attempt.summary,
-        diff_patch="\n".join(change.diff_patch.rstrip() for change in changes) + "\n",
+        diff_patch=combine_patch_artifacts([change.diff_patch for change in changes]),
         execution_provider=attempt.execution_provider,
         engine="claude_sdk_team",
         turns=attempt.turns,

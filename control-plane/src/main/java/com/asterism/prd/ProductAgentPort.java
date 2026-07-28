@@ -3,40 +3,58 @@ package com.asterism.prd;
 import com.asterism.context.ContextItem;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.util.List;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public interface ProductAgentPort {
     DraftResult updateDraft(
             String systemId,
             String content,
-            Map<String, Object> currentDraft,
+            PrdContent currentDraft,
             List<String> missingFields,
             List<ConversationMessage> conversationHistory,
             List<ContextItem> contextItems);
 
-    record DraftResult(
-            String title,
-            Map<String, Object> draft,
-            @JsonProperty("missing_fields") List<String> missingFields,
-            @JsonProperty("assistant_message") String assistantMessage,
-            @JsonProperty("used_context_refs") List<String> usedContextRefs,
-            Map<String, List<String>> citations,
-            @JsonProperty("memory_candidates") List<MemoryCandidateProposal> memoryCandidates) {
+    MemoryCandidateResult extractMemoryCandidates(
+            String systemId,
+            PrdContent draft,
+            List<String> targetRefs,
+            List<ContextItem> contextItems);
 
-        public DraftResult(String title, Map<String, Object> draft, List<String> missingFields,
-                           String assistantMessage) {
-            this(title, draft, missingFields, assistantMessage, List.of(), Map.of(), List.of());
+    record PrdContent(
+            String title,
+            String goal,
+            String scope,
+            List<String> acceptanceCriteria) {
+
+        public PrdContent {
+            acceptanceCriteria = acceptanceCriteria == null ? List.of() : List.copyOf(acceptanceCriteria);
         }
+    }
+
+    record PrdPatch(
+            String title,
+            String goal,
+            String scope,
+            List<String> acceptanceCriteria) {
+
+        public PrdPatch {
+            acceptanceCriteria = acceptanceCriteria == null ? null : List.copyOf(acceptanceCriteria);
+        }
+    }
+
+    record DraftResult(
+            PrdPatch patch,
+            @JsonProperty("assistant_message") String assistantMessage,
+            Map<String, List<String>> citations) {
 
         public DraftResult {
-            usedContextRefs = usedContextRefs == null ? List.of() : List.copyOf(usedContextRefs);
             var normalizedCitations = new LinkedHashMap<String, List<String>>();
             if (citations != null) citations.forEach((key, refs) ->
                     normalizedCitations.put(key, refs == null ? List.of() : List.copyOf(refs)));
-            citations = java.util.Collections.unmodifiableMap(normalizedCitations);
-            memoryCandidates = memoryCandidates == null ? List.of() : List.copyOf(memoryCandidates);
+            citations = Collections.unmodifiableMap(normalizedCitations);
         }
     }
 
@@ -47,5 +65,16 @@ public interface ProductAgentPort {
             String content,
             @JsonProperty("target_refs") List<String> targetRefs,
             @JsonProperty("evidence_refs") List<String> evidenceRefs) {
+
+        public MemoryCandidateProposal {
+            targetRefs = targetRefs == null ? List.of() : List.copyOf(targetRefs);
+            evidenceRefs = evidenceRefs == null ? List.of() : List.copyOf(evidenceRefs);
+        }
+    }
+
+    record MemoryCandidateResult(List<MemoryCandidateProposal> candidates) {
+        public MemoryCandidateResult {
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
+        }
     }
 }

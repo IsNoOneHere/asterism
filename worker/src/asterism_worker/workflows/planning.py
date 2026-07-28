@@ -138,16 +138,7 @@ class PlanningWorkflow:
         self.coding_session_id = plan.session_id
         self.failed_phase = ""
         await self._emit("CodingPlanProposed", signal_id, {
-            "summary": plan.summary,
-            "tasks": [{
-                "taskId": task.task_id,
-                "repo": task.repo,
-                "objective": task.objective,
-                "acceptanceCriteriaRefs": task.acceptance_criteria_refs,
-                "evidence": task.evidence,
-            } for task in plan.tasks],
-            "risks": plan.risks,
-            "openQuestions": plan.open_questions,
+            "planMarkdown": plan.plan_markdown,
             "planRevision": plan.revision,
             "baseRevisions": plan.base_revisions,
             "sessionId": plan.session_id,

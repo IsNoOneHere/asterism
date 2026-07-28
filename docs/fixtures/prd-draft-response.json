@@ -1,13 +1,10 @@
 {
-  "title": "登录页",
-  "draft": {
+  "patch": {
     "title": "登录页",
     "goal": "做登录页",
     "scope": "code_change",
     "acceptanceCriteria": []
   },
-  "missing_fields": [
-    "acceptance_criteria"
-  ],
-  "assistant_message": "还缺验收标准，请补充。"
+  "assistant_message": "还缺验收标准，请补充。",
+  "citations": {}
 }

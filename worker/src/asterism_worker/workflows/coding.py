@@ -130,6 +130,9 @@ class CodingWorkflow:
         if previous_status == "waiting_merge":
             return await self._request_revision(signal_id, context, "merge")
         phase = self._failed_execution_phase() if spec.retry_failed_phase else ExecutionPhase.planning
+        if phase is None and spec.retry_failed_phase:
+            # 控制面会随恢复信号携带投影确认的阶段，支持 Runner 重启和历史阻塞记录。
+            phase = self._execution_phase(context.get("retry_phase"))
         if phase is None:
             workflow.logger.warning("缺少可恢复阶段", extra={"action": action})
             return False
@@ -221,8 +224,11 @@ class CodingWorkflow:
         await self._start_supervised_modification(signal_id, reuse_context=True)
 
     def _failed_execution_phase(self) -> ExecutionPhase | None:
+        return self._execution_phase(self.failed_phase)
+
+    def _execution_phase(self, value: object) -> ExecutionPhase | None:
         try:
-            return ExecutionPhase(self.failed_phase)
+            return ExecutionPhase(str(value or ""))
         except ValueError:
             return None
 
@@ -373,14 +379,8 @@ class CodingWorkflow:
         self.context_snapshot = snapshot
         # blocked 也保留局部 Diff，下一次 Coding retry 可继续复用而不是从零开始。
         self.completed_stage_results = attempt_stage_results(attempt, changes)
-        if attempt.outcome is None:
-            await self._block_worker(
-                signal_id, "coding_attempt_blocked", RuntimeError("Coding Attempt 缺少结构化 outcome"),
-                phase=ExecutionPhase.coding,
-            )
-            return
         if attempt.outcome.status == "blocked":
-            blockers = attempt.outcome.blockers or ["Root Supervisor 报告执行受阻"]
+            blockers = attempt.outcome.blockers or ["系统未能确认 Coding Attempt 完成"]
             await self._block_worker(
                 signal_id,
                 "coding_attempt_blocked",
@@ -388,6 +388,7 @@ class CodingWorkflow:
                 {
                     "executionArchitecture": CLAUDE_SDK_TEAM_ARCHITECTURE,
                     "executionOutcome": attempt.outcome.model_dump(),
+                    "summary": attempt.summary,
                     "partialChanges": [
                         {"repo": change.repo, "changedPaths": change.changed_paths}
                         for change in changes
