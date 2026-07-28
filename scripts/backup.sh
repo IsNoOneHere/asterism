@@ -70,7 +70,7 @@ copy_out server /app/runtime/attachments "$BACKUP_DIR/attachments"
 copy_out runner /app/runtime/artifacts "$BACKUP_DIR/artifacts"
 
 cat > "$BACKUP_DIR/manifest" <<EOF
-version=${ASTERISM_VERSION:-0.1.4}
+version=${ASTERISM_VERSION:-0.1.5}
 created_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 runtime=$RUNTIME
 EOF

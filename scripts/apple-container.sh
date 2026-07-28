@@ -12,8 +12,8 @@ ARTIFACTS_VOLUME="asterism-worker-artifacts"
 SERVICES="postgres temporal runner server"
 POSTGRES_IMAGE="docker.io/library/postgres:16"
 TEMPORAL_IMAGE="docker.io/temporalio/temporal@sha256:906f9765cde508333ef191aab908bc724657b5f736cb5ead13921d9a45b33622"
-SERVER_RELEASE_IMAGE="ghcr.io/isnoonehere/asterism-server:${ASTERISM_VERSION:-0.1.4}"
-RUNNER_RELEASE_IMAGE="ghcr.io/isnoonehere/asterism-runner:${ASTERISM_VERSION:-0.1.4}"
+SERVER_RELEASE_IMAGE="ghcr.io/isnoonehere/asterism-server:${ASTERISM_VERSION:-0.1.5}"
+RUNNER_RELEASE_IMAGE="ghcr.io/isnoonehere/asterism-runner:${ASTERISM_VERSION:-0.1.5}"
 
 fail() { printf '错误: %s\n' "$1" >&2; exit 2; }
 

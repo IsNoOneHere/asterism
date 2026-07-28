@@ -53,7 +53,7 @@ fi
 umask 077
 mkdir -p "$STATE_DIR/repos" "$STATE_DIR/backups"
 {
-  write_value ASTERISM_VERSION "0.1.4"
+  write_value ASTERISM_VERSION "0.1.5"
   write_value ASTERISM_IMAGE_SOURCE "$IMAGE_SOURCE"
   [ "$IMAGE_SOURCE" = build ] && write_value ASTERISM_PULL_POLICY never || write_value ASTERISM_PULL_POLICY missing
   write_value V5_CONTAINER_RUNTIME apple

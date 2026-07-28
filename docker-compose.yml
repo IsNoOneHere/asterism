@@ -35,7 +35,7 @@ services:
       retries: 20
 
   runner:
-    image: ghcr.io/isnoonehere/asterism-runner:${ASTERISM_VERSION:-0.1.4}
+    image: ghcr.io/isnoonehere/asterism-runner:${ASTERISM_VERSION:-0.1.5}
     pull_policy: ${ASTERISM_PULL_POLICY:-always}
     restart: unless-stopped
     environment:
@@ -83,7 +83,7 @@ services:
       retries: 20
 
   server:
-    image: ghcr.io/isnoonehere/asterism-server:${ASTERISM_VERSION:-0.1.4}
+    image: ghcr.io/isnoonehere/asterism-server:${ASTERISM_VERSION:-0.1.5}
     pull_policy: ${ASTERISM_PULL_POLICY:-always}
     restart: unless-stopped
     environment:
