@@ -42,7 +42,7 @@ create_config() {
   umask 077
   mkdir -p "$STATE_DIR/repos" "$STATE_DIR/backups"
   {
-    write_config_value ASTERISM_VERSION "0.1.5"
+    write_config_value ASTERISM_VERSION "0.1.6"
     write_config_value ASTERISM_IMAGE_SOURCE "$source"
     if [ "$source" = "build" ]; then
       write_config_value ASTERISM_PULL_POLICY "never"
