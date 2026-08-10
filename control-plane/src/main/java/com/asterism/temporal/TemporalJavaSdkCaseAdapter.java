@@ -91,7 +91,7 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
     }
 
     private Map<String, Object> payload(StartCaseCommand command) {
-        var prd = command.prd() == null ? new PrdPayload(null, null, null, null, null) : command.prd();
+        var prd = command.prd() == null ? new PrdPayload(null, null) : command.prd();
         // Python workflow 使用 snake_case CaseInput，Jackson 负责字段命名和 null 容忍。
         return objectMapper.convertValue(new CasePayload(
                 command.caseId(),
@@ -111,11 +111,8 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
                 "claude_sdk_team",
                 command.agentConfigSnapshot(),
                 new PrdPayloadDto(
-                        text(prd.title()),
-                        text(prd.goal()),
-                        list(prd.acceptanceCriteria()),
-                        map(prd.draftJson()),
-                        text(prd.requirementManifestId()))), PAYLOAD_TYPE);
+                        text(prd.requirementManifestId()),
+                        prd.productArtifact())), PAYLOAD_TYPE);
     }
 
     private String text(String value) {
@@ -124,10 +121,6 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
 
     private <T> List<T> list(List<T> value) {
         return value == null ? List.of() : value;
-    }
-
-    private Map<String, Object> map(Map<String, Object> value) {
-        return value == null ? Map.of() : value;
     }
 
     private record CasePayload(
@@ -150,7 +143,7 @@ public class TemporalJavaSdkCaseAdapter implements TemporalCasePort {
             PrdPayloadDto prd) {
     }
 
-    private record PrdPayloadDto(String title, String goal, List<String> acceptanceCriteria,
-                                 Map<String, Object> draftJson, String requirementManifestId) {
+    private record PrdPayloadDto(String requirementManifestId,
+                                 com.asterism.artifact.ArtifactRef productArtifact) {
     }
 }

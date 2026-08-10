@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir uv==0.11.3
 COPY worker/pyproject.toml worker/uv.lock ./
 COPY agent-service/pyproject.toml /app/agent-service/pyproject.toml
 COPY agent-service/src /app/agent-service/src
-RUN uv sync --frozen --no-dev --no-install-project
+# Agent 源码变化时复用 uv 下载缓存，只重建虚拟环境层。
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
 
 COPY worker/src ./src
 

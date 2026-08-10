@@ -36,6 +36,9 @@ class WorkItemControllerSystemAccessTest {
                 .when(access).requireOwnerOrAdmin("system-b", actor);
         var service = new WorkItemActionService(workItems, temporal, events, access,
                 mock(AgentConfigurationService.class), mock(com.asterism.context.RequirementContextManifestService.class),
+                mock(com.asterism.artifact.ArtifactService.class),
+                mock(com.asterism.artifact.ArtifactTransitionService.class),
+                mock(com.asterism.artifact.ArtifactActionPolicy.class),
                 new ObjectMapper(), directTransactions());
 
         assertThatThrownBy(() -> service.submit("wi-b", "owner_approved", null, actor))

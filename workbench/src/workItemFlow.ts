@@ -316,7 +316,7 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
         agents = agents.map((agent) => ({ ...agent, status: 'completed' }));
         const repoDiffs = arrayRecords(payload?.repoDiffs ?? payload?.repo_diffs);
         if (repoDiffs.length) {
-          for (const item of repoDiffs) setRepoDiff(repositories, stringValue(item.repo), stringValue(item.diffPatch ?? item.diff_patch));
+          for (const item of repoDiffs) setRepoChange(repositories, item);
         } else if (modification?.diffPatch) {
           setRepoDiff(repositories, defaultRepo(agents), modification.diffPatch);
         }
@@ -345,10 +345,6 @@ export function buildWorkItemFlow(workItem: WorkItem, inputEvents: WorkItemEvent
         checks = nextChecks;
         validationSkipped = passed && Boolean(payload?.skipped);
         for (const check of nextChecks) ensureRepo(repositories, check.repo || defaultRepo(agents)).checks.push(check);
-        if (passed) {
-          complete(stageById.get('validation')!, event.createdAt);
-          stageById.get('release')!.startedAt ??= event.createdAt;
-        }
         break;
       }
       case 'MergeRequestCreated': {
@@ -491,7 +487,7 @@ function openedStage(eventType: string): FlowStageId | null {
     CodingPlanStarted: 'execution', CodingPlanProposed: 'execution', CodingPlanApproved: 'execution',
     CodingPlanInvalidated: 'execution',
     CodingAttemptStarted: 'execution', AgentStageCompleted: 'execution', ModificationCompleted: 'patch',
-    PatchApplied: 'validation', ValidationPassed: 'release', RepositoryReleasePrepared: 'release', MergeRequestCreated: 'release',
+    PatchApplied: 'validation', ValidationPassed: 'validation', RepositoryReleasePrepared: 'release', MergeRequestCreated: 'release',
     MergeRequestMerged: 'release', MergeRequestClosed: 'release',
   } as Partial<Record<string, FlowStageId>>)[eventType] ?? null;
 }
@@ -500,7 +496,7 @@ function stageForLifecycle(status: string, failure: FlowStageId | null, fallback
   return ({
     allocated: 'created', waiting_owner_approval: 'approval', activated: 'execution', modification_completed: 'patch',
     worker_blocked: failure ?? fallback, patch_applied: 'validation', patch_rejected: 'patch',
-    validation_passed: 'release', validation_failed: 'validation', waiting_merge: 'release', completed: 'completed',
+    validation_passed: 'validation', validation_failed: 'validation', waiting_merge: 'release', completed: 'completed',
     cancelled: 'completed', rejected: 'approval',
   } as Record<string, FlowStageId>)[status] ?? fallback;
 }
@@ -630,6 +626,19 @@ function setRepoDiff(repositories: Map<string, RepositoryFlowView>, repoId: stri
   const repo = ensureRepo(repositories, repoId);
   repo.diffPatch = diffPatch;
   repo.changedPaths = unique([...repo.changedPaths, ...diffPaths(diffPatch)]);
+}
+
+function setRepoChange(repositories: Map<string, RepositoryFlowView>, change: Record<string, unknown>) {
+  const repo = ensureRepo(repositories, stringValue(change.repo));
+  const diffPatch = stringValue(change.diffPatch ?? change.diff_patch);
+  if (diffPatch) repo.diffPatch = diffPatch;
+  repo.changedPaths = unique([
+    ...repo.changedPaths,
+    ...stringList(change.changedPaths ?? change.changed_paths),
+    ...diffPaths(diffPatch),
+  ]);
+  const summary = stringValue(change.summary);
+  if (summary) repo.agentSummaries = unique([...repo.agentSummaries, summary]);
 }
 
 function updateMergeRequest(repositories: Map<string, RepositoryFlowView>, payload: Record<string, unknown> | null,

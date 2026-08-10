@@ -75,6 +75,16 @@ def test_rework_emits_rework_started_instead_of_activation_event():
     assert state.execution_allowed is True
 
 
+def test_validation_passed_can_rework_back_to_activated():
+    state = CaseState(status=LifecycleStatus.validation_passed)
+
+    event = state.rework()
+
+    assert event == "ReworkStarted"
+    assert state.status == LifecycleStatus.activated
+    assert state.execution_allowed is True
+
+
 def test_release_failure_can_block_after_validation_passed():
     state = CaseState(status=LifecycleStatus.validation_passed)
 

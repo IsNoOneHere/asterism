@@ -1,5 +1,6 @@
 package com.asterism.common;
 
+import com.asterism.artifact.ArtifactConflictException;
 import org.springframework.http.HttpStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +35,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     org.springframework.http.ResponseEntity<ApiError> conflict(IllegalStateException error) {
         return response(HttpStatus.CONFLICT, "CONFLICT", error.getMessage(), null);
+    }
+
+    @ExceptionHandler(ArtifactConflictException.class)
+    org.springframework.http.ResponseEntity<ApiError> artifactConflict(ArtifactConflictException error) {
+        return response(HttpStatus.CONFLICT, "ARTIFACT_CONFLICT", error.getMessage(), null);
     }
 
     @ExceptionHandler(AccessDeniedException.class)

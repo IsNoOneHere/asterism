@@ -254,10 +254,12 @@ test('git publishing configuration edits multiple repositories without rendering
   expect(within(dialog).getByLabelText('GitLab Token')).toHaveAttribute('placeholder', '留空保留现有 Token');
   expect(within(dialog).getByRole('heading', { name: '仓库列表' })).toBeInTheDocument();
   fireEvent.change(within(dialog).getByLabelText('发布模式'), { target: { value: 'gitlab' } });
+  expect(within(dialog).getByLabelText('仓库 1 克隆方式')).toHaveValue('gitlab');
   fireEvent.change(within(dialog).getByLabelText('GitLab Token'), { target: { value: 'temporary-value' } });
   fireEvent.click(within(dialog).getByRole('button', { name: '添加仓库' }));
+  expect(within(dialog).getByLabelText('仓库 2 克隆方式')).toHaveValue('gitlab');
   fireEvent.change(within(dialog).getByLabelText('仓库 2 GitLab Project'), { target: { value: 'alpha/api' } });
-  fireEvent.change(within(dialog).getByLabelText('仓库 2 克隆方式'), { target: { value: 'gitlab' } });
+  fireEvent.change(within(dialog).getByLabelText('仓库 1 克隆方式'), { target: { value: 'local' } });
   fireEvent.click(within(dialog).getByRole('button', { name: '保存 Git 配置' }));
 
   await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/git-config', expect.objectContaining({ method: 'PUT' })));
@@ -266,6 +268,7 @@ test('git publishing configuration edits multiple repositories without rendering
   expect(body.releaseMode).toBe('gitlab');
   expect(body.mrTargetBranch).toBe('');
   expect(body.repos).toHaveLength(2);
+  expect(body.repos.map((repo: { cloneMode: string }) => repo.cloneMode)).toEqual(['local', 'gitlab']);
   expect(body.repos[1].gitlabProject).toBe('alpha/api');
   expect(vi.mocked(fetch).mock.calls.filter(([path, init]) => path === '/api/v5/systems/alpha-system/git-config' && init?.method === 'PUT')).toHaveLength(1);
   expect(fetch).not.toHaveBeenCalledWith('/api/v5/systems/alpha-system/profile', expect.objectContaining({ method: 'PATCH' }));

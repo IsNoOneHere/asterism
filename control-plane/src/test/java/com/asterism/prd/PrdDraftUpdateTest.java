@@ -66,7 +66,7 @@ class PrdDraftUpdateTest {
     }
 
     @Test
-    void failedTurnCanBeCompletedManually() {
+    void historicalTurnFailedCanBeCompletedManually() {
         var sessions = mock(PrdSessionRepository.class);
         var aggregate = mock(JdbcAggregateTemplate.class);
         var savedSession = new AtomicReference<PrdSession>();
@@ -136,12 +136,11 @@ class PrdDraftUpdateTest {
                                            SystemAccessService access, JdbcAggregateTemplate aggregate,
                                            DomainEventService events) {
         var objectMapper = new ObjectMapper();
-        return new PrdConversationService(sessions, messages, mock(ProductAgentPort.class), events, objectMapper,
+        return new PrdConversationService(sessions, messages, mock(ProductAgentExecutionRepository.class),
+                mock(ProductAgentExecutionService.class), events, objectMapper,
                 new PrdDraftCodec(objectMapper), mock(TransactionOperations.class), access,
-                mock(ContextRecallService.class), new PrdCitationService(), aggregate,
-                mock(com.asterism.attachment.AttachmentService.class),
-                mock(com.asterism.vision.ImageAnalysisService.class), mock(com.asterism.knowledge.KnowledgeMatchService.class),
-                Runnable::run);
+                mock(ContextRecallService.class), aggregate,
+                mock(com.asterism.attachment.AttachmentService.class));
     }
 
     private PrdSession session(String status) {

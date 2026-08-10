@@ -50,6 +50,14 @@ TEAM_TOOLS = list(dict.fromkeys([*SUPERVISOR_TOOLS, *SUBAGENT_TOOLS]))
 # 验证命令由外层 Workflow 统一执行；Coding 会话不暴露 Bash，避免一次拒绝中断整个原生子 Agent。
 DISALLOWED_TOOLS = ["Bash", "WebSearch", "WebFetch"]
 WRITE_TOOLS = {"Edit", "Write"}
+SDK_PERMISSION_CONTEXT_ERROR_MARKERS = (
+    "the user doesn't want to take this action right now",
+    "request interrupted by user for tool use",
+    "stream closed",
+)
+SDK_PERMISSION_CONTEXT_BLOCKER = "Claude SDK 权限上下文丢失"
+LOCAL_HOOK_DENIAL = "local_hook_denial"
+SDK_TASK_OUTPUT_READ = "sdk_task_output_read"
 CLAUDE_UID = 65534
 CLAUDE_GID = 65534
 
@@ -71,6 +79,33 @@ class TeamAgentSpec:
     name: str
     repo: RepoSnapshot
     policy: AgentPolicy
+
+
+@dataclass(slots=True)
+class PermissionIncident:
+    incident_id: str
+    tool_use_id: str
+    tool_name: str
+    target: str
+    reason: str
+    task_id: str
+    session_id: str
+    kind: str
+    status: str = "unresolved"
+
+    def audit_record(self, record_type: str = "permission_incident") -> dict[str, str]:
+        return {
+            "type": record_type,
+            "incident_id": self.incident_id,
+            "tool_use_id": self.tool_use_id,
+            "tool": self.tool_name,
+            "target": self.target,
+            "reason": self.reason,
+            "task_id": self.task_id,
+            "session_id": self.session_id,
+            "kind": self.kind,
+            "status": self.status,
+        }
 
 
 class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
@@ -120,6 +155,9 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
         agent_ids: dict[str, str] = {}
         runs: dict[str, SubagentRun] = {}
         active_tasks: set[str] = set()
+        task_sessions: dict[str, str] = {}
+        tool_permissions: dict[str, dict[str, Any]] = {}
+        permission_incidents: list[PermissionIncident] = []
         runtime_dir = self._runtime_dir(workspace)
         settings_path = runtime_dir / "settings.json"
         settings_path.write_text("{}\n", encoding="utf-8")
@@ -184,11 +222,19 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
             if tool_name in WRITE_TOOLS:
                 self._guard_write()
             allowed, reason = authorize_runtime_tool(agent_id, agent_type, tool_name, tool_input)
+            target = self._tool_target(tool_input)
+            if _tool_use_id:
+                tool_permissions[_tool_use_id] = {
+                    "tool": tool_name,
+                    "tool_input": tool_input,
+                    "allowed": allowed,
+                }
             permission_record = {
                 "type": "tool_permission",
+                "tool_use_id": _tool_use_id or "",
                 "agent": agent_type or "developer",
                 "tool": tool_name,
-                "target": self._tool_target(tool_input),
+                "target": target,
                 "allowed": allowed,
                 **({"reason": reason} if reason else {}),
             }
@@ -203,6 +249,24 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "allow",
                 }}
+            task_ref = self._task_output_reference(tool_name, target, task_sessions)
+            task_id = task_ref[0] if task_ref else str(data.get("task_id") or agent_id)
+            session_id = task_ref[1] if task_ref else str(
+                data.get("session_id") or task_sessions.get(task_id, "")
+            )
+            incident = PermissionIncident(
+                incident_id=f"permission-{len(permission_incidents) + 1}",
+                tool_use_id=_tool_use_id or "",
+                tool_name=tool_name,
+                target=target,
+                reason=reason,
+                task_id=task_id,
+                session_id=session_id,
+                kind=SDK_TASK_OUTPUT_READ if task_ref else LOCAL_HOOK_DENIAL,
+                status="unresolved" if task_ref else "recorded",
+            )
+            permission_incidents.append(incident)
+            self._write(transcript, incident.audit_record())
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
@@ -225,6 +289,8 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
         session_id = ""
         result_seen = False
         sdk_blockers: list[str] = []
+        unmatched_permission_denials: set[str] = set()
+        last_result_success = False
         try:
             resume_session_id, session_store = self._resolve_session(
                 request.resume_session_id, runtime_dir, transcript, "coding",
@@ -272,18 +338,55 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
                 elif isinstance(message, UserMessage) and isinstance(message.content, list):
                     for block in message.content:
                         if isinstance(block, ToolResultBlock):
+                            content = self._result_excerpt(block.content)
                             self._write(transcript, {
                                 "type": "tool_result",
                                 "tool_use_id": block.tool_use_id,
                                 "is_error": bool(block.is_error),
-                                "content": self._result_excerpt(block.content),
+                                "content": content,
                                 "parent_tool_use_id": message.parent_tool_use_id or "",
                             })
+                            tool_permission = tool_permissions.get(block.tool_use_id)
+                            if (
+                                not block.is_error
+                                and tool_permission
+                                and tool_permission["allowed"]
+                                and tool_permission["tool"] == "TaskOutput"
+                            ):
+                                task_id = str(tool_permission["tool_input"].get("task_id", ""))
+                                for incident in permission_incidents:
+                                    if (
+                                        incident.kind == SDK_TASK_OUTPUT_READ
+                                        and incident.status == "unresolved"
+                                        and incident.task_id == task_id
+                                        and incident.session_id == task_sessions.get(task_id)
+                                    ):
+                                        # 只有同一 task 的合法 TaskOutput 成功，才能恢复 SDK 临时读取拒绝。
+                                        incident.status = "recovered"
+                                        self._write(
+                                            transcript,
+                                            incident.audit_record("permission_incident_recovered"),
+                                        )
+                            audited_denial = any(
+                                incident.tool_use_id
+                                and incident.tool_use_id == block.tool_use_id
+                                for incident in permission_incidents
+                            )
+                            # SDK 权限通道异常时保留明确系统阻塞，不让连续工具失败退化为空 Diff。
+                            if (
+                                block.is_error
+                                and self._is_sdk_permission_context_error(content)
+                                and not audited_denial
+                                and SDK_PERMISSION_CONTEXT_BLOCKER not in sdk_blockers
+                            ):
+                                sdk_blockers.append(SDK_PERMISSION_CONTEXT_BLOCKER)
                 elif isinstance(message, TaskStartedMessage):
                     active_tasks.add(message.task_id)
+                    task_sessions[message.task_id] = message.session_id
                     self._write(transcript, {
                         "type": "task_started",
                         "task_id": message.task_id,
+                        "session_id": message.session_id,
                         "description": message.description,
                         "task_type": message.task_type or "",
                     })
@@ -308,14 +411,17 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
                     })
                 elif isinstance(message, ResultMessage):
                     result_seen = True
+                    last_result_success = message.subtype == "success" and not message.is_error
                     summary = (message.result or summary).strip()
                     turns = message.num_turns
                     token_usage = dict(message.usage or {})
                     session_id = message.session_id
-                    if message.permission_denials:
-                        sdk_blockers.append(
-                            f"SDK permission_denials: {len(message.permission_denials)} 个工具请求被拒绝"
-                        )
+                    for denial in message.permission_denials or []:
+                        if not self._permission_denial_matches(denial, permission_incidents):
+                            # ResultMessage 可能出现多次；未知 denial 跨整条消息流去重保留。
+                            unmatched_permission_denials.add(
+                                json.dumps(denial, ensure_ascii=False, sort_keys=True, default=str)
+                            )
                     if message.deferred_tool_use is not None:
                         sdk_blockers.append("SDK deferred_tool_use: 存在未执行的工具请求")
                     self._write(transcript, {
@@ -324,6 +430,7 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
                         "is_error": message.is_error,
                         "stop_reason": message.stop_reason or "",
                         "permission_denial_count": len(message.permission_denials or []),
+                        "unmatched_permission_denial_count": len(unmatched_permission_denials),
                         "deferred_tool_use": message.deferred_tool_use is not None,
                         "result_length": len(summary),
                     })
@@ -345,6 +452,42 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
             self._restore_service_owner(workspace.root, runtime_dir, sdk_user, service_owner)
             ownership_restored = True
             repo_changes = self._repo_changes(workspace, summary)
+            has_diff = any(change.diff_patch.strip() for change in repo_changes)
+            local_denials = [
+                incident for incident in permission_incidents
+                if incident.kind == LOCAL_HOOK_DENIAL
+            ]
+            task_output_incidents = [
+                incident for incident in permission_incidents
+                if incident.kind == SDK_TASK_OUTPUT_READ
+            ]
+            recovered_task_outputs = [
+                incident for incident in task_output_incidents if incident.status == "recovered"
+            ]
+            unresolved_task_outputs = [
+                incident for incident in task_output_incidents if incident.status == "unresolved"
+            ]
+            if unmatched_permission_denials:
+                sdk_blockers.append(
+                    "SDK permission_denials: "
+                    f"{len(unmatched_permission_denials)} 个工具请求无法关联 Hook 审计"
+                )
+            self._write(transcript, {
+                "type": "permission_incident_summary",
+                "local_hook_denial_count": len(local_denials),
+                "task_output_read_count": len(task_output_incidents),
+                "recovered_count": len(recovered_task_outputs),
+                "unresolved_count": len(unresolved_task_outputs),
+                "unmatched_permission_denial_count": len(unmatched_permission_denials),
+                "last_result_success": last_result_success,
+                "has_diff": has_diff,
+            })
+            if recovered_task_outputs:
+                log.warning(
+                    "Claude SDK Task 输出读取权限已恢复 work_item=%s count=%s",
+                    request.work_item_id,
+                    len(recovered_task_outputs),
+                )
             outcome = self._finalize_outcome(repo_changes, session_id, sdk_blockers)
             result = CodingAttemptResult(
                 attempt_id=request.attempt_id,
@@ -764,3 +907,59 @@ class ClaudeSdkTeamProvider(ClaudeSdkPlanningMixin):
             return ""
         value = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
         return value[-2000:]
+
+    def _is_sdk_permission_context_error(self, content: str) -> bool:
+        value = content.casefold()
+        return any(marker in value for marker in SDK_PERMISSION_CONTEXT_ERROR_MARKERS)
+
+    def _task_output_reference(
+        self,
+        tool_name: str,
+        target: str,
+        task_sessions: dict[str, str],
+    ) -> tuple[str, str] | None:
+        if tool_name != "Read" or not target:
+            return None
+        raw_path = Path(target).expanduser()
+        if not raw_path.is_absolute():
+            return None
+        path = raw_path.resolve()
+        parts = path.parts
+        if not self._is_sdk_temp_path(parts):
+            return None
+        for task_id, session_id in task_sessions.items():
+            if len(parts) >= 3 and parts[-3:] == (
+                session_id, "tasks", f"{task_id}.output",
+            ):
+                return task_id, session_id
+        return None
+
+    def _is_sdk_temp_path(self, parts: tuple[str, ...]) -> bool:
+        if len(parts) >= 3 and parts[1] == "tmp":
+            runtime_name = parts[2]
+        elif len(parts) >= 4 and parts[1:3] == ("private", "tmp"):
+            runtime_name = parts[3]
+        else:
+            return False
+        return re.fullmatch(r"claude-\d+", runtime_name) is not None
+
+    def _permission_denial_matches(
+        self,
+        denial: object,
+        incidents: list[PermissionIncident],
+    ) -> bool:
+        if not isinstance(denial, dict):
+            return False
+        tool_use_id = str(denial.get("tool_use_id") or "")
+        if tool_use_id and any(
+            incident.tool_use_id and incident.tool_use_id == tool_use_id
+            for incident in incidents
+        ):
+            return True
+        tool_name = str(denial.get("tool_name") or "")
+        tool_input = denial.get("tool_input")
+        target = self._tool_target(tool_input) if isinstance(tool_input, dict) else ""
+        return bool(tool_name and target) and any(
+            incident.tool_name == tool_name and incident.target == target
+            for incident in incidents
+        )

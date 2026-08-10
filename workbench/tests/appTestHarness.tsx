@@ -31,6 +31,7 @@ const responses: Record<string, unknown> = {
     ownerUserId: 'admin',
     canControl: true,
     availableActions: ['patch_apply_approved', 'patch_apply_rejected', 'cancel_case'],
+    lastAppliedSequence: 3,
   },
   '/api/v5/work-items/wi-1/events': [
     {
@@ -64,16 +65,211 @@ const responses: Record<string, unknown> = {
         executionProvider: 'claude_sdk_team',
         turns: 4,
         tokenUsage: { input_tokens: 320, output_tokens: 80 },
-        diffPatch: 'diff --git a/src/login.tsx b/src/login.tsx\n+显示登录错误\n',
+        sessionId: 'session-internal',
+        token: 'token-internal',
+        idempotencyKey: 'transition-internal',
+        artifactRef: {
+          artifactId: 'art-code-1', artifactType: 'CODING', version: 1, contentHash: 'code-hash',
+          rootArtifactId: 'art-product-1', parentArtifactId: 'art-plan-2', status: 'PROPOSED',
+        },
       }),
       createdAt: '2026-07-05T12:01:00Z',
       actorId: 'worker',
     },
   ],
   '/api/v5/work-items/wi-1/attachments': [],
+  '/api/v5/work-items/wi-1/artifacts': {
+    rootArtifactId: 'art-product-1',
+    nodes: [
+      {
+        ref: {
+          artifactId: 'art-product-1', artifactType: 'PRODUCT', version: 1, contentHash: 'product-hash',
+          rootArtifactId: 'art-product-1', status: 'APPROVED',
+        },
+        systemId: 'alpha-system', prdId: 'prd-1', workItemId: 'wi-1', caseId: 'case-1',
+        content: { title: '登录页错误提示', goal: '改登录页', acceptanceCriteria: ['错误密码时提示'] },
+        createdBy: 'admin', createdAt: '2026-07-05T11:00:00Z',
+        reviewedBy: 'admin', reviewedAt: '2026-07-05T11:00:00Z',
+      },
+      {
+        ref: {
+          artifactId: 'art-plan-1', artifactType: 'PLANNING', version: 1, contentHash: 'plan-hash-1',
+          rootArtifactId: 'art-product-1', parentArtifactId: 'art-product-1', status: 'REJECTED',
+        },
+        systemId: 'alpha-system', prdId: 'prd-1', workItemId: 'wi-1', caseId: 'case-1',
+        content: { planMarkdown: '# 旧执行计划', baseRevisions: { main: 'abc123' } },
+        createdBy: 'worker', createdAt: '2026-07-05T11:20:00Z',
+        reviewedBy: 'admin', reviewedAt: '2026-07-05T11:25:00Z', reviewNote: '补充验证步骤',
+      },
+      {
+        ref: {
+          artifactId: 'art-plan-2', artifactType: 'PLANNING', version: 2, contentHash: 'plan-hash-2',
+          rootArtifactId: 'art-product-1', parentArtifactId: 'art-product-1',
+          supersedesArtifactId: 'art-plan-1', status: 'APPROVED',
+        },
+        systemId: 'alpha-system', prdId: 'prd-1', workItemId: 'wi-1', caseId: 'case-1',
+        content: { planMarkdown: '# 执行计划', baseRevisions: { main: 'abc123' } },
+        createdBy: 'worker', createdAt: '2026-07-05T11:30:00Z',
+        reviewedBy: 'admin', reviewedAt: '2026-07-05T11:35:00Z',
+      },
+      {
+        ref: {
+          artifactId: 'art-code-1', artifactType: 'CODING', version: 1, contentHash: 'code-hash',
+          rootArtifactId: 'art-product-1', parentArtifactId: 'art-plan-2', status: 'PROPOSED',
+        },
+        systemId: 'alpha-system', prdId: 'prd-1', workItemId: 'wi-1', caseId: 'case-1',
+        content: {
+          summary: '登录提示已完成',
+          repoChanges: [{
+            repo: 'main',
+            diffPatch: 'diff --git a/src/login.tsx b/src/login.tsx\n+显示登录错误\n',
+            changedPaths: ['src/features/authentication/components/LoginErrorMessageWithResponsiveLayout.tsx'],
+            summary: '调整登录错误提示',
+          }],
+          executionOutcome: { status: 'completed', blockers: [] },
+          baseRevisions: { main: 'abc123' },
+        },
+        createdBy: 'worker', createdAt: '2026-07-05T12:01:00Z',
+      },
+    ],
+    edges: [
+      { fromArtifactId: 'art-product-1', toArtifactId: 'art-plan-1', edgeType: 'DERIVED_FROM' },
+      { fromArtifactId: 'art-product-1', toArtifactId: 'art-plan-2', edgeType: 'DERIVED_FROM' },
+      { fromArtifactId: 'art-plan-1', toArtifactId: 'art-plan-2', edgeType: 'SUPERSEDES' },
+      { fromArtifactId: 'art-plan-2', toArtifactId: 'art-code-1', edgeType: 'DERIVED_FROM' },
+    ],
+    effectiveHeads: {
+      PRODUCT: {
+        artifactId: 'art-product-1', artifactType: 'PRODUCT', version: 1, contentHash: 'product-hash',
+        rootArtifactId: 'art-product-1', status: 'APPROVED',
+      },
+      PLANNING: {
+        artifactId: 'art-plan-2', artifactType: 'PLANNING', version: 2, contentHash: 'plan-hash-2',
+        rootArtifactId: 'art-product-1', parentArtifactId: 'art-product-1',
+        supersedesArtifactId: 'art-plan-1', status: 'APPROVED',
+      },
+      CODING: {
+        artifactId: 'art-code-1', artifactType: 'CODING', version: 1, contentHash: 'code-hash',
+        rootArtifactId: 'art-product-1', parentArtifactId: 'art-plan-2', status: 'PROPOSED',
+      },
+    },
+    versionActions: {
+      'art-product-1': {
+        canSelect: false,
+        selectDisabledReason: 'Planning 已开始，切换 Product 需要显式回退并重建执行上下文',
+        canContinue: false,
+        continueDisabledReason: '只有当前执行计划可以继续开发',
+      },
+      'art-plan-1': {
+        canSelect: false,
+        selectDisabledReason: 'Coding 已开始，切换 Planning 必须先显式回退并重新执行',
+        canContinue: false,
+        continueDisabledReason: '请先切换到该执行计划',
+      },
+      'art-plan-2': {
+        canSelect: false,
+        selectDisabledReason: '该版本已是当前有效版本',
+        canContinue: false,
+        continueDisabledReason: 'Coding 已开始，不能重复启动；如需换计划请走显式回退',
+      },
+      'art-code-1': {
+        canSelect: false,
+        selectDisabledReason: '该版本已是当前有效版本',
+        canContinue: false,
+        continueDisabledReason: '只有当前执行计划可以继续开发',
+      },
+    },
+  },
+  '/api/v5/artifacts/art-product-1': {
+    artifact: {
+      ref: {
+        artifactId: 'art-product-1', artifactType: 'PRODUCT', version: 1, contentHash: 'product-hash',
+        rootArtifactId: 'art-product-1', status: 'APPROVED',
+      },
+      systemId: 'alpha-system', prdId: 'prd-1', workItemId: 'wi-1', caseId: 'case-1',
+      content: { title: '登录页错误提示', goal: '改登录页', acceptanceCriteria: ['错误密码时提示'] },
+      createdBy: 'admin', createdAt: '2026-07-05T11:00:00Z',
+    },
+    transitions: [{
+      transitionId: 'transition-product-1', fromStatus: null, toStatus: 'APPROVED', actor: 'admin',
+      note: 'PRD 已确认', domainEventId: 'evt-product-1', createdAt: '2026-07-05T11:00:00Z',
+    }],
+    evidence: [],
+  },
+  '/api/v5/artifacts/art-plan-1': {
+    artifact: {
+      ref: {
+        artifactId: 'art-plan-1', artifactType: 'PLANNING', version: 1, contentHash: 'plan-hash-1',
+        rootArtifactId: 'art-product-1', parentArtifactId: 'art-product-1', status: 'REJECTED',
+      },
+      systemId: 'alpha-system', prdId: 'prd-1', workItemId: 'wi-1', caseId: 'case-1',
+      content: { planMarkdown: '# 旧执行计划', baseRevisions: { main: 'abc123' } },
+      createdBy: 'worker', createdAt: '2026-07-05T11:20:00Z',
+    },
+    transitions: [{
+      transitionId: 'transition-plan-reject', fromStatus: 'PROPOSED', toStatus: 'REJECTED', actor: 'admin',
+      note: '补充验证步骤', domainEventId: 'evt-plan-reject', createdAt: '2026-07-05T11:25:00Z',
+    }],
+    evidence: [],
+  },
+  '/api/v5/artifacts/art-plan-2': {
+    artifact: {
+      ref: {
+        artifactId: 'art-plan-2', artifactType: 'PLANNING', version: 2, contentHash: 'plan-hash-2',
+        rootArtifactId: 'art-product-1', parentArtifactId: 'art-product-1',
+        supersedesArtifactId: 'art-plan-1', status: 'APPROVED',
+      },
+      systemId: 'alpha-system', prdId: 'prd-1', workItemId: 'wi-1', caseId: 'case-1',
+      content: { planMarkdown: '# 执行计划', baseRevisions: { main: 'abc123' } },
+      createdBy: 'worker', createdAt: '2026-07-05T11:30:00Z',
+    },
+    transitions: [{
+      transitionId: 'transition-plan-approve', fromStatus: 'PROPOSED', toStatus: 'APPROVED', actor: 'admin',
+      note: '', domainEventId: 'evt-plan-approve', createdAt: '2026-07-05T11:35:00Z',
+    }],
+    evidence: [],
+  },
+  '/api/v5/artifacts/art-code-1': {
+    artifact: {
+      ref: {
+        artifactId: 'art-code-1', artifactType: 'CODING', version: 1, contentHash: 'code-hash',
+        rootArtifactId: 'art-product-1', parentArtifactId: 'art-plan-2', status: 'PROPOSED',
+      },
+      systemId: 'alpha-system', prdId: 'prd-1', workItemId: 'wi-1', caseId: 'case-1',
+      content: {
+        summary: '登录提示已完成',
+        repoChanges: [{
+          repo: 'main', diffPatch: 'diff --git a/src/login.tsx b/src/login.tsx\n+显示登录错误\n',
+          changedPaths: ['src/features/authentication/components/LoginErrorMessageWithResponsiveLayout.tsx'], summary: '调整登录错误提示',
+        }],
+        executionOutcome: { status: 'completed', blockers: [] },
+        baseRevisions: { main: 'abc123' },
+      },
+      createdBy: 'worker', createdAt: '2026-07-05T12:01:00Z',
+    },
+    transitions: [{
+      transitionId: 'transition-code-1', fromStatus: null, toStatus: 'PROPOSED', actor: 'worker',
+      note: '', domainEventId: 'evt-modification', createdAt: '2026-07-05T12:01:00Z',
+    }],
+    evidence: [{
+      evidenceId: 'evidence-code-execution-1', evidenceType: 'CodingExecution',
+      payload: {
+        sessionId: 'hidden-session', tokenUsage: { inputTokens: 100 }, turns: 3,
+        executionProvider: 'claude_sdk_team', subagentRuns: [{ agentId: 'hidden-agent' }],
+      },
+      transitionId: 'transition-code-1', domainEventId: 'evt-modification', actor: 'worker',
+      createdAt: '2026-07-05T12:01:00Z',
+    }, {
+      evidenceId: 'evidence-patch-1', evidenceType: 'PatchApplied',
+      payload: { changedPaths: ['src/login.tsx'] },
+      domainEventId: 'evt-patch', actor: 'worker', createdAt: '2026-07-05T12:02:00Z',
+    }],
+  },
 };
 let candidateMemories: unknown[] = [];
+let activeMemories: unknown[] = [];
 let conversationMessages: unknown[] = [];
+let latestProductExecution: unknown = null;
 let workItems: unknown[] = [];
 let agentConfiguration: any;
 let gitConfiguration: any;
@@ -91,10 +287,34 @@ export function jsonResponse(data: unknown, ok = true, status = ok ? 200 : 401) 
 
 export function resetAppTestState() {
   localStorage.clear();
-  candidateMemories = [{ memoryId: 'mem-candidate', systemId: 'alpha-system', category: 'convention',
-    audience: 'both', targetRefs: [], evidenceRefs: ['evt-1'], title: '登录页样式约定', content: '保留登录页样式',
-    status: 'candidate', workItemId: 'wi-1', createdAt: '2026-07-05T12:00:00Z' }];
+  candidateMemories = [{
+    candidateId: 'candidate-1',
+    systemId: 'alpha-system',
+    projectScope: 'alpha-system',
+    memoryType: 'DECISION',
+    artifactSourceId: 'art-plan-2',
+    artifactSource: {
+      artifactId: 'art-plan-2',
+      artifactType: 'PLANNING',
+      version: 2,
+      status: 'APPROVED',
+      workItemId: 'wi-1',
+      prdId: 'prd-1',
+      rootArtifactId: 'art-product-1',
+    },
+    sourceKind: 'ARTIFACT_APPROVED',
+    targetRefs: [],
+    evidenceRefs: ['evt-1'],
+    title: '登录页样式决策',
+    content: '已批准的技术路线：保留登录页现有样式组件。',
+    confidence: 0.84,
+    applicability: 'PROJECT',
+    status: 'PENDING',
+    createdAt: '2026-07-05T12:00:00Z',
+  }];
+  activeMemories = [];
   conversationMessages = [];
+  latestProductExecution = null;
   workItems = [];
   agentConfiguration = {
     modelProfiles: [{ id: 'mp-1', name: 'Claude 主模型', provider: 'anthropic', model: 'claude-sonnet',
@@ -161,22 +381,36 @@ export function resetAppTestState() {
         createdBy: 'admin', draft: { title: '登录页错误提示', goal: '改登录页', acceptanceCriteria: ['错误密码时提示'] }, missingFields: prdPostCount === 1 ? ['acceptanceCriteria'] : [],
       });
     }
-    if (path === '/api/v5/memory?systemId=alpha-system&status=candidate') {
+    if (path === '/api/v5/memory/candidates?systemId=alpha-system&status=PENDING') {
       return jsonResponse(candidateMemories);
     }
-    if (path === '/api/v5/memory?systemId=alpha-system&status=approved') {
+    if (path === '/api/v5/memory/candidates?systemId=alpha-system&status=REJECTED'
+      || path === '/api/v5/memory/candidates?systemId=alpha-system&status=OUTDATED') {
       return jsonResponse([]);
     }
-    if (path === '/api/v5/memory?systemId=alpha-system&status=rejected') {
-      return jsonResponse([{ memoryId: 'mem-legacy', systemId: 'alpha-system', category: '', title: 'ModificationCompleted {\"diff\":\"raw\"}', content: 'ModificationCompleted {\"diff\":\"raw\"}', status: 'rejected', sourceEventId: 'evt-1', createdAt: '2026-07-04T12:00:00Z' }]);
+    if (path === '/api/v5/memory?systemId=alpha-system&status=ACTIVE') {
+      return jsonResponse(activeMemories);
     }
-    if (path === '/api/v5/memory?systemId=alpha-system&status=disabled') {
+    if (path === '/api/v5/memory?systemId=alpha-system&status=OUTDATED') {
       return jsonResponse([]);
     }
-    if (path === '/api/v5/memory/candidates' && init?.method === 'POST') {
-      const body = JSON.parse(String(init.body));
-      candidateMemories = [...candidateMemories, { ...body, memoryId: 'mem-new', status: 'candidate', createdAt: '2026-07-05T13:00:00Z' }];
-      return jsonResponse(candidateMemories[candidateMemories.length - 1]);
+    if (path === '/api/v5/memory?systemId=alpha-system&status=ARCHIVED') {
+      return jsonResponse([{
+        memoryId: 'mem-legacy',
+        systemId: 'alpha-system',
+        projectScope: 'alpha-system',
+        memoryType: 'EXPERIENCE',
+        artifactSourceId: null,
+        artifactSource: null,
+        title: '旧记忆已归档',
+        content: '旧系统记忆缺少 Artifact 来源，升级后仅保留审计记录。',
+        confidence: 0,
+        applicability: 'PROJECT',
+        status: 'ARCHIVED',
+        targetRefs: [],
+        evidenceRefs: ['evt-legacy'],
+        createdAt: '2026-07-04T12:00:00Z',
+      }]);
     }
     if (path.startsWith('/api/v5/systems/alpha-system/knowledge/page?') && !init?.method) {
       return jsonResponse(Object.prototype.hasOwnProperty.call(responseOverrides, path) ? responseOverrides[path] : {
@@ -190,10 +424,31 @@ export function resetAppTestState() {
         status: 'approved', source: 'manual', sourceRef: 'page-login',
       }]);
     }
-    if (path === '/api/v5/memory/mem-candidate/approve' && init?.method === 'POST') {
+    if (path === '/api/v5/memory/candidates/candidate-1/approve' && init?.method === 'POST') {
       const body = JSON.parse(String(init.body));
       candidateMemories = [];
-      return jsonResponse({ memoryId: 'mem-candidate', ...body, status: 'approved' });
+      const memory = {
+        memoryId: 'mem-1',
+        candidateId: 'candidate-1',
+        systemId: 'alpha-system',
+        projectScope: 'alpha-system',
+        artifactSourceId: 'art-plan-2',
+        artifactSource: {
+          artifactId: 'art-plan-2',
+          artifactType: 'PLANNING',
+          version: 2,
+          status: 'APPROVED',
+          workItemId: 'wi-1',
+          prdId: 'prd-1',
+          rootArtifactId: 'art-product-1',
+        },
+        ...body,
+        status: 'ACTIVE',
+        evidenceRefs: ['evt-1'],
+        createdAt: '2026-07-05T12:00:00Z',
+      };
+      activeMemories = [memory];
+      return jsonResponse(memory);
     }
     if (path === '/api/v5/systems/alpha-system/prd/messages' && init?.method === 'POST') {
       prdPostCount += 1;
@@ -208,13 +463,16 @@ export function resetAppTestState() {
           { messageId: 'm3', conversationId: 'conv-prd-1', senderType: 'user', content: '用户第二轮' },
           { messageId: 'm4', conversationId: 'conv-prd-1', senderType: 'assistant', content: '助手第二轮' },
         ];
+      latestProductExecution = {
+        executionId: `prd-exec-${prdPostCount}`, prdId: 'prd-1', status: 'COMPLETED',
+        workflowId: `product-agent-prd-exec-${prdPostCount}`, inputMessageId: `m${prdPostCount * 2 - 1}`,
+        contextBundleId: `bundle-${prdPostCount}`, stage: 'COMPLETED', attempt: 1,
+      };
       return jsonResponse({
+        executionId: `prd-exec-${prdPostCount}`,
         prdId: 'prd-1',
         conversationId: 'conv-prd-1',
-        assistantPending: true,
-        status: prdPostCount === 1 ? 'need_clarification' : 'waiting_user_confirm',
-        missingFields: prdPostCount === 1 ? ['acceptanceCriteria'] : [],
-        draft: { title: '登录页错误提示', goal: '改登录页', acceptanceCriteria: ['错误密码时提示'] },
+        status: 'CREATED',
       });
     }
     if (path === '/api/v5/prd-sessions/prd-1/draft' && init?.method === 'PATCH') {
@@ -235,7 +493,7 @@ export function resetAppTestState() {
       return jsonResponse((responses['/api/v5/systems'] as unknown[])[0]);
     }
     if (path === '/api/v5/conversations/conv-prd-1') {
-      return jsonResponse({ messages: conversationMessages, pendingAssistant: false });
+      return jsonResponse({ messages: conversationMessages, activeExecution: null, latestExecution: latestProductExecution });
     }
     return jsonResponse(Object.prototype.hasOwnProperty.call(responseOverrides, path) ? responseOverrides[path] : responses[path]);
   }));

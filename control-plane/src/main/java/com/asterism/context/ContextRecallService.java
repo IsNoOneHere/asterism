@@ -17,8 +17,8 @@ public class ContextRecallService {
     private static final Logger log = LoggerFactory.getLogger(ContextRecallService.class);
     private static final int CHARACTER_BUDGET = 8_000;
     private static final Map<String, Integer> TYPE_LIMITS = Map.of(
-            "memory", 5,
-            "system_knowledge", 3,
+            "memory", 8,
+            "system_knowledge", 8,
             "user_message", 6);
 
     private final List<ContextSource> sources;
@@ -31,6 +31,7 @@ public class ContextRecallService {
 
     public ContextBundle recall(ContextRecallQuery query) {
         var candidates = sources.stream()
+                .filter(source -> query.supportsSource(source.type()))
                 .flatMap(source -> source.recall(query).stream())
                 .filter(item -> item.supports(query.phase()))
                 .sorted(Comparator.comparingDouble(ContextItem::relevance).reversed()
@@ -48,7 +49,9 @@ public class ContextRecallService {
             characters += item.content().length();
         }
         var queryHash = ContextHash.sha256(String.join("|",
-                query.systemId(), query.phase(), query.searchText(),
+                query.systemId(), query.projectScope(), query.phase(), query.searchText(),
+                query.memoryTypes().toString(),
+                query.artifactSourceIds().stream().sorted().toList().toString(),
                 query.targetRefs().stream().sorted().toList().toString()));
         var bundle = new ContextBundle("bundle-" + UUID.randomUUID(), query.systemId(), query.prdId(),
                 query.phase(), queryHash, selected, Instant.now());

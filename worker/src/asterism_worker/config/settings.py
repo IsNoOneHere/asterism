@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     claude_sdk_max_buffer_size: int = Field(default=16 * 1024 * 1024, validation_alias="V5_CLAUDE_SDK_MAX_BUFFER_SIZE")
     engine_effort_level: str = Field(default="", validation_alias="V5_ENGINE_EFFORT_LEVEL")
     agent_service_url: str = Field(default="http://127.0.0.1:8090")
+    # 要覆盖 agent-service 的最长模型请求，并给 HTTP 响应传输预留时间。
+    product_agent_http_timeout_seconds: int = Field(default=660)
     worker_id: str = Field(default_factory=socket.gethostname)
     readiness_interval_seconds: int = Field(default=30)
     activity_heartbeat_interval_seconds: int = Field(default=30)

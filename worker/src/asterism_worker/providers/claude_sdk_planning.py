@@ -151,7 +151,16 @@ class ClaudeSdkPlanningMixin:
                 plan_markdown=plan_markdown,
                 revision=request.plan_revision,
                 session_id=result_message.session_id,
+                turns=assistant_turns,
+                token_usage=result_message.usage or {},
                 base_revisions=base_revisions,
+                acceptance_criteria_refs=[
+                    f"AC-{index + 1}" for index in range(len(request.acceptance_criteria))
+                ],
+                repositories=[repo.repo_id for repo in request.repos],
+                evidence_refs=[
+                    f"git:{repo_id}@{revision}" for repo_id, revision in base_revisions.items()
+                ],
             )
             self._write(transcript, {
                 "type": "planning_result",

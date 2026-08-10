@@ -1,21 +1,21 @@
 package com.asterism.prd;
 
-import com.asterism.attachment.Attachment;
+import com.asterism.artifact.Artifact;
+import com.asterism.artifact.ArtifactService;
+import com.asterism.artifact.ArtifactType;
 import com.asterism.context.ContextBundle;
 import com.asterism.context.ContextRecallService;
 import com.asterism.context.RequirementContextManifestService;
 import com.asterism.event.DomainEventService;
+import com.asterism.event.DomainEventType;
 import com.asterism.git.GitIntegrationService;
 import com.asterism.identity.SystemAccessService;
-import com.asterism.knowledge.KnowledgeMatchService;
-import com.asterism.memory.MemoryItemRepository;
+import com.asterism.memory.ArtifactMemoryLifecycleService;
 import com.asterism.system.SystemProfile;
 import com.asterism.system.SystemProfileRepository;
 import com.asterism.system.AgentConfigurationService;
 import com.asterism.system.ExecutionReadinessService;
 import com.asterism.temporal.TemporalCasePort;
-import com.asterism.vision.ImageAnalysisService;
-import com.asterism.vision.UiObservation;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,21 +39,19 @@ import static org.mockito.Mockito.when;
 
 class PrdControllerTransactionBoundaryTest {
     @Test
-    void messageRunsVisionKnowledgeAndLlmBetweenShortTransactions() {
+    void messageCommitsExecutionBeforeStartingTemporal() {
         var inTransaction = new AtomicBoolean();
         var order = new ArrayList<String>();
         var sessions = mock(PrdSessionRepository.class);
         var messages = mock(ConversationMessageRepository.class);
-        var productAgent = mock(ProductAgentPort.class);
+        var executionRepository = mock(ProductAgentExecutionRepository.class);
+        var executionService = mock(ProductAgentExecutionService.class);
+        var events = mock(DomainEventService.class);
         var recall = mock(ContextRecallService.class);
         var aggregate = mock(JdbcAggregateTemplate.class);
         var attachments = mock(com.asterism.attachment.AttachmentService.class);
-        var imageAnalysis = mock(ImageAnalysisService.class);
-        var knowledge = mock(KnowledgeMatchService.class);
-        var attachment = new Attachment("att-1", "sys-1", "user", "screen.png", "image/png", 1,
-                "hash", "ha/hash", Instant.now());
-        when(messages.countByConversationIdAndSenderType(any(), any())).thenReturn(0L);
-        when(messages.completePending(any(), any())).thenReturn(1);
+        var savedExecution = new AtomicReference<ProductAgentExecution>();
+        var createdEvent = new AtomicReference<DomainEventService.AppendEvent>();
         when(recall.recall(any())).thenAnswer(call -> {
             assertThat(inTransaction).isTrue();
             order.add("recall");
@@ -60,35 +59,22 @@ class PrdControllerTransactionBoundaryTest {
             return new ContextBundle("bundle-1", query.systemId(), query.prdId(), query.phase(), "hash",
                     List.of(), Instant.now());
         });
-        when(attachments.requireForSystem("att-1", "sys-1")).thenReturn(attachment);
-        when(attachments.read(attachment)).thenAnswer(call -> {
-            assertThat(inTransaction).isFalse();
-            order.add("image-read");
-            return new byte[]{1};
-        });
-        when(imageAnalysis.analyze(any(), any(), any())).thenAnswer(call -> {
-            assertThat(inTransaction).isFalse();
-            order.add("vision");
-            return new UiObservation("登录", List.of("错误提示"), List.of(), List.of(), "登录页");
-        });
-        when(knowledge.match(any(), any())).thenAnswer(call -> {
-            assertThat(inTransaction).isFalse();
-            order.add("knowledge");
-            return new KnowledgeMatchService.MatchResult(List.of(), false);
-        });
-        when(productAgent.updateDraft(any(), any(), any(), any(), any(), any())).thenAnswer(call -> {
-            assertThat(inTransaction).isFalse();
-            order.add("llm");
-            return new ProductAgentPort.DraftResult(
-                    new ProductAgentPort.PrdPatch("登录提示", null, null, null), "已完成", Map.of());
-        });
         when(aggregate.insert(any())).thenAnswer(call -> {
             assertThat(inTransaction).isTrue();
-            return call.getArgument(0);
+            var value = call.getArgument(0);
+            if (value instanceof ProductAgentExecution execution) {
+                savedExecution.set(execution);
+                order.add("execution-created");
+            }
+            return value;
         });
-        when(aggregate.update(any())).thenAnswer(call -> {
-            assertThat(inTransaction).isTrue();
-            return call.getArgument(0);
+        when(events.append(any())).thenAnswer(call -> {
+            var event = (DomainEventService.AppendEvent) call.getArgument(0);
+            if (event.eventType() == DomainEventType.ProductAgentExecutionCreated) {
+                createdEvent.set(event);
+                order.add("event:execution-created");
+            }
+            return null;
         });
         var transactions = new TransactionOperations() {
             @Override
@@ -103,16 +89,25 @@ class PrdControllerTransactionBoundaryTest {
                 }
             }
         };
-        var service = new PrdConversationService(sessions, messages, productAgent, mock(DomainEventService.class),
+        when(executionService.start(any())).thenAnswer(call -> {
+            assertThat(inTransaction).isFalse();
+            order.add("temporal-start");
+            return savedExecution.get();
+        });
+        var service = new PrdConversationService(sessions, messages, executionRepository, executionService,
+                events,
                 new ObjectMapper(), new PrdDraftCodec(new ObjectMapper()), transactions, mock(SystemAccessService.class),
-                recall, new PrdCitationService(), aggregate, attachments,
-                imageAnalysis, knowledge, Runnable::run);
+                recall, aggregate, attachments);
 
         service.message("sys-1", new PrdConversationService.PrdMessageRequest(null, "登录提示", List.of("att-1")),
                 new UsernamePasswordAuthenticationToken("user", "n/a"));
 
-        assertThat(order).containsExactly("tx-start", "recall", "tx-end", "image-read", "vision", "llm", "knowledge",
-                "tx-start", "tx-end");
+        assertThat(order).containsExactly(
+                "tx-start", "recall", "event:execution-created", "execution-created", "tx-end", "temporal-start");
+        assertThat(createdEvent.get().eventId()).isEqualTo(
+                "evt-product-agent-created-" + savedExecution.get().executionId());
+        assertThat(createdEvent.get().idempotencyKey()).isEqualTo(
+                "ProductAgentExecutionCreated:" + savedExecution.get().executionId());
     }
 
     @Test
@@ -124,8 +119,7 @@ class PrdControllerTransactionBoundaryTest {
 
         assertThat(order.indexOf("tx-end")).isLessThan(order.indexOf("temporal-start"));
         assertThat(order).containsSubsequence("tx-start", "save:case_starting", "event:PRDConfirmed", "tx-end", "temporal-start");
-        assertThat(order).contains("event:OwnerApprovalRequested");
-        assertThat(order.indexOf("event:OwnerApprovalRequested")).isLessThan(order.indexOf("memory-extract"));
+        assertThat(order).contains("event:OwnerApprovalRequested", "memory-scheduled");
     }
 
     @Test
@@ -159,10 +153,8 @@ class PrdControllerTransactionBoundaryTest {
             assertThat(profile.model()).isEqualTo("claude-sonnet");
         });
         assertThat(holder.command.agentConfigSnapshot().toString()).doesNotContain("never-in-snapshot");
-        assertThat(holder.command.prd().title()).isEqualTo("登录页错误提示");
-        assertThat(holder.command.prd().goal()).isEqualTo("把登录页加错误提示");
-        assertThat(holder.command.prd().acceptanceCriteria()).containsExactly("错误密码时显示提示");
-        assertThat(holder.command.prd().draftJson()).containsEntry("goal", "把登录页加错误提示");
+        assertThat(holder.command.prd().requirementManifestId()).isEqualTo("manifest-1");
+        assertThat(holder.command.prd().productArtifact().artifactId()).isEqualTo("art-product-1");
     }
 
     @Test
@@ -175,7 +167,8 @@ class PrdControllerTransactionBoundaryTest {
                 .hasMessageContaining("可重试");
 
         assertThat(order).contains("save:case_start_failed", "event:TemporalCaseStartFailed");
-        assertThat(order).doesNotContain("event:OwnerApprovalRequested", "memory-extract");
+        assertThat(order).doesNotContain("event:OwnerApprovalRequested");
+        assertThat(order).contains("memory-scheduled");
     }
 
     @Test
@@ -188,6 +181,7 @@ class PrdControllerTransactionBoundaryTest {
         assertThat(response.lifecycleStatus()).isEqualTo("waiting_owner_approval");
         assertThat(response.workItemId()).isEqualTo("WI202607114827");
         assertThat(order).contains("temporal-start", "event:OwnerApprovalRequested");
+        assertThat(order).doesNotContain("event:PRDConfirmed");
     }
 
     @Test
@@ -242,11 +236,31 @@ class PrdControllerTransactionBoundaryTest {
         when(manifests.freeze(any(), any(), any(), any(), any(), any())).thenReturn("manifest-1");
         when(manifests.requirementManifestId("prd-1")).thenReturn("manifest-1");
         when(manifests.requirementItems(any(), any(), any(), any())).thenReturn(List.of());
-        var memoryCandidates = mock(PrdMemoryCandidateService.class);
+        var memoryLifecycle = mock(ArtifactMemoryLifecycleService.class);
+        var artifactService = mock(ArtifactService.class);
+        var artifactTransitions = mock(com.asterism.artifact.ArtifactTransitionService.class);
+        // Artifact 是不可变 record，测试直接构造事实数据，避免依赖 final 类型 mock。
+        var productArtifact = new Artifact(
+                "art-product-1", ArtifactType.PRODUCT, "art-product-1",
+                "sys-1", "prd-1", "WI202607114827", "case-prd-1",
+                1, com.asterism.artifact.ArtifactStatus.APPROVED,
+                null, null, null,
+                new ObjectMapper().valueToTree(Map.of("requirementManifestId", "manifest-1")),
+                "hash-product-1", "prd-1:product", "requester", Instant.EPOCH,
+                "requester", Instant.EPOCH, "");
+        var productRef = com.asterism.artifact.ArtifactRef.from(productArtifact);
+        when(artifactService.require("art-product-1")).thenReturn(productArtifact);
+        when(artifactService.requireCurrentProduct(any(), any())).thenReturn(productArtifact);
+        when(artifactTransitions.confirmProduct(any(), any(), any(), any(), any(), any(), any()))
+                .thenAnswer(call -> {
+                    order.add("event:PRDConfirmed");
+                    return new com.asterism.artifact.ArtifactTransitionService.Result(
+                            null, productRef, null, null);
+                });
         org.mockito.Mockito.doAnswer(call -> {
             order.add("memory-extract");
             return null;
-        }).when(memoryCandidates).extractAsync(any(), any(), any(), any(), any());
+        }).when(memoryLifecycle).schedule(any());
         when(readiness.readiness(any())).thenReturn(new ExecutionReadinessService.SystemReadiness(
                 "sys-1", true, Instant.now(), "claude_sdk_team", List.of(), List.of()));
         when(workItemIds.nextId()).thenReturn("WI202607114827");
@@ -295,7 +309,7 @@ class PrdControllerTransactionBoundaryTest {
         var confirmations = new PrdConfirmationService(sessions, events, temporal, objectMapper,
                 new PrdDraftCodec(objectMapper), tx, access, systems, configurations, aggregate, workItemIds,
                 readiness, git, manifests, new PrdCitationService(),
-                memoryCandidates);
+                memoryLifecycle, artifactService, artifactTransitions);
         return new PrdController(mock(PrdConversationService.class), confirmations);
     }
 

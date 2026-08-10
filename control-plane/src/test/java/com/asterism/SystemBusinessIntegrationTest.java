@@ -138,11 +138,13 @@ class SystemBusinessIntegrationTest {
 
         var usedSystemId = id("sys-delete-used");
         createSystem(usedSystemId, "e2e-owner").andExpect(status().isOk());
-        mockMvc.perform(post("/api/v5/memory/candidates")
+        mockMvc.perform(post("/api/v5/systems/" + usedSystemId + "/knowledge")
                         .with(httpBasic("e2e-owner", "asterism"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"systemId\":\"" + usedSystemId + "\",\"category\":\"lesson\","
-                                + "\"title\":\"保留数据\",\"content\":\"不能随系统删除\"}"))
+                        .content("""
+                                {"kind":"page","title":"保留数据","anchorTexts":["不能随系统删除"],
+                                 "routePath":"/retain","apiEndpoints":[],"codeRefs":[],"sourceRef":"retain-data"}
+                                """))
                 .andExpect(status().isOk());
 
         mockMvc.perform(delete("/api/v5/systems/" + usedSystemId)
@@ -153,7 +155,7 @@ class SystemBusinessIntegrationTest {
     }
 
     @Test
-    void memoryListRequiresMembershipAndFiltersStatus() throws Exception {
+    void projectMemoryRequiresMembershipAndRejectsManualCandidateCreation() throws Exception {
         var systemId = id("sys-memory");
         var outsider = id("outsider");
         users.upsertUser(outsider, "Outsider", outsider + "@local", "asterism");
@@ -163,17 +165,14 @@ class SystemBusinessIntegrationTest {
         mockMvc.perform(post("/api/v5/memory/candidates")
                         .with(httpBasic("e2e-user", "asterism"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"systemId\":\"" + systemId + "\",\"category\":\"constraint\","
-                                + "\"title\":\"数据库迁移约束\",\"content\":\"禁止改历史迁移\"}"))
-                .andExpect(status().isOk());
+                        .content("{}"))
+                .andExpect(status().isMethodNotAllowed());
 
-        mockMvc.perform(get("/api/v5/memory?systemId=" + systemId + "&status=candidate")
+        mockMvc.perform(get("/api/v5/memory/candidates?systemId=" + systemId + "&status=PENDING")
                         .with(httpBasic("e2e-user", "asterism")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].category").value("constraint"))
-                .andExpect(jsonPath("$[0].title").value("数据库迁移约束"))
-                .andExpect(jsonPath("$[0].content").value("禁止改历史迁移"));
-        mockMvc.perform(get("/api/v5/memory?systemId=" + systemId + "&status=approved")
+                .andExpect(jsonPath("$").isEmpty());
+        mockMvc.perform(get("/api/v5/memory?systemId=" + systemId + "&status=ACTIVE")
                         .with(httpBasic("e2e-user", "asterism")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isEmpty());

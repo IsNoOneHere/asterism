@@ -98,8 +98,3 @@ export function SystemSelect({ systems, value, onChange, disabled = false, label
     </div>
   );
 }
-
-export function firstSystemId(systems: SystemProfile[]) {
-  // 系统列表来自后端权限过滤结果，默认选第一项即可。
-  return systems[0]?.systemId ?? '';
-}

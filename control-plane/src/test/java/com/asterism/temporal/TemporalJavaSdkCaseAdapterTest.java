@@ -54,7 +54,7 @@ class TemporalJavaSdkCaseAdapterTest {
                                 "mp-1", "Claude", "anthropic", "https://example.invalid", "claude", false)),
                         List.of(new TemporalCasePort.AgentSnapshot(
                                 "developer", "builtin", "claude_sdk_team", "mp-1", List.of("src"), "", 40, 900))),
-                new TemporalCasePort.PrdPayload(null, null, null, null))))
+                new TemporalCasePort.PrdPayload(null, null))))
                 .doesNotThrowAnyException();
 
         @SuppressWarnings("unchecked")
@@ -64,10 +64,9 @@ class TemporalJavaSdkCaseAdapterTest {
         var payload = (Map<String, Object>) captor.getValue();
         @SuppressWarnings("unchecked")
         var prd = (Map<String, Object>) payload.get("prd");
-        assertThat(prd.get("title")).isEqualTo("");
-        assertThat(prd.get("goal")).isEqualTo("");
-        assertThat(prd.get("acceptance_criteria")).isEqualTo(List.of());
-        assertThat(prd.get("draft_json")).isEqualTo(Map.of());
+        assertThat(prd.get("requirement_manifest_id")).isEqualTo("");
+        assertThat(prd.get("product_artifact")).isNull();
+        assertThat(prd).doesNotContainKeys("title", "goal", "acceptance_criteria", "draft_json");
         assertThat(payload).doesNotContainKeys("execution_provider", "claude_max_turns", "execution_timeout_seconds");
         assertThat(payload).containsEntry("execution_architecture", "claude_sdk_team");
         assertThat(payload).containsEntry("max_revisions", 5);

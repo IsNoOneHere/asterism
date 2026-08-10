@@ -64,36 +64,154 @@ export type WorkItemEvent = Schemas['DomainEventRecord'] & {
   eventId: string;
   eventType: string;
 };
+export type ArtifactType = 'PRODUCT' | 'PLANNING' | 'CODING' | 'VALIDATION' | 'RELEASE';
+export type ArtifactStatus = 'PROPOSED' | 'APPROVED' | 'REJECTED' | 'SUPERSEDED';
+export type ArtifactRef = {
+  artifactId: string;
+  artifactType: ArtifactType;
+  version: number;
+  contentHash: string;
+  rootArtifactId: string;
+  parentArtifactId?: string | null;
+  supersedesArtifactId?: string | null;
+  status: ArtifactStatus;
+};
+export type ArtifactSummary = {
+  ref: ArtifactRef;
+  systemId: string;
+  prdId: string;
+  workItemId: string;
+  caseId: string;
+  content: Record<string, unknown>;
+  createdBy: string;
+  createdAt: string;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
+};
+export type ArtifactGraphEdge = {
+  fromArtifactId: string;
+  toArtifactId: string;
+  edgeType: 'DERIVED_FROM' | 'SUPERSEDES';
+};
+export type ArtifactGraph = {
+  rootArtifactId: string;
+  nodes: ArtifactSummary[];
+  edges: ArtifactGraphEdge[];
+  effectiveHeads: Partial<Record<ArtifactType, ArtifactRef>>;
+  versionActions: Record<string, ArtifactVersionAction>;
+};
+export type ArtifactVersionAction = {
+  canSelect: boolean;
+  selectDisabledReason?: string | null;
+  canContinue: boolean;
+  continueDisabledReason?: string | null;
+};
+export type ArtifactTransition = {
+  transitionId: string;
+  fromStatus?: ArtifactStatus | null;
+  toStatus: ArtifactStatus;
+  actor: string;
+  note?: string | null;
+  domainEventId: string;
+  createdAt: string;
+};
+export type ArtifactEvidence = {
+  evidenceId: string;
+  evidenceType: string;
+  payload: Record<string, unknown>;
+  transitionId?: string | null;
+  domainEventId: string;
+  actor: string;
+  createdAt: string;
+};
+export type ArtifactDetail = {
+  artifact: ArtifactSummary;
+  transitions: ArtifactTransition[];
+  evidence: ArtifactEvidence[];
+};
+export type ArtifactVersionSelectionRequest = {
+  requestId: string;
+  artifact: ArtifactRef;
+  expectedHeads: Partial<Record<ArtifactType, ArtifactRef>>;
+};
+export type ArtifactVersionSelectionResponse = {
+  workItemId: string;
+  signalId: string;
+  status: string;
+  effectiveHeads: Partial<Record<ArtifactType, ArtifactRef>>;
+};
 export type WorkItemActionRequest = {
   requestId: string;
   expectedStatus: string;
   expectedProjectionSequence: number;
   note?: string;
   evidence?: string;
+  artifactRef?: ArtifactRef;
 };
 export type UserAccount = Schemas['UserAccountView'] & { userId: string; displayName: string; enabled: boolean };
-export type MemoryCategory = 'constraint' | 'convention' | 'lesson';
-export type MemoryAudience = 'product' | 'execution' | 'both';
+export type MemoryType = 'FACT' | 'DECISION' | 'CONSTRAINT' | 'EXPERIENCE';
+export type MemoryApplicability = 'PROJECT' | 'ARTIFACT_LINEAGE';
+export type MemoryStatus = 'ACTIVE' | 'OUTDATED' | 'ARCHIVED';
+export type MemoryCandidateStatus = 'PENDING' | 'CONFIRMED' | 'REJECTED' | 'OUTDATED';
+export type MemoryArtifactSource = {
+  artifactId: string;
+  artifactType: ArtifactType;
+  version: number;
+  status: ArtifactStatus;
+  workItemId?: string | null;
+  prdId?: string | null;
+  rootArtifactId: string;
+};
 export type MemoryDraft = {
-  category: MemoryCategory;
-  audience: MemoryAudience;
+  memoryType: MemoryType;
   title: string;
   content: string;
+  confidence: number;
+  applicability: MemoryApplicability;
+  expiresAt?: string | null;
   targetRefs: string[];
 };
-export type MemoryItem = Schemas['MemoryView'] & {
-  memoryId: string;
+export type MemoryCandidate = {
+  candidateId: string;
   systemId: string;
-  category: MemoryCategory | '';
+  projectScope: string;
+  memoryType: MemoryType;
+  artifactSourceId?: string | null;
+  artifactSource?: MemoryArtifactSource | null;
+  sourceKind: 'ARTIFACT_APPROVED' | 'CODING_COMPLETED' | 'VALIDATION_FAILED' | string;
   title: string;
   content: string;
-  status: string;
-  audience: MemoryAudience;
-  stableCandidateId?: string;
-  sourceRef?: string;
+  confidence: number;
+  applicability: MemoryApplicability;
+  expiresAt?: string | null;
+  status: MemoryCandidateStatus;
   targetRefs: string[];
   evidenceRefs: string[];
-  workItemId?: string | null;
+  sourceEventId?: string | null;
+  createdBy?: string;
+  reviewedBy?: string | null;
+  reviewNote?: string | null;
+  memoryId?: string | null;
+  createdAt?: string;
+  reviewedAt?: string | null;
+};
+export type MemoryItem = {
+  memoryId: string;
+  candidateId?: string | null;
+  systemId: string;
+  projectScope: string;
+  memoryType: MemoryType;
+  artifactSourceId?: string | null;
+  artifactSource?: MemoryArtifactSource | null;
+  title: string;
+  content: string;
+  confidence: number;
+  applicability: MemoryApplicability;
+  expiresAt?: string | null;
+  status: MemoryStatus;
+  targetRefs: string[];
+  evidenceRefs: string[];
   sourceEventId?: string | null;
   createdBy?: string;
   createdAt?: string;
@@ -133,8 +251,26 @@ export type ContextItem = {
 };
 export type Conversation = {
   messages: ConversationMessage[];
-  pendingAssistant: boolean;
-  pendingSince?: string;
+  activeExecution?: ProductAgentExecution | null;
+  latestExecution?: ProductAgentExecution | null;
+};
+export type ProductAgentExecutionStatus = 'CREATED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type ProductAgentExecution = {
+  executionId: string;
+  prdId: string;
+  status: ProductAgentExecutionStatus;
+  workflowId: string;
+  inputMessageId: string;
+  contextBundleId: string;
+  stage: string;
+  attempt: number;
+  failureCode?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  lastHeartbeat?: string | null;
+  resultMessageId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 };
 export type UiObservation = {
   page_title?: string;
@@ -190,24 +326,20 @@ export type KnowledgePageResult = {
   pageSize: number;
   totalPages: number;
 };
-export type PrdMessageResult = {
-  prdId?: string;
-  conversationId?: string;
-  status?: string;
-  assistantMessage?: string;
-  missingFields?: string[];
-  draft?: Record<string, unknown>;
-  workItemId?: string;
-  lifecycleStatus?: string;
-  assistantPending?: boolean;
+export type PrdMessageStartResult = {
+  executionId: string;
+  prdId: string;
+  conversationId: string;
+  status: ProductAgentExecutionStatus;
 };
 
-export type PrdDraftUpdate = {
-  title?: string;
-  goal?: string;
-  draft: Record<string, unknown>;
-  missingFields: string[];
-  status: string;
+export type ConfirmResponse = {
+  prdId: string;
+  workItemId: string;
+  caseId: string;
+  lifecycleStatus: string;
+  requirementManifestId?: string;
+  productArtifactId?: string;
 };
 
 export type PrdSession = {
@@ -332,8 +464,6 @@ export const api = {
     request<SystemProfile>('/api/v5/systems', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
   deleteSystem: (systemId: string) =>
     requestVoid('/api/v5/systems/' + encodeURIComponent(systemId), { method: 'DELETE' }),
-  updateSystem: (systemId: string, body: unknown) =>
-    request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId), { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body) }),
   updateSystemProfile: (systemId: string, body: unknown) =>
     request<SystemProfile>('/api/v5/systems/' + encodeURIComponent(systemId) + '/profile', { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body) }),
   gitConfiguration: (systemId: string) =>
@@ -375,17 +505,9 @@ export const api = {
   },
   attachmentUrl: (attachmentId: string) => '/api/v5/attachments/' + encodeURIComponent(attachmentId),
   sendPrdMessage: (systemId: string, body: { prdId?: string; content: string; attachmentIds?: string[] }) =>
-    request<PrdMessageResult>('/api/v5/systems/' + systemId + '/prd/messages', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
-  confirmPrdTargets: (prdId: string, entryIds: string[], accepted = true) =>
-    request<{ draft: Record<string, unknown> }>('/api/v5/prd-sessions/' + encodeURIComponent(prdId) + '/targets/confirm', {
-      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ entryIds, accepted }),
-    }),
-  updatePrdDraft: (prdId: string, body: { title: string; goal: string; acceptanceCriteria: string[] }) =>
-    request<PrdDraftUpdate>('/api/v5/prd-sessions/' + encodeURIComponent(prdId) + '/draft', {
-      method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(body),
-    }),
+    request<PrdMessageStartResult>('/api/v5/systems/' + systemId + '/prd/messages', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
   confirmPrd: (prdId: string) =>
-    request<PrdMessageResult>('/api/v5/prd-sessions/' + prdId + '/confirm', { method: 'POST' }),
+    request<ConfirmResponse>('/api/v5/prd-sessions/' + prdId + '/confirm', { method: 'POST' }),
   conversation: (conversationId: string) =>
     request<Conversation>('/api/v5/conversations/' + encodeURIComponent(conversationId)),
   prdSessions: (systemId: string) => request<PrdSession[]>('/api/v5/prd-sessions?systemId=' + encodeURIComponent(systemId)),
@@ -402,6 +524,16 @@ export const api = {
   deleteWorkItem: (workItemId: string) => requestVoid('/api/v5/work-items/' + encodeURIComponent(workItemId), { method: 'DELETE' }),
   // 后端主线程会补该接口；前端先固定预期契约。
   workItemEvents: (workItemId: string) => request<WorkItemEvent[]>('/api/v5/work-items/' + encodeURIComponent(workItemId) + '/events'),
+  workItemArtifacts: (workItemId: string) => request<ArtifactGraph>('/api/v5/work-items/' + encodeURIComponent(workItemId) + '/artifacts'),
+  artifactDetail: (artifactId: string) => request<ArtifactDetail>('/api/v5/artifacts/' + encodeURIComponent(artifactId)),
+  selectArtifactVersion: (workItemId: string, body: ArtifactVersionSelectionRequest) =>
+    request<ArtifactVersionSelectionResponse>('/api/v5/work-items/' + encodeURIComponent(workItemId) + '/artifacts/active', {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),
+    }),
+  continueWithArtifact: (workItemId: string, body: ArtifactVersionSelectionRequest) =>
+    request<ArtifactVersionSelectionResponse>('/api/v5/work-items/' + encodeURIComponent(workItemId) + '/artifacts/continue', {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),
+    }),
   approveOwner: (workItemId: string, body: WorkItemActionRequest) =>
     request('/api/v5/work-items/' + workItemId + '/owner-approval', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
   submitSignal: (workItemId: string, signalName: string, body: WorkItemActionRequest) =>
@@ -427,15 +559,21 @@ export const api = {
     requestVoid('/api/v5/systems/' + encodeURIComponent(systemId) + '/members/' + encodeURIComponent(userId) + '/' + encodeURIComponent(role), {
       method: 'DELETE',
     }),
-  memories: (systemId: string, status: string) =>
+  memories: (systemId: string, status: MemoryStatus) =>
     request<MemoryItem[]>('/api/v5/memory?systemId=' + encodeURIComponent(systemId) + '&status=' + encodeURIComponent(status)),
-  createMemory: (body: MemoryDraft & { systemId: string; workItemId?: string }) =>
-    request<MemoryItem>('/api/v5/memory/candidates', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }),
-  approveMemory: (memoryId: string, draft?: MemoryDraft) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/approve', {
-    method: 'POST', ...(draft ? { headers: jsonHeaders, body: JSON.stringify(draft) } : {}),
+  memoryCandidates: (systemId: string, status: MemoryCandidateStatus) =>
+    request<MemoryCandidate[]>('/api/v5/memory/candidates?systemId=' + encodeURIComponent(systemId) + '&status=' + encodeURIComponent(status)),
+  approveMemory: (candidateId: string, draft: MemoryDraft) =>
+    request<MemoryItem>('/api/v5/memory/candidates/' + encodeURIComponent(candidateId) + '/approve', {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify(draft),
+    }),
+  rejectMemory: (candidateId: string, note?: string) =>
+    request<MemoryCandidate>('/api/v5/memory/candidates/' + encodeURIComponent(candidateId) + '/reject', {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ note: note || '' }),
+    }),
+  archiveMemory: (memoryId: string) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/archive', {
+    method: 'POST',
   }),
-  rejectMemory: (memoryId: string) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/reject', { method: 'POST' }),
-  disableMemory: (memoryId: string) => request<MemoryItem>('/api/v5/memory/' + encodeURIComponent(memoryId) + '/disable', { method: 'POST' }),
   knowledge: (systemId: string, status: string) =>
     request<KnowledgeEntry[]>('/api/v5/systems/' + encodeURIComponent(systemId) + '/knowledge?status=' + encodeURIComponent(status)),
   knowledgePage: (systemId: string, status: string, page: number, query: string) =>

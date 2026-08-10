@@ -35,6 +35,8 @@ make test-web
 
 `make smoke-real` 需要 `V5_AGENT_API_KEY`、`V5_MODEL_API_KEY` 和 `V5_SMOKE_ADMIN_PASSWORD`，缺失会明确失败，不会退回 fake。Java 验证使用 `make test-java`；该目标需要 Docker/Testcontainers。
 
+Product Agent 的单次模型请求默认最多等待 600 秒，由 `V5_AGENT_MODEL_REQUEST_TIMEOUT_SECONDS` 配置；Worker 的对应 HTTP 调用默认等待 660 秒，由 `V5_PRODUCT_AGENT_HTTP_TIMEOUT_SECONDS` 配置，以覆盖模型执行并预留响应传输时间。调整时应保持 Worker HTTP 超时大于模型请求超时。
+
 `./asterism backup` 会短暂停止写入端以生成 PostgreSQL、Temporal、附件和 artifacts 的一致快照；Apple Container 因卷不能多挂载，会重建三个非数据库容器，期间有短暂不可用。备份含模型密钥等敏感数据库内容，目录权限为 `0700`，仍应放入加密存储。恢复是显式覆盖操作，执行前先保留当前备份。
 
 Temporal history 是正式持久数据。普通升级只执行 `./asterism upgrade` 替换 Server 与 Runner；Workflow 不兼容变更必须使用 Worker Versioning 或 `workflow.patched` 迁移。`prod-reset` 只允许用于明确可丢弃的本地测试环境，不能作为升级手段。
@@ -49,7 +51,7 @@ Temporal history 是正式持久数据。普通升级只执行 `./asterism upgra
 6. 在“修订历史”核对意见、提交人、时间、Diff 摘要和 `incremental | full`。
 7. 第二轮 Diff 通过后继续验证与发布。GitLab 模式另外在 `waiting_merge` 打回一次，确认原 MR 的 source branch 不变且 commit 已更新。
 
-Planning Activity 最长 45 分钟，Coding Activity 的 24 小时仅是失控保护，不是 15 分钟业务截止时间。人工审批期间没有 Activity 在运行，Temporal Workflow 可持续等待。`worker-artifacts` 持久卷同时保存 Claude 原生 runtime、Session 镜像和 `cases/<caseId>/workspace`；不要把该卷改成容器临时目录，否则 Worker 重启后会丢失会话加速上下文与未回传的局部代码。本地 Worker 优先从原生 runtime 恢复；runtime 丢失或 Worker 工作区路径变化时，系统根据已批准计划、Case workspace、候选 Diff 和人工意见重建新 Session。多 Worker 的共享 Session 物化需要独立 Artifact Store 适配器，不在单 Worker 部署中假装支持。Session 与工作区的保留周期应覆盖工作项生命周期，终态清理由后续运维策略统一处理。
+Planning Activity 最长 45 分钟，Coding Activity 的 24 小时仅是失控保护，不是 15 分钟业务截止时间。人工审批期间没有 Activity 在运行，Temporal Workflow 可持续等待。`worker-artifacts` 持久卷保存 Claude 原生 runtime、Session 镜像和 `cases/<caseId>/workspace`，只用于会话与工作区加速；跨阶段事实保存在 PostgreSQL 的 Product/Planning/Coding Artifact 中。runtime、Session 或 Workflow 候选丢失时，系统根据 Approved Artifact、当前仓库事实和人工意见重建新 Session 或阶段 checkpoint。不要把 `worker-artifacts` 改成容器临时目录，否则仍会增加重建成本并丢失未回传的局部代码。多 Worker 的共享 Session 物化需要独立运行时存储适配器，不在单 Worker 部署中假装支持。Session 与工作区的保留周期应覆盖工作项生命周期，终态清理由后续运维策略统一处理。
 
 管理员在“Agent”页设置 `maxRevisions`，取值 1–20，默认 5。该值只对之后创建的 Case 生效。达到上限时事件应为 `WorkerBlocked(reason=revision_limit_reached)`；选择“完整重做”后轮次从 0 重新计算。
 

@@ -22,6 +22,7 @@ from asterism_worker.contracts import (
     PLAN_BASE_CHANGED_ERROR,
     PatchApplyRequest,
     PatchApplyResult,
+    RepoSnapshot,
 )
 from asterism_worker.providers.claude_sdk_planning import PlanningResultError
 from asterism_worker.providers.factory import build_execution_provider
@@ -35,6 +36,35 @@ from asterism_worker.repo_source import (
 )
 
 log = logging.getLogger(__name__)
+
+
+@activity.defn
+async def capture_case_revisions(request: dict) -> dict[str, str]:
+    """Context 构建前读取真实仓库 Head，禁止用计划内旧基线代替环境事实。"""
+
+    settings = load_settings()
+    repos = [RepoSnapshot.model_validate(value) for value in request.get("repos", [])]
+    revisions: dict[str, str] = {}
+    for repo in repos:
+        temporary: Path | None = None
+        try:
+            if repo.clone_mode == "gitlab":
+                temporary = await prepare_repo_workspace(repo, request["system_id"], settings)
+                path = temporary
+            else:
+                path = Path(repo.local_path).expanduser()
+            revisions[repo.repo_id] = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=path,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        finally:
+            if temporary is not None:
+                cleanup_repo_workspace(temporary)
+    log.info("真实 Git 基线已读取 work_item=%s repos=%s", request["work_item_id"], len(revisions))
+    return revisions
 
 
 @activity.defn

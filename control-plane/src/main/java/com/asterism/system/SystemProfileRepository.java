@@ -9,6 +9,7 @@ public interface SystemProfileRepository extends CrudRepository<SystemProfile, S
                 or exists (select 1 from work_items where system_id = :systemId)
                 or exists (select 1 from domain_events where system_id = :systemId)
                 or exists (select 1 from memory_items where system_id = :systemId)
+                or exists (select 1 from memory_candidates where system_id = :systemId)
                 or exists (select 1 from context_manifests where system_id = :systemId)
                 or exists (select 1 from conversation_messages where system_id = :systemId)
                 or exists (select 1 from attachments where system_id = :systemId)

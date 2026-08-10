@@ -14,6 +14,7 @@ from agent_service.llm import (
     LlmClient,
     ModelConfig,
     OpenAICompatibleAdapter,
+    RoutedLlmClient,
     StructuredOutputFormat,
 )
 from agent_service.model_errors import ModelCallError, ModelErrorCode
@@ -73,7 +74,7 @@ def test_legacy_execution_endpoints_are_removed():
     assert client.post("/execute", json={}).status_code == 404
 
 
-def test_prd_draft_retries_json_and_asks_acceptance_in_chinese():
+def test_prd_draft_retries_json_and_limits_clarification_to_business_missing_fields():
     llm = FakeLlmClient([
         "not json",
         '{"patch":{"title":"登录页错误提示","goal":"做登录页","scope":"code_change","acceptanceCriteria":[]},"assistant_message":"请补充验收标准。","citations":{}}',
@@ -87,21 +88,67 @@ def test_prd_draft_retries_json_and_asks_acceptance_in_chinese():
         "system_id": "sys-1",
         "content": "做登录页",
         "current_draft": {},
-        "missing_fields": [],
+        "missing_fields": ["acceptance_criteria"],
         "conversation_history": [{"role": "user", "content": "先做登录页"}],
-        "context_items": [{"refId": "MEM:mem-1", "type": "memory", "content": "只能改 src"}],
+        "context_items": [{"refId": "MEM:mem-1", "type": "memory", "content": "面向一线业务人员"}],
     })
 
     assert response.status_code == 200
     assert response.json()["patch"]["acceptanceCriteria"] == []
     assert "验收标准" in response.json()["assistant_message"]
-    assert "只能改 src" in llm.prompts[0]
+    assert "面向一线业务人员" in llm.prompts[0]
     assert "Never invent a refId" in llm.prompts[0]
     assert "Never return targets" in llm.prompts[0]
+    assert "You are a business product manager" in llm.prompts[0]
+    assert "Planning owns implementation" in llm.prompts[0]
+    assert "Ask at most one question per missing field and at most three questions total" in llm.prompts[0]
+    assert "推荐答案：..." in llm.prompts[0]
+    assert "endpoint paths, HTTP methods, authentication" in llm.prompts[0]
     assert [item.mode for item in llm.output_formats if item] == ["json_object", "json_object"]
     assert "JSONDecodeError" in llm.prompts[1]
     assert "Previous output:\nnot json" in llm.prompts[1]
     assert '"citations"' in llm.prompts[0]
+
+
+def test_prd_draft_excludes_system_knowledge_and_stops_questions_when_complete():
+    llm = FakeLlmClient([
+        '{"patch":{"scope":"code_change"},"assistant_message":"草稿已完整，请确认。","citations":{}}',
+    ])
+    client = TestClient(create_app(
+        llm,
+        model_config_fetcher=lambda *args: ModelConfig(managed=True, model="model", api_key="secret"),
+    ))
+
+    response = client.post("/prd-draft", headers=INTERNAL_HEADERS, json={
+        "system_id": "sys-1",
+        "content": "接口必须沿用现有网关限制",
+        "current_draft": {
+            "title": "心跳能力",
+            "goal": "让业务人员确认服务可用",
+            "acceptanceCriteria": ["业务人员能看到明确的可用状态"],
+        },
+        "missing_fields": [],
+        "conversation_history": [],
+        "context_items": [
+            {
+                "refId": "KN:health",
+                "type": "system_knowledge",
+                "content": "路由: /health\n接口: GET /internal/health\n代码位置: src/health.py",
+            },
+            {
+                "refId": "MEM:audience",
+                "type": "memory",
+                "content": "业务状态需要让值班负责人理解",
+            },
+        ],
+    })
+
+    assert response.status_code == 200
+    assert "接口必须沿用现有网关限制" in llm.prompts[0]
+    assert "业务状态需要让值班负责人理解" in llm.prompts[0]
+    assert "GET /internal/health" not in llm.prompts[0]
+    assert "src/health.py" not in llm.prompts[0]
+    assert "When Missing fields is empty, ask no questions" in llm.prompts[0]
 
 
 def test_prd_draft_accepts_shared_fixture():
@@ -268,40 +315,6 @@ def test_prd_draft_returns_typed_error_after_failed_repair():
     assert "acceptanceCriteria" in llm.prompts[1]
 
 
-def test_prd_memory_candidates_use_independent_strict_contract():
-    llm = FakeLlmClient([json.dumps({
-        "candidates": [{
-            "category": "constraint",
-            "audience": "both",
-            "title": "发布权限",
-            "content": "仅负责人可确认发布",
-            "target_refs": ["page-release"],
-            "evidence_refs": ["MEM:rule-1"],
-        }],
-    }, ensure_ascii=False)])
-    client = TestClient(create_app(
-        llm,
-        model_config_fetcher=lambda *args: ModelConfig(managed=True, model="model", api_key="secret"),
-    ))
-
-    response = client.post("/prd-memory-candidates", headers=INTERNAL_HEADERS, json={
-        "system_id": "sys-1",
-        "draft": {
-            "title": "发布流程",
-            "goal": "明确权限",
-            "scope": "code_change",
-            "acceptanceCriteria": ["负责人可确认"],
-        },
-        "target_refs": ["page-release"],
-        "context_items": [{"refId": "MEM:rule-1", "content": "负责人批准后才能发布"}],
-    })
-
-    assert response.status_code == 200
-    assert response.json()["candidates"][0]["evidence_refs"] == ["MEM:rule-1"]
-    assert "Only propose durable reusable knowledge" in llm.prompts[0]
-    assert "page-release" in llm.prompts[0]
-
-
 @pytest.mark.parametrize("mode,has_schema_prompt", [
     ("json_schema", False),
     ("json_object", True),
@@ -404,6 +417,7 @@ def test_openai_adapter_maps_text_image_and_structured_modes(monkeypatch):
     assert calls[3]["messages"][0]["content"][1]["type"] == "image_url"
     assert calls[3]["max_tokens"] == 1
     assert clients[0]["api_key"] == "test-key"
+    assert clients[0]["timeout"] == 600
 
 
 def test_anthropic_adapter_maps_image_and_json_schema(monkeypatch):
@@ -435,6 +449,15 @@ def test_anthropic_adapter_maps_image_and_json_schema(monkeypatch):
     assert captured["headers"]["x-api-key"] == "secret"
     assert captured["json"]["messages"][0]["content"][1]["type"] == "image"
     assert captured["json"]["output_config"]["format"]["type"] == "json_schema"
+    assert captured["timeout"] == 600
+
+
+def test_routed_client_injects_configured_model_request_timeout():
+    client = RoutedLlmClient(AgentSettings(model_request_timeout_seconds=321))
+
+    assert client.registry.get("openai").timeout_seconds == 321
+    assert client.registry.get("openai-compat").timeout_seconds == 321
+    assert client.registry.get("anthropic").timeout_seconds == 321
 
 
 def test_openai_adapter_maps_image_rejection_to_typed_capability_error(monkeypatch):
@@ -680,9 +703,6 @@ def test_runner_business_endpoints_require_internal_token():
     ))
 
     assert client.post("/prd-draft", json={"system_id": "sys-1", "content": "g"}).status_code == 401
-    assert client.post("/prd-memory-candidates", json={
-        "system_id": "sys-1", "draft": {},
-    }).status_code == 401
     assert client.get("/readiness", params={"system_id": "sys-1"}).status_code == 401
     assert client.post(
         "/model-connection-test", params={"system_id": "sys-1", "profile_id": "mp-1"},

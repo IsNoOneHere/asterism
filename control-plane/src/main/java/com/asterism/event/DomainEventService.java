@@ -79,12 +79,30 @@ public class DomainEventService {
             Map<String, Object> payload,
             String correlationId,
             String causationId,
-            String idempotencyKey) {
+            String idempotencyKey,
+            String eventId) {
+
+        public AppendEvent(
+                DomainEventType eventType,
+                String systemId,
+                String caseId,
+                String prdId,
+                String workItemId,
+                String actorId,
+                String source,
+                Map<String, Object> payload,
+                String correlationId,
+                String causationId,
+                String idempotencyKey) {
+            this(eventType, systemId, caseId, prdId, workItemId, actorId, source, payload,
+                    correlationId, causationId, idempotencyKey, null);
+        }
+
         DomainEventRecord toRecord(ObjectMapper objectMapper) {
             try {
                 return new DomainEventRecord(
                         null,
-                        "evt-" + UUID.randomUUID(),
+                        eventId == null || eventId.isBlank() ? "evt-" + UUID.randomUUID() : eventId,
                         eventType.name(),
                         "v5.0",
                         systemId,

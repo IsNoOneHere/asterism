@@ -170,8 +170,8 @@ test('uses lifecycle boundaries for exact stage times', () => {
     { id: 'approval', startedAt: '2026-07-17T01:00:00Z', completedAt: '2026-07-17T02:00:00Z', durationMs: 3_600_000 },
     { id: 'execution', startedAt: '2026-07-17T02:00:00Z', completedAt: '2026-07-17T04:00:00Z', durationMs: 7_200_000 },
     { id: 'patch', startedAt: '2026-07-17T04:00:00Z', completedAt: '2026-07-17T05:00:00Z', durationMs: 3_600_000 },
-    { id: 'validation', startedAt: '2026-07-17T05:00:00Z', completedAt: '2026-07-17T06:00:00Z', durationMs: 3_600_000 },
-    { id: 'release', startedAt: '2026-07-17T06:00:00Z', completedAt: '2026-07-17T08:00:00Z', durationMs: 7_200_000 },
+    { id: 'validation', startedAt: '2026-07-17T05:00:00Z', completedAt: '2026-07-17T07:00:00Z', durationMs: 7_200_000 },
+    { id: 'release', startedAt: '2026-07-17T07:00:00Z', completedAt: '2026-07-17T08:00:00Z', durationMs: 3_600_000 },
     { id: 'completed', startedAt: '2026-07-17T08:00:00Z', completedAt: '2026-07-17T08:00:00Z', durationMs: 0 },
   ]);
 });

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { extractClarification, PendingAssistantBubble } from '../src/pages/NewPrdPage';
+import { ExecutionProgressBubble, extractClarification } from '../src/pages/NewPrdPage';
 import { jsonResponse, renderApp, renderAppWithRouter, resetAppTestState } from './appTestHarness';
 
 beforeEach(() => {
@@ -9,10 +9,159 @@ beforeEach(() => {
   URL.revokeObjectURL = vi.fn();
 });
 
-test('pending assistant bubble announces analysis progress', () => {
-  render(<PendingAssistantBubble />);
+function executionProjection(status: string, overrides: Record<string, unknown> = {}) {
+  return {
+    executionId: 'exec-1', prdId: 'prd-1', status,
+    workflowId: 'product-agent-exec-1', inputMessageId: 'msg-1', contextBundleId: 'bundle-1',
+    stage: status, attempt: 1, ...overrides,
+  };
+}
 
-  expect(screen.getByRole('status')).toHaveTextContent('正在理解你的回答并整理下一个问题…');
+test('execution progress bubble announces the projected stage', () => {
+  render(<ExecutionProgressBubble stage="ANALYZING_REQUIREMENT" />);
+
+  expect(screen.getByRole('status')).toHaveTextContent('正在分析需求与相关图片…');
+});
+
+test('send start result alone keeps polling and disables composer before projection catches up', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  let conversationCalls = 0;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/systems/alpha-system/prd/messages' && init?.method === 'POST') {
+      return jsonResponse({
+        executionId: 'exec-local-created', prdId: 'prd-local-created',
+        conversationId: 'conv-local-created', status: 'CREATED',
+      });
+    }
+    if (path === '/api/v5/prd-sessions/prd-local-created') return jsonResponse({
+      prdId: 'prd-local-created', systemId: 'alpha-system', conversationId: 'conv-local-created',
+      status: 'need_clarification', createdBy: 'admin', draft: {}, missingFields: ['title'],
+    });
+    if (path === '/api/v5/conversations/conv-local-created') {
+      conversationCalls += 1;
+      return jsonResponse({ messages: [], activeExecution: null, latestExecution: null });
+    }
+    return fallback(input, init);
+  });
+
+  renderApp('/work-items/new');
+  fireEvent.change(await screen.findByLabelText('需求描述'), { target: { value: '仅返回 executionId 的发送' } });
+  fireEvent.click(screen.getByRole('button', { name: '开始分析' }));
+
+  expect(await screen.findByText('请求已进入队列，正在准备分析…')).toBeInTheDocument();
+  expect(screen.getByLabelText('需求描述')).toBeDisabled();
+  await waitFor(() => expect(conversationCalls).toBeGreaterThanOrEqual(2), { timeout: 3_000 });
+});
+
+test('page refresh restores running execution and polls projected stage', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  let conversationCalls = 0;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-running') return jsonResponse({
+      prdId: 'prd-running', systemId: 'alpha-system', conversationId: 'conv-running',
+      status: 'need_clarification', createdBy: 'admin', draft: {}, missingFields: ['goal'],
+    });
+    if (path === '/api/v5/conversations/conv-running') {
+      conversationCalls += 1;
+      const running = executionProjection('RUNNING', {
+        executionId: 'exec-running', prdId: 'prd-running', stage: 'ANALYZING_REQUIREMENT',
+      });
+      return jsonResponse({ messages: [], activeExecution: running, latestExecution: running });
+    }
+    return fallback(input, init);
+  });
+
+  renderApp('/work-items/new/prd-running');
+
+  expect(await screen.findByText('正在分析需求与相关图片…')).toBeInTheDocument();
+  expect(screen.getByLabelText('需求描述')).toBeDisabled();
+  await waitFor(() => expect(conversationCalls).toBeGreaterThanOrEqual(2), { timeout: 3_000 });
+});
+
+test('slow completion clears local execution and refreshes session and conversation once', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  let conversationCalls = 0;
+  let sessionCalls = 0;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-slow') {
+      sessionCalls += 1;
+      const completed = conversationCalls >= 2;
+      return jsonResponse({
+        prdId: 'prd-slow', systemId: 'alpha-system', conversationId: 'conv-slow',
+        status: completed ? 'waiting_user_confirm' : 'need_clarification', createdBy: 'admin',
+        draft: completed
+          ? { title: '慢任务', goal: '等待完成', acceptanceCriteria: ['完成后刷新'] }
+          : {},
+        missingFields: completed ? [] : ['title', 'goal', 'acceptance_criteria'],
+      });
+    }
+    if (path === '/api/v5/conversations/conv-slow') {
+      conversationCalls += 1;
+      if (conversationCalls === 1) {
+        const running = executionProjection('RUNNING', {
+          executionId: 'exec-slow', prdId: 'prd-slow', stage: 'GENERATING_RESPONSE',
+        });
+        return jsonResponse({ messages: [], activeExecution: running, latestExecution: running });
+      }
+      return jsonResponse({
+        messages: [{
+          messageId: 'assistant-slow', conversationId: 'conv-slow', senderType: 'assistant',
+          content: '慢任务已完成',
+        }],
+        activeExecution: null,
+        latestExecution: executionProjection('COMPLETED', {
+          executionId: 'exec-slow', prdId: 'prd-slow', stage: 'COMPLETED',
+        }),
+      });
+    }
+    return fallback(input, init);
+  });
+
+  renderApp('/work-items/new/prd-slow');
+  expect(await screen.findByText('正在生成回复和需求草稿…')).toBeInTheDocument();
+  expect(await screen.findByText('慢任务已完成', {}, { timeout: 3_000 })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: '需求确认' })).toBeInTheDocument();
+  expect(screen.getByLabelText('需求描述')).toBeEnabled();
+  await waitFor(() => expect(sessionCalls).toBe(2));
+  await waitFor(() => expect(conversationCalls).toBe(3));
+});
+
+test.each([
+  ['FAILED', 'AI 分析失败'],
+  ['CANCELLED', 'AI 分析已取消'],
+] as const)('%s execution shows warning without fabricating assistant message', async (status, warning) => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === `/api/v5/prd-sessions/prd-${status.toLowerCase()}`) return jsonResponse({
+      prdId: `prd-${status.toLowerCase()}`, systemId: 'alpha-system',
+      conversationId: `conv-${status.toLowerCase()}`, status: 'need_clarification',
+      createdBy: 'admin', draft: {}, missingFields: ['goal'],
+    });
+    if (path === `/api/v5/conversations/conv-${status.toLowerCase()}`) return jsonResponse({
+      messages: [{
+        messageId: `user-${status}`, conversationId: `conv-${status.toLowerCase()}`,
+        senderType: 'user', content: '保留的用户输入',
+      }],
+      activeExecution: null,
+      latestExecution: executionProjection(status, {
+        executionId: `exec-${status.toLowerCase()}`, prdId: `prd-${status.toLowerCase()}`,
+        stage: status,
+      }),
+    });
+    return fallback(input, init);
+  });
+
+  renderApp(`/work-items/new/prd-${status.toLowerCase()}`);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(warning);
+  expect(screen.getByText('保留的用户输入')).toBeInTheDocument();
+  expect(screen.getByLabelText('需求描述')).toBeEnabled();
+  expect(screen.queryByText('AI 生成失败，本轮未修改草稿。你可以重试或手工编辑。')).not.toBeInTheDocument();
+  expect(screen.queryByText('正在理解你的回答并整理下一个问题…')).not.toBeInTheDocument();
 });
 
 test('new prd page keeps two analysis turns in the creation workspace', async () => {
@@ -104,25 +253,35 @@ test('dragging images uses the same upload tray and backend limit', async () => 
 });
 
 test('clarification parser accepts one question, splits numbered questions and preserves ordinary markdown', () => {
-  expect(extractClarification('我先确认一个问题：\n心跳接口是否需要认证？')).toEqual({
+  expect(extractClarification('我先确认一个问题：\n这个能力主要解决什么业务场景？')).toEqual({
     intro: '我先确认一个问题：',
-    questions: ['心跳接口是否需要认证？'],
+    questions: ['这个能力主要解决什么业务场景？'],
+    suggestions: {},
   });
-  expect(extractClarification('先确认：\n**失败时需要自动重试吗？**')).toEqual({
+  expect(extractClarification('先确认：\n**业务方如何判断需求已经完成？**')).toEqual({
     intro: '先确认：',
-    questions: ['失败时需要自动重试吗？'],
+    questions: ['业务方如何判断需求已经完成？'],
+    suggestions: {},
   });
   expect(extractClarification('我还需要确认：\n1. 目标用户是谁？\n2. 失败时如何提示？')).toEqual({
     intro: '我还需要确认：',
     questions: ['目标用户是谁？', '失败时如何提示？'],
+    suggestions: {},
   });
-  expect(extractClarification('请补充：\n- 接口路径是什么？（例如 /api/health）\n- 是否需要认证？')).toEqual({
+  expect(extractClarification('请补充：\n- 哪些用户需要看到结果？\n- 这次需求不包含哪些场景？')).toEqual({
     intro: '请补充：',
-    questions: ['接口路径是什么？（例如 /api/health）', '是否需要认证？'],
+    questions: ['哪些用户需要看到结果？', '这次需求不包含哪些场景？'],
+    suggestions: {},
   });
   expect(extractClarification('## 建议\n先完成登录页，再补充验收标准。')).toEqual({
     intro: '## 建议\n先完成登录页，再补充验收标准。',
     questions: [],
+    suggestions: {},
+  });
+  expect(extractClarification('1. 谁来使用？\n推荐答案：管理员和系统运维人员。')).toEqual({
+    intro: '',
+    questions: ['谁来使用？'],
+    suggestions: { '谁来使用？': '管理员和系统运维人员。' },
   });
 });
 
@@ -227,7 +386,7 @@ test('imported waiting input stays available for conversation even with a reserv
         draft: { title: '导入待输入需求', goal: '补全验收标准', acceptanceCriteria: [] }, missingFields: [],
       });
     }
-    if (path === '/api/v5/conversations/conv-imported') return jsonResponse({ messages: [], pendingAssistant: false });
+    if (path === '/api/v5/conversations/conv-imported') return jsonResponse({ messages: [], activeExecution: null, latestExecution: null });
     return fallback(input, init);
   });
 
@@ -256,7 +415,8 @@ test('failed model turn keeps the conversation open for recovery', async () => {
         messageId: 'failed-message', conversationId: 'conv-failed', senderType: 'assistant',
         content: 'AI 生成失败，本轮未修改草稿。你可以重试或手工编辑。',
       }],
-      pendingAssistant: false,
+      activeExecution: null,
+      latestExecution: null,
     });
     return fallback(input, init);
   });
@@ -305,7 +465,7 @@ test('draft editor restores session in the independent creation workspace', asyn
       });
     }
     if (path === '/api/v5/conversations/conv-resume') {
-      return jsonResponse({ messages: [{ messageId: 'resume-message', conversationId: 'conv-resume', senderType: 'assistant', content: '请补充验收标准' }], pendingAssistant: false });
+      return jsonResponse({ messages: [{ messageId: 'resume-message', conversationId: 'conv-resume', senderType: 'assistant', content: '请补充验收标准' }], activeExecution: null, latestExecution: null });
     }
     return fallback(input, init);
   });
@@ -357,9 +517,11 @@ test('confirmable draft shows a read-only confirmation card and related images',
       });
     }
     if (path === '/api/v5/conversations/conv-citations') return jsonResponse({
-      pendingAssistant: false,
+      activeExecution: null,
+      latestExecution: null,
       messages: [{
-        messageId: 'assistant-1', conversationId: 'conv-citations', senderType: 'assistant', content: '草稿已生成',
+        messageId: 'assistant-1', conversationId: 'conv-citations', senderType: 'assistant',
+        content: '草稿已生成，还想确认：\n哪些业务用户需要看到心跳结果？',
         attachmentIds: ['attachment-1', 'attachment-2'],
         contextItems: [
           { refId: 'MSG:msg-1', type: 'user_message', title: '当前用户输入', sourceRef: 'prd-citations' },
@@ -382,7 +544,11 @@ test('confirmable draft shows a read-only confirmation card and related images',
   expect(screen.getByRole('button', { name: '预览相关图片 1' }).querySelector('img'))
     .toHaveAttribute('src', '/api/v5/attachments/attachment-1');
   expect(screen.queryByText('来自用户')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('需求问题进度')).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: '哪些业务用户需要看到心跳结果？' })).not.toBeInTheDocument();
+  expect(screen.getByText('哪些业务用户需要看到心跳结果？')).toBeInTheDocument();
   expect(screen.getByLabelText('需求描述')).toBeEnabled();
+  expect(screen.getByRole('button', { name: '确认并生成工作项' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '继续补充' })).not.toBeInTheDocument();
 });
 
@@ -397,13 +563,16 @@ test('generated work item replaces the draft editor with focused follow-up actio
         draft: { title: '已生成需求', goal: '完成需求', acceptanceCriteria: ['通过验收'] }, missingFields: [],
       });
     }
-    if (path === '/api/v5/conversations/conv-complete') return jsonResponse({ messages: [], pendingAssistant: false });
+    if (path === '/api/v5/conversations/conv-complete') return jsonResponse({ messages: [], activeExecution: null, latestExecution: null });
     return fallback(input, init);
   });
 
   renderApp('/work-items/new/prd-complete');
 
-  expect(await screen.findByRole('heading', { name: '工作项已生成' })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: '工作项创建成功' })).toBeInTheDocument();
+  expect(screen.getByText('创建完成')).toBeInTheDocument();
+  expect(screen.getByText('当前状态')).toBeInTheDocument();
+  expect(screen.getByText(/审批通过后进入规划与执行/)).toBeInTheDocument();
   expect(screen.getByRole('link', { name: '查看工作项' })).toHaveAttribute('href', '/work-items/wi-complete');
   expect(screen.getByRole('button', { name: '创建另一项' })).toBeInTheDocument();
   expect(screen.queryByLabelText('PRD 标题')).not.toBeInTheDocument();
@@ -426,7 +595,7 @@ test('suspected targets stay out of the streamlined PRD page', async () => {
       });
     }
     if (path === '/api/v5/conversations/conv-prd-1') {
-      return jsonResponse({ messages: [{ messageId: 'assistant-target', conversationId: 'conv-prd-1', senderType: 'assistant', content: 'AI 定位到可能相关的系统位置' }], pendingAssistant: false });
+      return jsonResponse({ messages: [{ messageId: 'assistant-target', conversationId: 'conv-prd-1', senderType: 'assistant', content: 'AI 定位到可能相关的系统位置' }], activeExecution: null, latestExecution: null });
     }
     return fallback(input, init);
   });
@@ -447,7 +616,7 @@ test('waiting draft exposes only one final confirmation action', async () => {
   expect(screen.queryByRole('button', { name: '确认 PRD' })).not.toBeInTheDocument();
 });
 
-test('multiple clarification questions show only the first and submit through the unified input', async () => {
+test('multiple clarification questions keep the full queue while focusing the first unanswered item', async () => {
   const fallback = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
@@ -460,25 +629,101 @@ test('multiple clarification questions show only the first and submit through th
         messageId: 'assistant-questions', conversationId: 'conv-questions', senderType: 'assistant',
         content: '还需要确认：\n1. 谁来使用？\n2. 什么情况下算完成？\n3. 失败时如何提示？',
       }],
-      pendingAssistant: false,
+      activeExecution: null,
+      latestExecution: null,
     });
     return fallback(input, init);
   });
   renderApp('/work-items/new/prd-questions');
 
   expect(await screen.findAllByText('谁来使用？')).toHaveLength(2);
-  expect(screen.queryByText('什么情况下算完成？')).not.toBeInTheDocument();
-  expect(screen.queryByText('失败时如何提示？')).not.toBeInTheDocument();
-  const input = screen.getByPlaceholderText('输入这个问题的回答…');
+  expect(screen.getByText('什么情况下算完成？')).toBeInTheDocument();
+  expect(screen.getByText('失败时如何提示？')).toBeInTheDocument();
+  expect(screen.getByLabelText('需求问题进度')).toHaveTextContent('问题 1/3');
+  expect(screen.getByLabelText('需求问题进度')).toHaveTextContent('剩余 3 项');
+  const input = screen.getByPlaceholderText('输入你的答案，或先采用 AI 建议再修改…');
   expect(document.querySelector('.prd-message-avatar')).not.toBeInTheDocument();
   fireEvent.change(input, { target: { value: '管理员' } });
-  fireEvent.click(screen.getByRole('button', { name: '发送回答' }));
+  fireEvent.click(screen.getByRole('button', { name: '回答并进入下一题' }));
 
   await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/prd/messages', expect.objectContaining({
     method: 'POST',
     body: JSON.stringify({
       prdId: 'prd-questions',
       content: '针对问题「谁来使用？」的回答：\n管理员',
+      attachmentIds: [],
+    }),
+  })));
+});
+
+test('AI recommendation is adopted into the editor but is not submitted automatically', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-suggestion') return jsonResponse({
+      prdId: 'prd-suggestion', systemId: 'alpha-system', conversationId: 'conv-suggestion',
+      status: 'need_clarification', createdBy: 'admin',
+      draft: { title: '心跳接口', goal: '统一服务健康检查', acceptanceCriteria: ['负责人能看到明确的服务状态'] },
+      missingFields: [],
+    });
+    if (path === '/api/v5/conversations/conv-suggestion') return jsonResponse({
+      messages: [{
+        messageId: 'assistant-suggestion', conversationId: 'conv-suggestion', senderType: 'assistant',
+        content: '还需要确认：\n1. 哪些用户需要看到心跳结果？\n推荐答案：值班负责人和系统负责人。\n2. 业务方如何判断需求已经完成？\n建议：负责人能看到明确、易懂的服务可用状态。',
+      }],
+      activeExecution: null,
+      latestExecution: null,
+    });
+    return fallback(input, init);
+  });
+  renderApp('/work-items/new/prd-suggestion');
+
+  const recommendation = await screen.findByLabelText('AI 推荐答案');
+  expect(recommendation).toHaveTextContent('值班负责人和系统负责人。');
+  expect(screen.getByRole('heading', { name: '需求摘要' }).closest('aside')).toHaveTextContent('心跳接口');
+  const callCount = vi.mocked(fetch).mock.calls.length;
+  fireEvent.click(within(recommendation).getByRole('button', { name: '采用建议' }));
+
+  expect(screen.getByLabelText('回答 AI 当前问题')).toHaveValue('值班负责人和系统负责人。');
+  expect(vi.mocked(fetch).mock.calls).toHaveLength(callCount);
+  fireEvent.click(screen.getByRole('button', { name: '回答并进入下一题' }));
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/prd/messages', expect.objectContaining({
+    method: 'POST',
+    body: JSON.stringify({
+      prdId: 'prd-suggestion',
+      content: '针对问题「哪些用户需要看到心跳结果？」的回答：\n值班负责人和系统负责人。',
+      attachmentIds: [],
+    }),
+  })));
+});
+
+test('skipping a question is persisted as an explicit answer protocol', async () => {
+  const fallback = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === '/api/v5/prd-sessions/prd-skip') return jsonResponse({
+      prdId: 'prd-skip', systemId: 'alpha-system', conversationId: 'conv-skip',
+      status: 'need_clarification', createdBy: 'admin', draft: {}, missingFields: [],
+    });
+    if (path === '/api/v5/conversations/conv-skip') return jsonResponse({
+      messages: [{
+        messageId: 'assistant-skip', conversationId: 'conv-skip', senderType: 'assistant',
+        content: '1. 谁来使用？\n2. 什么情况下算完成？',
+      }],
+      activeExecution: null,
+      latestExecution: null,
+    });
+    return fallback(input, init);
+  });
+  renderApp('/work-items/new/prd-skip');
+
+  fireEvent.click(await screen.findByRole('button', { name: '暂不回答' }));
+
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/v5/systems/alpha-system/prd/messages', expect.objectContaining({
+    method: 'POST',
+    body: JSON.stringify({
+      prdId: 'prd-skip',
+      content: '针对问题「谁来使用？」的回答：\n暂不回答',
       attachmentIds: [],
     }),
   })));
@@ -494,21 +739,25 @@ test('persisted answers hide the question protocol and advance to the next AI qu
     });
     if (path === '/api/v5/conversations/conv-answered') return jsonResponse({
       messages: [
-        { messageId: 'assistant-auth', conversationId: 'conv-answered', senderType: 'assistant', content: '先确认：\n心跳接口是否需要认证？' },
-        { messageId: 'user-auth', conversationId: 'conv-answered', senderType: 'user', content: '针对问题「心跳接口是否需要认证？」的回答：\n不需要认证，仅供内网监控调用。' },
-        { messageId: 'assistant-status', conversationId: 'conv-answered', senderType: 'assistant', content: '好的，已记录。接下来确认：\n服务异常时希望返回什么状态码？' },
+        { messageId: 'assistant-scene', conversationId: 'conv-answered', senderType: 'assistant', content: '先确认：\n这个能力主要解决什么业务场景？' },
+        { messageId: 'user-scene', conversationId: 'conv-answered', senderType: 'user', content: '针对问题「这个能力主要解决什么业务场景？」的回答：\n值班人员需要快速确认服务是否可用。' },
+        { messageId: 'assistant-user', conversationId: 'conv-answered', senderType: 'assistant', content: '好的，已记录。接下来确认：\n哪些用户需要看到该能力的结果？' },
       ],
-      pendingAssistant: false,
+      activeExecution: null,
+      latestExecution: null,
     });
     return fallback(input, init);
   });
   renderApp('/work-items/new/prd-answered');
 
-  expect(await screen.findByText('不需要认证，仅供内网监控调用。')).toBeInTheDocument();
-  expect(screen.getByText('你的回答')).toBeInTheDocument();
+  expect(await screen.findByText('值班人员需要快速确认服务是否可用。')).toBeInTheDocument();
+  expect(screen.getAllByText('你的回答')).toHaveLength(2);
   expect(screen.queryByText(/针对问题「/)).not.toBeInTheDocument();
-  expect(screen.getByPlaceholderText('输入这个问题的回答…')).toBeInTheDocument();
-  expect(screen.getAllByText('服务异常时希望返回什么状态码？')).toHaveLength(2);
+  expect(screen.getByPlaceholderText('输入你的答案，或先采用 AI 建议再修改…')).toBeInTheDocument();
+  expect(screen.getByLabelText('需求问题进度')).toHaveTextContent('问题 1/1');
+  expect(screen.getByLabelText('需求问题进度')).toHaveTextContent('已回答 0 项');
+  expect(screen.getByText('这个能力主要解决什么业务场景？')).toBeInTheDocument();
+  expect(screen.getAllByText('哪些用户需要看到该能力的结果？')).toHaveLength(2);
 });
 
 test('legacy draft editor route opens the independent creation workspace', async () => {
@@ -518,7 +767,7 @@ test('legacy draft editor route opens the independent creation workspace', async
     if (path === '/api/v5/prd-sessions/prd-legacy') {
       return jsonResponse({ prdId: 'prd-legacy', systemId: 'alpha-system', conversationId: 'conv-legacy', status: 'need_clarification', createdBy: 'admin', draft: {}, missingFields: [] });
     }
-    if (path === '/api/v5/conversations/conv-legacy') return jsonResponse({ messages: [], pendingAssistant: false });
+    if (path === '/api/v5/conversations/conv-legacy') return jsonResponse({ messages: [], activeExecution: null, latestExecution: null });
     return fallback(input, init);
   });
 

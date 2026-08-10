@@ -4,7 +4,7 @@ ARG HTTP_PROXY
 ARG HTTPS_PROXY
 ENV HTTP_PROXY=$HTTP_PROXY HTTPS_PROXY=$HTTPS_PROXY
 COPY workbench/package*.json ./
-RUN npm ci --include=dev
+RUN --mount=type=cache,target=/root/.npm npm ci --include=dev
 COPY workbench ./
 RUN npm run build
 
@@ -13,9 +13,6 @@ WORKDIR /src/control-plane
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
 COPY control-plane/pom.xml ./
-COPY control-plane/src ./src
-# 前端静态资源随控制面进入同一个可发布镜像。
-COPY --from=web-build /src/workbench/dist ./src/main/resources/static
 # Maven 不读取 HTTP_PROXY，这里按需生成构建阶段的代理配置。
 RUN proxy="${HTTPS_PROXY:-}"; \
     if [ -n "$proxy" ]; then \
@@ -23,8 +20,13 @@ RUN proxy="${HTTPS_PROXY:-}"; \
       mkdir -p /root/.m2; \
       printf '<settings><proxies><proxy><id>build-proxy</id><active>true</active><protocol>http</protocol><host>%s</host><port>%s</port></proxy></proxies></settings>\n' \
         "${proxy%:*}" "${proxy##*:}" > /root/.m2/settings.xml; \
-    fi; \
-    mvn -DskipTests package
+    fi
+# 依赖缓存与源码层分离，普通代码部署不再重复下载 Maven 依赖。
+RUN --mount=type=cache,target=/root/.m2/repository mvn -B -DskipTests dependency:go-offline
+COPY control-plane/src ./src
+# 前端静态资源随控制面进入同一个可发布镜像。
+COPY --from=web-build /src/workbench/dist ./src/main/resources/static
+RUN --mount=type=cache,target=/root/.m2/repository mvn -B -DskipTests package
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app

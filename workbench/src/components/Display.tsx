@@ -25,12 +25,14 @@ const labels: Record<string, string> = {
   confirmed: '已确认',
   allocated: '已分配',
   candidate: '待审批',
+  proposed: '待审批',
   disabled: '已停用',
+  superseded: '已被替代',
   unknown: '未知',
 };
 
 const danger = new Set(['worker_blocked', 'patch_rejected', 'validation_failed', 'turn_failed', 'case_start_failed', 'rejected']);
-const warning = new Set(['waiting_owner_approval', 'pending', 'need_clarification', 'waiting_user_confirm']);
+const warning = new Set(['waiting_owner_approval', 'pending', 'proposed', 'need_clarification', 'waiting_user_confirm']);
 const success = new Set(['completed', 'validation_passed', 'approved', 'confirmed']);
 const info = new Set(['activated', 'modification_completed', 'patch_applied', 'waiting_merge', 'case_starting']);
 

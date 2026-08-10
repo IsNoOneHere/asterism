@@ -6,15 +6,13 @@ from datetime import datetime, timezone
 from hmac import compare_digest
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 import httpx
 from starlette.responses import JSONResponse
 
 from agent_service.contracts import (
     DraftRequest,
     DraftResult,
-    MemoryCandidateRequest,
-    MemoryCandidateResult,
     StructuredOutputProbe,
     UiObservation,
     normalize_ui_observation,
@@ -58,13 +56,13 @@ def create_app(
         model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "product")
         return structured.run(prd_draft_prompt(request), model_config, DraftResult)
 
-    @app.post("/prd-memory-candidates", dependencies=[Depends(require_internal_token)])
-    def prd_memory_candidates(request: MemoryCandidateRequest) -> MemoryCandidateResult:
-        model_config = resolve_model_config(settings, fetch_model_config, request.system_id, "product")
-        return structured.run(memory_candidate_prompt(request), model_config, MemoryCandidateResult)
-
     @app.post("/analyze-image", dependencies=[Depends(require_internal_token)])
-    async def analyze_image(system_id: str, request: Request) -> UiObservation:
+    def analyze_image(
+        system_id: str,
+        image: bytes = Body(),
+        content_type: str = Header(default="", alias="Content-Type"),
+    ) -> UiObservation:
+        # 同 Runner 内必须在线程池执行阻塞模型调用，避免冻结 Worker heartbeat 事件循环。
         model_config = resolve_model_config(settings, fetch_model_config, system_id, "vision")
         if not model_config.image_input or not model_config.model or not model_config.api_key:
             raise ModelCallError(
@@ -72,10 +70,9 @@ def create_app(
                 "请先为 Vision Agent 绑定支持图片输入的模型 Profile",
                 422,
             )
-        content_type = request.headers.get("content-type", "").split(";", 1)[0]
+        content_type = content_type.split(";", 1)[0]
         if content_type not in {"image/png", "image/jpeg", "image/webp"}:
             raise HTTPException(status_code=415, detail="unsupported image type")
-        image = await request.body()
         return structured.run(
             image_observation_prompt(), model_config, UiObservation,
             normalizer=normalize_ui_observation, image=image, content_type=content_type,
@@ -218,6 +215,10 @@ def resolve_model_config(settings: AgentSettings, fetch_model_config: Callable[.
 
 def prd_draft_prompt(request: DraftRequest) -> str:
     # Product Agent 只提交语义 Patch；系统字段和生命周期由控制面维护。
+    product_context_items = [
+        item for item in request.context_items
+        if item.get("type") != "system_knowledge"
+    ]
     return (
         "Return strict JSON with keys patch,assistant_message,citations.\n"
         "patch may only contain title,goal,scope,acceptanceCriteria and must include only fields changed by this turn.\n"
@@ -227,29 +228,22 @@ def prd_draft_prompt(request: DraftRequest) -> str:
         "citations maps each key to source refIds. A changed field without a source must omit its citation.\n"
         "Only cite refId values present in context_items. Never invent a refId.\n"
         "Content without a source must have no citation and is treated as AI_SUGGESTION.\n"
-        "Use assistant_message to ask in Chinese for any information still missing from the final PRD.\n"
+        "You are a business product manager. Product only clarifies business requirements; Planning owns implementation.\n"
+        "Discuss only business problems, target users, business value, scope and business acceptance criteria.\n"
+        "Never proactively ask about endpoint paths, HTTP methods, authentication, response codes, databases, "
+        "dependencies, code locations, technology stacks, monitoring, Prometheus or deployment.\n"
+        "If the user provides a technical constraint, preserve it when relevant but do not expand it into technical follow-up questions.\n"
+        "assistant_message must remain one ordinary Chinese string; do not add a questions field or any other JSON structure.\n"
+        "First use User content to resolve supplied Missing fields, then ask only about fields that remain unresolved.\n"
+        "Ask only about the supplied Missing fields. Ask at most one question per missing field and at most three questions total.\n"
+        "After every question, add one editable line in the exact form `推荐答案：...`.\n"
+        "When Missing fields is empty, ask no questions and state that the draft is ready for confirmation.\n"
         "If the previous round missed acceptance criteria, merge this user message into patch.acceptanceCriteria.\n"
         f"User content: {request.content}\n"
         f"Current semantic draft: {request.current_draft.model_dump_json(by_alias=True)}\n"
         f"Missing fields: {request.missing_fields}\n"
         f"Conversation history: {json.dumps(request.conversation_history, ensure_ascii=False)}\n"
-        f"Structured context items: {json.dumps(request.context_items, ensure_ascii=False)}\n"
-    )
-
-
-def memory_candidate_prompt(request: MemoryCandidateRequest) -> str:
-    # 记忆候选是确认后的独立建议，失败不得影响 PRD 或工作项创建。
-    return (
-        "Return strict JSON with key candidates. candidates may be empty.\n"
-        "Each candidate must contain category,audience,title,content,target_refs,evidence_refs.\n"
-        "category is constraint|convention|lesson; audience is product|execution|both.\n"
-        "Only propose durable reusable knowledge supported by the supplied evidence.\n"
-        "Never include secrets, logs, diffs, temporary errors, one-off goals or facts already obvious from the PRD.\n"
-        "evidence_refs may only contain refId values present in context_items.\n"
-        "target_refs may only contain values from Allowed target refs.\n"
-        f"Confirmed PRD: {request.draft.model_dump_json(by_alias=True)}\n"
-        f"Allowed target refs: {json.dumps(request.target_refs, ensure_ascii=False)}\n"
-        f"Structured context items: {json.dumps(request.context_items, ensure_ascii=False)}\n"
+        f"Structured context items: {json.dumps(product_context_items, ensure_ascii=False)}\n"
     )
 
 

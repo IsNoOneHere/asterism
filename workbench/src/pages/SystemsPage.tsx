@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useRef, useState } from 'react';
+import { type ChangeEvent, useMemo, useRef, useState } from 'react';
 import { GitBranch, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useFieldArray, useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -66,8 +66,18 @@ export function SystemsPage() {
   const pagination = usePagination(filteredSystems, `${query}:${filteredSystems.map((system) => system.systemId).join(':')}`);
   const form = useForm<FormValue>({ resolver: zodResolver(schema), defaultValues: emptyForm });
   const repos = useFieldArray({ control: form.control, name: 'repos' });
+  const releaseModeField = form.register('releaseMode');
   const releaseMode = form.watch('releaseMode');
   const validationError = firstError(form.formState.errors);
+
+  function changeReleaseMode(event: ChangeEvent<HTMLSelectElement>) {
+    void releaseModeField.onChange(event);
+    const cloneMode = event.target.value as FormValue['releaseMode'];
+    // 发布模式是批量默认值，切换时同步现有仓库，之后仍允许逐仓覆盖。
+    form.getValues('repos').forEach((_, index) => {
+      form.setValue(`repos.${index}.cloneMode`, cloneMode, { shouldDirty: true, shouldValidate: true });
+    });
+  }
 
   const save = useMutation({
     mutationFn: async (value: FormValue) => {
@@ -200,7 +210,8 @@ export function SystemsPage() {
           {mode !== 'system' &&
           <fieldset className="config-subsection"><legend>Git 与发布</legend>
             <div className="config-dialog-fields system-dialog-fields">
-              <label>发布模式<select {...form.register('releaseMode')}><option value="local">Local</option><option value="gitlab">GitLab MR</option></select></label>
+              <label>发布模式<select aria-label="发布模式" {...releaseModeField} onChange={changeReleaseMode}><option value="local">Local</option><option value="gitlab">GitLab MR</option></select>
+                <span className="field-note">切换会同步所有仓库，仍可在仓库中单独覆盖。</span></label>
               <label>验证模式<select {...form.register('validationMode')}><option value="auto">自动运行仓库测试</option><option value="manual">等待人工验证</option><option value="skip">跳过，交给 MR CI</option></select></label>
               <label>MR 目标分支<input {...form.register('mrTargetBranch')} placeholder="默认使用仓库 defaultBranch" /></label>
               <label>MR Labels<input {...form.register('mrLabels')} placeholder="每行一个" /></label>
@@ -210,8 +221,8 @@ export function SystemsPage() {
                 placeholder={tokenSet ? '留空保留现有 Token' : '留空使用全局 ASTERISM_GITLAB_TOKEN'} /></label>
             </div>
 
-            <div className="config-section-head compact"><div><h3>仓库列表</h3><p>路径门禁和测试命令按仓库独立生效。</p></div>
-              <button type="button" className="secondary icon-text-button" onClick={() => repos.append({ ...emptyRepo, repoId: `repo-${repos.fields.length + 1}`, name: `仓库 ${repos.fields.length + 1}` })}><Plus size={15} />添加仓库</button></div>
+            <div className="config-section-head compact"><div><h3>仓库列表</h3><p>路径门禁和测试命令按仓库独立生效；配置只影响新工作项，已有工作项继续使用创建时快照。</p></div>
+              <button type="button" className="secondary icon-text-button" onClick={() => repos.append({ ...emptyRepo, repoId: `repo-${repos.fields.length + 1}`, name: `仓库 ${repos.fields.length + 1}`, cloneMode: releaseMode })}><Plus size={15} />添加仓库</button></div>
             <div className="repo-config-list">
               {repos.fields.map((field, index) => <section className="repo-config-card" key={field.id}>
                 <div className="config-section-head compact"><h4>仓库 {index + 1}</h4>

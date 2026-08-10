@@ -24,6 +24,7 @@ TRANSITIONS: dict[LifecycleStatus, set[LifecycleStatus]] = {
     },
     LifecycleStatus.validation_failed: {LifecycleStatus.activated, LifecycleStatus.cancelled},
     LifecycleStatus.validation_passed: {
+        LifecycleStatus.activated,
         LifecycleStatus.waiting_merge,
         LifecycleStatus.completed,
         LifecycleStatus.worker_blocked,
@@ -106,6 +107,23 @@ class CaseState:
             return None
         self.execution_allowed = True
         return "ReworkStarted"
+
+    def restore_checkpoint(self, status: LifecycleStatus, diff_patch: str) -> bool:
+        """从已提交 CodingArtifact 恢复 Temporal 检查点，不重复产生代码产物。"""
+
+        allowed = {
+            LifecycleStatus.modification_completed,
+            LifecycleStatus.patch_applied,
+            LifecycleStatus.validation_passed,
+        }
+        if self.status != LifecycleStatus.activated or status not in allowed:
+            log.warning("非法检查点恢复", extra={"from_status": self.status, "to_status": status})
+            return False
+        self.status = status
+        self.diff_patch = diff_patch
+        self.execution_allowed = status != LifecycleStatus.validation_passed
+        log.info("Temporal 检查点已从 Artifact 恢复", extra={"status": status})
+        return True
 
     def worker_blocked_on(self, reason: str) -> str | None:
         # 所有执行面失败统一收敛到 worker_blocked，具体 reason 留在事件 payload。

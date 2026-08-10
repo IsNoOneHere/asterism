@@ -177,6 +177,59 @@ class ProjectionServiceTest {
     }
 
     @Test
+    void validationPassedCanReturnToActivatedForExplicitRework() {
+        var store = new InMemoryStore();
+        var service = service(store);
+
+        service.apply(event(1, "OwnerApprovalRequested"));
+        service.apply(event(2, "WorkItemActivated"));
+        service.apply(event(3, "ModificationCompleted"));
+        service.apply(event(4, "PatchApplied"));
+        service.apply(event(5, "ValidationPassed"));
+        service.apply(event(6, "ReworkStarted"));
+
+        var item = store.findById("wi-1").orElseThrow();
+        assertThat(item.lifecycleStatus()).isEqualTo("activated");
+        assertThat(item.approvalStatus()).isEqualTo("approved");
+        assertThat(item.executionAllowed()).isTrue();
+    }
+
+    @Test
+    void checkpointRestoreProjectsReleaseRecoveryInLifecycleOrder() {
+        var store = new InMemoryStore();
+        var service = service(store);
+
+        service.apply(event(1, "OwnerApprovalRequested"));
+        service.apply(event(2, "WorkItemActivated"));
+        service.apply(event(3, "ModificationCompleted"));
+        service.apply(event(4, "PatchApplied"));
+        service.apply(event(5, "ValidationPassed"));
+        service.apply(event(6, "ReworkStarted"));
+        service.apply(event(7, "ModificationCheckpointRestored"));
+        service.apply(event(8, "PatchCheckpointRestored"));
+        service.apply(event(9, "ValidationCheckpointRestored"));
+        service.apply(event(10, "ReleaseCompleted"));
+
+        var item = store.findById("wi-1").orElseThrow();
+        assertThat(item.lifecycleStatus()).isEqualTo("completed");
+        assertThat(item.lastAppliedSequence()).isEqualTo(10);
+    }
+
+    @Test
+    void checkpointRestoreCannotSkipLifecycleOrder() {
+        var store = new InMemoryStore();
+        var service = service(store);
+
+        service.apply(event(1, "OwnerApprovalRequested"));
+        service.apply(event(2, "WorkItemActivated"));
+        service.apply(event(3, "PatchCheckpointRestored"));
+
+        var item = store.findById("wi-1").orElseThrow();
+        assertThat(item.lifecycleStatus()).isEqualTo("activated");
+        assertThat(item.lastAppliedSequence()).isEqualTo(2);
+    }
+
+    @Test
     void lifecycleStatusAlsoUpdatesPrdAfterProjectionSucceeds() {
         var store = new InMemoryStore();
         var sessions = mock(PrdSessionRepository.class);

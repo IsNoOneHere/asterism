@@ -1,9 +1,87 @@
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 PLAN_BASE_CHANGED_ERROR = "PlanBaseChanged"
+
+
+def _to_camel(value: str) -> str:
+    head, *tail = value.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in tail)
+
+
+class ApiModel(BaseModel):
+    """跨 Java API 的模型统一接受 snake_case，并按需输出 camelCase。"""
+
+    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True)
+
+
+class ArtifactRef(ApiModel):
+    artifact_id: str
+    artifact_type: Literal["PRODUCT", "PLANNING", "CODING", "VALIDATION", "RELEASE"]
+    version: int = Field(ge=1)
+    content_hash: str
+    root_artifact_id: str
+    parent_artifact_id: str | None = None
+    supersedes_artifact_id: str | None = None
+    status: Literal["PROPOSED", "APPROVED", "REJECTED", "SUPERSEDED"]
+
+
+ArtifactTransitionKind = Literal[
+    "ProposePlanningArtifact",
+    "ApprovePlanningArtifact",
+    "RejectPlanningArtifact",
+    "ProposeCodingArtifact",
+    "ApproveCodingArtifact",
+    "RejectCodingArtifact",
+    "SupersedeArtifact",
+]
+
+
+class ArtifactTransitionRequest(ApiModel):
+    kind: ArtifactTransitionKind
+    transition_id: str
+    artifact: ArtifactRef | None = None
+    parent: ArtifactRef | None = None
+    supersedes: ArtifactRef | None = None
+    expected_head: ArtifactRef | None = None
+    content: dict[str, Any] | None = None
+    note: str = ""
+
+
+ArtifactEvidenceType = Literal[
+    "PlanningExecution",
+    "CodingExecution",
+    "WorkerBlocked",
+    "ReworkStarted",
+    "RevisionRequested",
+    "PatchApplied",
+    "PatchApplyBlocked",
+    "PatchRejected",
+    "ValidationPassed",
+    "ValidationFailed",
+    "RepositoryReleasePrepared",
+    "MergeRequestCreated",
+    "MergeRequestMerged",
+    "MergeRequestClosed",
+    "ReleaseCompleted",
+]
+
+
+class ArtifactEvidenceRequest(ApiModel):
+    evidence_id: str
+    artifact: ArtifactRef | None = None
+    evidence_type: ArtifactEvidenceType
+    transition_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectionResult(ApiModel):
+    event: dict[str, Any]
+    artifact_ref: ArtifactRef | None = None
+    transition: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
 
 
 class LifecycleStatus(StrEnum):
@@ -95,17 +173,19 @@ class CaseInput(BaseModel):
         )]
 
 
-class ProjectionEvent(BaseModel):
-    eventType: str
-    systemId: str
-    caseId: str
-    prdId: str
-    workItemId: str
-    actorId: str = "worker"
+class ProjectionEvent(ApiModel):
+    event_type: str
+    system_id: str
+    case_id: str
+    prd_id: str
+    work_item_id: str
+    actor_id: str = "worker"
     payload: dict[str, Any] = Field(default_factory=dict)
-    correlationId: str
-    causationId: str | None = None
-    idempotencyKey: str
+    correlation_id: str
+    causation_id: str | None = None
+    idempotency_key: str
+    artifact_transition: ArtifactTransitionRequest | None = None
+    artifact_evidence: ArtifactEvidenceRequest | None = None
 
 
 class PatchApplyResult(BaseModel):
@@ -182,7 +262,14 @@ class CodingPlanDraft(BaseModel):
     plan_markdown: str = Field(min_length=1)
     revision: int = Field(default=1, ge=1)
     session_id: str = ""
+    turns: int | None = None
+    token_usage: dict[str, Any] = Field(default_factory=dict)
     base_revisions: dict[str, str] = Field(default_factory=dict)
+    acceptance_criteria_refs: list[str] = Field(default_factory=list)
+    repositories: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
 
 
 class CodingPlanRequest(BaseModel):
@@ -269,20 +356,39 @@ class GitlabPublishResult(BaseModel):
 
 
 class PrdSpec(BaseModel):
+    # 兼容 Artifact Layer 上线前仍在运行的 Temporal Case。
     title: str = ""
-    goal: str
+    goal: str = ""
     acceptance_criteria: list[str] = Field(default_factory=list)
     draft_json: dict[str, Any] = Field(default_factory=dict)
     requirement_manifest_id: str
+    product_artifact: ArtifactRef | None = None
 
 
-class ContextSnapshot(BaseModel):
+class ContextSnapshot(ApiModel):
+    # 新字段提供默认值，确保旧 Workflow 的 Activity 历史可以继续反序列化。
+    snapshot_id: str = ""
+    snapshot_hash: str = ""
+    root_artifact_id: str = ""
+    source_artifacts: list[ArtifactRef] = Field(default_factory=list)
+    relationships: list[dict[str, Any]] = Field(default_factory=list)
+    effective_heads: dict[str, ArtifactRef] = Field(default_factory=dict)
     system_id: str
     requirement_manifest_id: str
     requirement_items: list[dict[str, Any]] = Field(default_factory=list)
     execution_bundle_id: str = ""
     execution_items: list[dict[str, Any]] = Field(default_factory=list)
+    git_base_revisions: dict[str, str] = Field(default_factory=dict)
+    built_at: str = ""
     stale_references: list[str] = Field(default_factory=list)
+    product_artifact: ArtifactRef | None = None
+    product_content: dict[str, Any] = Field(default_factory=dict)
+    planning_artifact: ArtifactRef | None = None
+    planning_content: dict[str, Any] = Field(default_factory=dict)
+    previous_artifact: ArtifactRef | None = None
+    previous_content: dict[str, Any] = Field(default_factory=dict)
+    previous_transitions: list[dict[str, Any]] = Field(default_factory=list)
+    feedback_notes: list[str] = Field(default_factory=list)
 
 
 class RouteIndexInput(BaseModel):
@@ -303,3 +409,66 @@ class KnowledgeCandidate(BaseModel):
     apiEndpoints: list[str] = Field(default_factory=list)
     codeRefs: list[str] = Field(default_factory=list)
     sourceRef: str = ""
+
+
+class ProductAgentExecutionInput(BaseModel):
+    """Product Agent 独立 Workflow 的持久化输入契约。"""
+
+    execution_id: str
+    workflow_id: str
+    system_id: str
+    prd_id: str
+    conversation_id: str
+    input_message_id: str
+    context_bundle_id: str
+    content: str
+    attachment_ids: list[str] = Field(default_factory=list)
+    current_draft: dict[str, Any] = Field(default_factory=dict)
+    missing_fields: list[str] = Field(default_factory=list)
+    conversation_history: list[dict[str, Any]] = Field(default_factory=list)
+    context_items: list[dict[str, Any]] = Field(default_factory=list)
+    attempt: int = Field(default=1, ge=1)
+
+
+class ProductDraftActivityInput(BaseModel):
+    """传给同一 Runner 内 Product Agent Activity 的持久化输入。"""
+
+    execution_id: str
+    attempt: int = Field(default=1, ge=1)
+    system_id: str
+    content: str
+    attachment_ids: list[str] = Field(default_factory=list)
+    current_draft: dict[str, Any] = Field(default_factory=dict)
+    missing_fields: list[str] = Field(default_factory=list)
+    conversation_history: list[dict[str, Any]] = Field(default_factory=list)
+    context_items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ProductAgentDraftResult(BaseModel):
+    """Worker 与新版 /prd-draft 之间的最小结果契约。"""
+
+    patch: dict[str, Any]
+    assistant_message: str
+    citations: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class ProductImageObservation(BaseModel):
+    page_title: str = ""
+    text_anchors: list[str] = Field(default_factory=list)
+    ui_elements: list[dict[str, str]] = Field(default_factory=list)
+    error_messages: list[str] = Field(default_factory=list)
+    user_visible_summary: str = ""
+
+    def anchors(self) -> list[str]:
+        return list(dict.fromkeys([
+            value for value in [self.page_title, *self.text_anchors, *self.error_messages]
+            if value.strip()
+        ]))
+
+
+class ProductAgentActivityResult(BaseModel):
+    """Activity 只返回可持久化的草稿与图片观察，绝不返回图片字节。"""
+
+    result: ProductAgentDraftResult
+    observations: list[ProductImageObservation] = Field(default_factory=list)
+    image_analysis_failed: bool = False

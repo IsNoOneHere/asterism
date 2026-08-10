@@ -106,6 +106,7 @@ class PublishingWorkflow:
 
     async def _publish_gitlab(self, signal_id: str) -> None:
         case_input = self._case_input()
+        product = self.context_snapshot.product_content
         changes = self._repo_diffs()
         await self._emit(self.state.patch_apply_approved(), signal_id, {
             "repositories": [repo.repo_id for repo, _ in changes],
@@ -120,9 +121,9 @@ class PublishingWorkflow:
                     {
                         "system_id": case_input.system_id,
                         "work_item_id": case_input.work_item_id,
-                        "title": case_input.prd.title,
-                        "goal": case_input.prd.goal,
-                        "acceptance_criteria": case_input.prd.acceptance_criteria,
+                        "title": str(product.get("title", "")),
+                        "goal": str(product.get("goal", "")),
+                        "acceptance_criteria": list(product.get("acceptanceCriteria", [])),
                         "repo": repo.model_dump(),
                         "diff_patch": diff_patch,
                         "validation_mode": case_input.validation_mode,
@@ -271,6 +272,7 @@ class PublishingWorkflow:
 
     async def _release(self, signal_id: str) -> None:
         case_input = self._case_input()
+        product = self.context_snapshot.product_content
         if self.state.status.value != "validation_passed":
             workflow.logger.warning("非法 release_approved，已忽略", extra={"status": self.state.status.value})
             return
@@ -294,7 +296,7 @@ class PublishingWorkflow:
                     {
                         "repo_path": repo.local_path,
                         "work_item_id": case_input.work_item_id,
-                        "title": case_input.prd.title,
+                        "title": str(product.get("title", "")),
                         "diff_patch": diff_patch,
                     },
                     start_to_close_timeout=timedelta(minutes=2),

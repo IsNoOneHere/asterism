@@ -10,9 +10,16 @@ import java.time.Instant;
 public record MemoryItem(
         @Id @Column("memory_id") String memoryId,
         @Column("system_id") String systemId,
+        @Column("project_scope") String projectScope,
+        @Column("memory_type") MemoryType memoryType,
+        @Column("artifact_source_id") String artifactSourceId,
+        String title,
         String content,
-        String status,
-        String audience,
+        double confidence,
+        MemoryApplicability applicability,
+        @Column("expires_at") Instant expiresAt,
+        MemoryStatus status,
+        @Column("candidate_id") String candidateId,
         @Column("stable_candidate_id") String stableCandidateId,
         @Column("source_ref") String sourceRef,
         @Column("evidence_refs") String evidenceRefs,
@@ -23,12 +30,4 @@ public record MemoryItem(
         @Column("created_by") String createdBy,
         @Column("created_at") Instant createdAt,
         @Column("approved_at") Instant approvedAt) {
-
-    public MemoryItem(String memoryId, String systemId, String content, String status, String sourceEventId,
-                      String approvedBy, String metadataJson, String createdBy, Instant createdAt,
-                      Instant approvedAt) {
-        this(memoryId, systemId, content, status, "both", memoryId, "", "[]", "", sourceEventId,
-                approvedBy, metadataJson,
-                createdBy, createdAt, approvedAt);
-    }
 }

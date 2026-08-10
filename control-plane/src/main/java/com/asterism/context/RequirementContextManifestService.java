@@ -63,6 +63,19 @@ public class RequirementContextManifestService {
     public ExecutionContextSnapshot executionSnapshot(String systemId, String prdId, String workItemId,
                                                       String manifestId, String goal,
                                                       Map<String, Object> draft) {
+        return executionSnapshot(
+                systemId, prdId, workItemId, manifestId, "execution", goal, draft, List.of());
+    }
+
+    public ExecutionContextSnapshot executionSnapshot(
+            String systemId,
+            String prdId,
+            String workItemId,
+            String manifestId,
+            String phase,
+            String goal,
+            Map<String, Object> draft,
+            List<String> artifactSourceIds) {
         var manifest = require(manifestId, systemId, prdId, workItemId);
         var stale = manifest.items().stream()
                 .filter(item -> {
@@ -78,7 +91,8 @@ public class RequirementContextManifestService {
         }
         var targetRefs = manifest.items().stream().flatMap(item -> item.targetRefs().stream()).distinct().toList();
         var execution = recall.recall(new ContextRecallQuery(
-                systemId, prdId, "execution", goal, null, draft, targetRefs, List.of(), "worker"));
+                systemId, prdId, phase, goal, null, draft, targetRefs,
+                systemId, artifactSourceIds, List.of(), "worker"));
         var frozenRefs = manifest.items().stream().map(ContextItem::refId).collect(Collectors.toSet());
         var executionItems = execution.items().stream().filter(item -> !frozenRefs.contains(item.refId())).toList();
         return new ExecutionContextSnapshot(systemId, manifestId, manifest.items(), execution.bundleId(),

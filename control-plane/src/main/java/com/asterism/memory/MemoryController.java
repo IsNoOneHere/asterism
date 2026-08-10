@@ -1,182 +1,244 @@
 package com.asterism.memory;
 
-import com.asterism.event.DomainEventService;
-import com.asterism.event.DomainEventType;
+import com.asterism.artifact.Artifact;
+import com.asterism.artifact.ArtifactService;
 import com.asterism.identity.SystemAccessService;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
-import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
 import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v5")
 public class MemoryController {
     private final MemoryItemRepository memories;
-    private final DomainEventService events;
+    private final MemoryCandidateRepository candidates;
+    private final MemoryCandidateService candidateService;
+    private final ArtifactService artifacts;
     private final SystemAccessService access;
-    private final JdbcAggregateTemplate aggregate;
-    private final ObjectMapper objectMapper;
-    private final MemoryCandidateService candidates;
 
-    public MemoryController(MemoryItemRepository memories, DomainEventService events, SystemAccessService access,
-                            JdbcAggregateTemplate aggregate, ObjectMapper objectMapper,
-                            MemoryCandidateService candidates) {
+    public MemoryController(
+            MemoryItemRepository memories,
+            MemoryCandidateRepository candidates,
+            MemoryCandidateService candidateService,
+            ArtifactService artifacts,
+            SystemAccessService access) {
         this.memories = memories;
-        this.events = events;
-        this.access = access;
-        this.aggregate = aggregate;
-        this.objectMapper = objectMapper;
         this.candidates = candidates;
+        this.candidateService = candidateService;
+        this.artifacts = artifacts;
+        this.access = access;
     }
 
     @GetMapping("/memory")
-    List<MemoryView> list(@RequestParam String systemId, @RequestParam(required = false) String status,
-                          Authentication actor) {
+    List<MemoryView> list(
+            @RequestParam String systemId,
+            @RequestParam(required = false) MemoryStatus status,
+            Authentication actor) {
         access.requireMember(systemId, actor);
-        var values = status == null || status.isBlank()
+        candidateService.refreshSystemArtifactStatuses(systemId);
+        candidateService.archiveExpired(systemId);
+        var values = status == null
                 ? memories.findTop100BySystemIdOrderByCreatedAtDesc(systemId)
                 : memories.findTop100BySystemIdAndStatusOrderByCreatedAtDesc(systemId, status);
-        var targets = candidates.targetRefs(values);
-        return values.stream().map(memory -> view(memory, targets.getOrDefault(memory.memoryId(), List.of()))).toList();
+        var targets = candidateService.targetRefs(values);
+        return values.stream()
+                .map(memory -> view(memory, targets.getOrDefault(memory.memoryId(), List.of())))
+                .toList();
     }
 
-    @PostMapping("/memory/candidates")
-    MemoryView candidate(@Valid @RequestBody MemoryCandidateRequest request, Authentication actor) {
-        access.requireMember(request.systemId(), actor);
-        var memory = candidates.create(new MemoryCandidateService.CandidateInput(
-                request.systemId(), request.category(), request.audience(), request.title(), request.content(), "",
-                request.targetRefs(), List.of(), request.workItemId(), "", actor.getName()));
-        return view(memory, candidates.targetRefs(List.of(memory)).getOrDefault(memory.memoryId(), List.of()));
+    @GetMapping("/memory/candidates")
+    List<MemoryCandidateView> candidates(
+            @RequestParam String systemId,
+            @RequestParam(required = false) MemoryCandidateStatus status,
+            Authentication actor) {
+        access.requireMember(systemId, actor);
+        candidateService.refreshSystemArtifactStatuses(systemId);
+        var values = status == null
+                ? candidates.findTop100BySystemIdOrderByCreatedAtDesc(systemId)
+                : candidates.findTop100BySystemIdAndStatusOrderByCreatedAtDesc(systemId, status);
+        return values.stream().map(this::view).toList();
     }
 
-    @PostMapping("/memory/{memoryId}/approve")
-    MemoryView approve(@PathVariable String memoryId,
-                       @Valid @RequestBody(required = false) ApprovalRequest request,
-                       Authentication actor) {
-        var current = memories.findById(memoryId).orElseThrow(() -> new IllegalArgumentException("记忆不存在"));
+    @PostMapping("/memory/candidates/{candidateId}/approve")
+    MemoryView approve(
+            @PathVariable String candidateId,
+            @Valid @RequestBody ApprovalRequest request,
+            Authentication actor) {
+        var current = requireCandidate(candidateId);
         access.requireOwnerOrAdmin(current.systemId(), actor);
-        var currentTargets = candidates.targetRefs(List.of(current)).getOrDefault(memoryId, List.of());
-        var approved = candidates.approve(current, request == null
-                ? new MemoryCandidateService.CandidateEdit(
-                category(current), current.audience(), title(current), current.content(), currentTargets)
-                : new MemoryCandidateService.CandidateEdit(
-                request.category(), request.audience(), request.title(), request.content(), request.targetRefs()),
-                actor.getName());
-        return view(approved, candidates.targetRefs(List.of(approved)).getOrDefault(memoryId, List.of()));
+        var memory = candidateService.approve(current, new MemoryCandidateService.CandidateEdit(
+                request.memoryType(), request.title(), request.content(), request.confidence(),
+                request.applicability(), request.expiresAt(), request.targetRefs()), actor.getName());
+        return view(memory, candidateService.targetRefs(List.of(memory))
+                .getOrDefault(memory.memoryId(), List.of()));
     }
 
-    @PostMapping("/memory/{memoryId}/reject")
-    MemoryView reject(@PathVariable String memoryId, Authentication actor) {
-        var current = memories.findById(memoryId).orElseThrow(() -> new IllegalArgumentException("记忆不存在"));
+    @PostMapping("/memory/candidates/{candidateId}/reject")
+    MemoryCandidateView reject(
+            @PathVariable String candidateId,
+            @RequestBody(required = false) RejectRequest request,
+            Authentication actor) {
+        var current = requireCandidate(candidateId);
         access.requireOwnerOrAdmin(current.systemId(), actor);
-        return view(changeStatus(current, "rejected", DomainEventType.MemoryRejected, actor.getName()),
-                candidates.targetRefs(List.of(current)).getOrDefault(memoryId, List.of()));
+        return view(candidateService.reject(
+                current, actor.getName(), request == null ? "" : request.note()));
     }
 
-    @PostMapping("/memory/{memoryId}/disable")
-    MemoryView disable(@PathVariable String memoryId, Authentication actor) {
-        var current = memories.findById(memoryId).orElseThrow(() -> new IllegalArgumentException("记忆不存在"));
+    @PostMapping("/memory/{memoryId}/archive")
+    MemoryView archive(@PathVariable String memoryId, Authentication actor) {
+        var current = memories.findById(memoryId)
+                .orElseThrow(() -> new IllegalArgumentException("项目记忆不存在"));
         access.requireOwnerOrAdmin(current.systemId(), actor);
-        return view(changeStatus(current, "disabled", DomainEventType.MemoryDisabled, actor.getName()),
-                candidates.targetRefs(List.of(current)).getOrDefault(memoryId, List.of()));
+        return view(candidateService.archive(current, actor.getName()),
+                candidateService.targetRefs(List.of(current)).getOrDefault(memoryId, List.of()));
     }
 
-    private MemoryItem changeStatus(MemoryItem current, String status, DomainEventType eventType, String actorId) {
-        // reject/disable 不删除原始内容，只变更治理状态，避免上下文再召回。
-        var changed = new MemoryItem(current.memoryId(), current.systemId(), current.content(), status,
-                current.audience(), current.stableCandidateId(), current.sourceRef(), current.evidenceRefs(),
-                current.normalizedContentHash(), current.sourceEventId(), current.approvedBy(),
-                current.metadataJson(), current.createdBy(),
-                current.createdAt(), current.approvedAt());
-        aggregate.update(changed);
-        events.append(new DomainEventService.AppendEvent(
-                eventType,
-                changed.systemId(),
-                null,
-                null,
-                null,
-                actorId,
-                "control-plane",
-                Map.of("memoryId", changed.memoryId()),
-                changed.memoryId(),
-                null,
-                "memory-" + status + ":" + changed.memoryId()));
-        return changed;
+    private MemoryCandidate requireCandidate(String candidateId) {
+        return candidates.findById(candidateId)
+                .orElseThrow(() -> new IllegalArgumentException("Memory Candidate 不存在"));
+    }
+
+    private MemoryCandidateView view(MemoryCandidate candidate) {
+        return new MemoryCandidateView(
+                candidate.candidateId(),
+                candidate.systemId(),
+                candidate.projectScope(),
+                candidate.memoryType(),
+                candidate.artifactSourceId(),
+                source(candidate.artifactSourceId()),
+                candidate.sourceKind(),
+                candidate.title(),
+                candidate.content(),
+                candidate.confidence(),
+                candidate.applicability(),
+                candidate.expiresAt(),
+                candidate.status(),
+                candidateService.targetRefs(candidate),
+                candidateService.evidenceRefs(candidate),
+                candidate.sourceEventId(),
+                candidate.createdBy(),
+                candidate.reviewedBy(),
+                candidate.reviewNote(),
+                candidate.memoryId(),
+                candidate.createdAt(),
+                candidate.reviewedAt());
     }
 
     private MemoryView view(MemoryItem memory, List<String> targetRefs) {
-        var metadata = readMetadata(memory.metadataJson());
-        var title = text(metadata.get("title"));
-        if (title.isBlank()) title = fallbackTitle(memory.content());
-        return new MemoryView(memory.memoryId(), memory.systemId(), text(metadata.get("category")), title,
-                memory.content(), memory.status(), memory.audience(), memory.stableCandidateId(), memory.sourceRef(),
-                targetRefs, candidates.evidenceRefs(memory), workItemId(memory), memory.sourceEventId(), memory.approvedBy(),
-                memory.metadataJson(), memory.createdBy(), memory.createdAt(), memory.approvedAt());
+        return new MemoryView(
+                memory.memoryId(),
+                memory.candidateId(),
+                memory.systemId(),
+                memory.projectScope(),
+                memory.memoryType(),
+                memory.artifactSourceId(),
+                source(memory.artifactSourceId()),
+                memory.title(),
+                memory.content(),
+                memory.confidence(),
+                memory.applicability(),
+                memory.expiresAt(),
+                memory.status(),
+                targetRefs,
+                candidateService.evidenceRefs(memory),
+                memory.sourceEventId(),
+                memory.createdBy(),
+                memory.approvedBy(),
+                memory.createdAt(),
+                memory.approvedAt());
     }
 
-    private String category(MemoryItem memory) {
-        return text(readMetadata(memory.metadataJson()).get("category"));
-    }
-
-    private String title(MemoryItem memory) {
-        var value = text(readMetadata(memory.metadataJson()).get("title"));
-        return value.isBlank() ? fallbackTitle(memory.content()) : value;
-    }
-
-    private Map<String, Object> readMetadata(String json) {
-        try {
-            return objectMapper.readValue(json, new TypeReference<>() {});
-        } catch (JsonProcessingException error) {
-            return Map.of();
-        }
-    }
-
-    private String workItemId(MemoryItem memory) {
-        return text(readMetadata(memory.metadataJson()).get("workItemId"));
-    }
-
-    private String text(Object value) {
-        return value == null ? "" : String.valueOf(value);
-    }
-
-    private String fallbackTitle(String content) {
-        var title = content.lines().findFirst().orElse("").trim();
-        return title.length() <= 80 ? title : title.substring(0, 80);
-    }
-
-    public record MemoryCandidateRequest(
-            @NotBlank String systemId,
-            @NotBlank @Pattern(regexp = "constraint|convention|lesson") String category,
-            @NotBlank @Size(max = 80) String title,
-            @NotBlank @Size(max = 1000) String content,
-            @Pattern(regexp = "product|execution|both") String audience,
-            List<String> targetRefs,
-            String workItemId) {
+    private ArtifactSourceView source(String artifactId) {
+        if (artifactId == null || artifactId.isBlank()) return null;
+        Artifact artifact = artifacts.require(artifactId);
+        return new ArtifactSourceView(
+                artifact.artifactId(), artifact.artifactType().name(), artifact.version(),
+                artifact.status().name(), artifact.workItemId(), artifact.prdId(),
+                artifact.rootArtifactId());
     }
 
     public record ApprovalRequest(
-            @NotBlank @Pattern(regexp = "constraint|convention|lesson") String category,
+            @NotNull MemoryType memoryType,
             @NotBlank @Size(max = 80) String title,
             @NotBlank @Size(max = 1000) String content,
-            @Pattern(regexp = "product|execution|both") String audience,
+            @DecimalMin("0.0") @DecimalMax("1.0") double confidence,
+            @NotNull MemoryApplicability applicability,
+            Instant expiresAt,
             List<String> targetRefs) {
     }
 
-    public record MemoryView(String memoryId, String systemId, String category, String title, String content,
-                             String status, String audience, String stableCandidateId, String sourceRef,
-                             List<String> targetRefs, List<String> evidenceRefs,
-                             String workItemId, String sourceEventId, String approvedBy,
-                             String metadataJson, String createdBy, Instant createdAt, Instant approvedAt) {
+    public record RejectRequest(@Size(max = 500) String note) {
     }
 
+    public record ArtifactSourceView(
+            String artifactId,
+            String artifactType,
+            int version,
+            String status,
+            String workItemId,
+            String prdId,
+            String rootArtifactId) {
+    }
+
+    public record MemoryCandidateView(
+            String candidateId,
+            String systemId,
+            String projectScope,
+            MemoryType memoryType,
+            String artifactSourceId,
+            ArtifactSourceView artifactSource,
+            String sourceKind,
+            String title,
+            String content,
+            double confidence,
+            MemoryApplicability applicability,
+            Instant expiresAt,
+            MemoryCandidateStatus status,
+            List<String> targetRefs,
+            List<String> evidenceRefs,
+            String sourceEventId,
+            String createdBy,
+            String reviewedBy,
+            String reviewNote,
+            String memoryId,
+            Instant createdAt,
+            Instant reviewedAt) {
+    }
+
+    public record MemoryView(
+            String memoryId,
+            String candidateId,
+            String systemId,
+            String projectScope,
+            MemoryType memoryType,
+            String artifactSourceId,
+            ArtifactSourceView artifactSource,
+            String title,
+            String content,
+            double confidence,
+            MemoryApplicability applicability,
+            Instant expiresAt,
+            MemoryStatus status,
+            List<String> targetRefs,
+            List<String> evidenceRefs,
+            String sourceEventId,
+            String createdBy,
+            String approvedBy,
+            Instant createdAt,
+            Instant approvedAt) {
+    }
 }

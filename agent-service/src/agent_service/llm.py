@@ -88,6 +88,9 @@ class LlmClient(Protocol):
 
 
 class OpenAICompatibleAdapter:
+    def __init__(self, timeout_seconds: float = 600) -> None:
+        self.timeout_seconds = timeout_seconds
+
     def complete(
         self,
         prompt: str,
@@ -97,7 +100,7 @@ class OpenAICompatibleAdapter:
         content_type: str = "",
         max_tokens: int | None = None,
     ) -> str:
-        kwargs = {"api_key": config.api_key}
+        kwargs = {"api_key": config.api_key, "timeout": self.timeout_seconds}
         if config.base_url:
             kwargs["base_url"] = config.base_url
         client = OpenAI(**kwargs)
@@ -139,6 +142,9 @@ class OpenAICompatibleAdapter:
 
 
 class AnthropicAdapter:
+    def __init__(self, timeout_seconds: float = 600) -> None:
+        self.timeout_seconds = timeout_seconds
+
     def complete(
         self,
         prompt: str,
@@ -176,7 +182,7 @@ class AnthropicAdapter:
                     "content-type": "application/json",
                 },
                 json=payload,
-                timeout=30,
+                timeout=self.timeout_seconds,
             )
             if response.status_code in {400, 415, 422} and (image is not None or output_format is not None):
                 raise ModelCallError(ModelErrorCode.CAPABILITY_UNSUPPORTED, "模型不支持声明的输入或输出能力", 422)
@@ -195,11 +201,15 @@ class AnthropicAdapter:
 
 
 class AdapterRegistry:
-    def __init__(self, adapters: dict[str, ModelAdapter] | None = None) -> None:
+    def __init__(
+        self,
+        adapters: dict[str, ModelAdapter] | None = None,
+        timeout_seconds: float = 600,
+    ) -> None:
         self.adapters = adapters or {
-            "openai": OpenAICompatibleAdapter(),
-            "openai-compat": OpenAICompatibleAdapter(),
-            "anthropic": AnthropicAdapter(),
+            "openai": OpenAICompatibleAdapter(timeout_seconds),
+            "openai-compat": OpenAICompatibleAdapter(timeout_seconds),
+            "anthropic": AnthropicAdapter(timeout_seconds),
         }
 
     def get(self, provider: str) -> ModelAdapter:
@@ -212,7 +222,9 @@ class AdapterRegistry:
 class RoutedLlmClient:
     def __init__(self, settings: AgentSettings, registry: AdapterRegistry | None = None) -> None:
         self.settings = settings
-        self.registry = registry or AdapterRegistry()
+        self.registry = registry or AdapterRegistry(
+            timeout_seconds=settings.model_request_timeout_seconds,
+        )
 
     def complete(
         self,
@@ -236,10 +248,6 @@ class RoutedLlmClient:
 
     def test_connection(self, config: ModelConfig) -> None:
         self.registry.get(config.provider).complete("ping", config, max_tokens=1)
-
-
-# 保留旧导入名，调用已经由协议注册表路由。
-OpenAIChatClient = RoutedLlmClient
 
 
 def _anthropic_messages_url(base_url: str) -> str:

@@ -40,32 +40,6 @@ class DraftResult(BaseModel):
     citations: dict[str, list[str]]
 
 
-class MemoryCandidateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    system_id: str
-    draft: PrdContent
-    target_refs: list[str] = Field(default_factory=list)
-    context_items: list[dict[str, Any]] = Field(default_factory=list)
-
-
-class MemoryCandidateProposal(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    category: Literal["constraint", "convention", "lesson"]
-    audience: Literal["product", "execution", "both"]
-    title: str
-    content: str
-    target_refs: list[str]
-    evidence_refs: list[str]
-
-
-class MemoryCandidateResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    candidates: list[MemoryCandidateProposal]
-
-
 class UiElement(BaseModel):
     type: str
     description: str

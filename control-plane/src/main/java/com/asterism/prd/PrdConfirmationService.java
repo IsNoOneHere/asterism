@@ -1,11 +1,16 @@
 package com.asterism.prd;
 
+import com.asterism.artifact.ArtifactService;
+import com.asterism.artifact.ArtifactType;
+import com.asterism.artifact.ArtifactTransitionService;
+import com.asterism.artifact.ProductArtifactContent;
 import com.asterism.common.ApiException;
 import com.asterism.context.RequirementContextManifestService;
 import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventType;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.git.GitIntegrationService;
+import com.asterism.memory.ArtifactMemoryLifecycleService;
 import com.asterism.system.AgentConfigurationService;
 import com.asterism.system.ExecutionReadinessService;
 import com.asterism.system.SystemProfileRepository;
@@ -45,7 +50,9 @@ public class PrdConfirmationService {
     private final GitIntegrationService git;
     private final RequirementContextManifestService manifests;
     private final PrdCitationService citations;
-    private final PrdMemoryCandidateService memoryCandidates;
+    private final ArtifactMemoryLifecycleService memoryLifecycle;
+    private final ArtifactService artifacts;
+    private final ArtifactTransitionService artifactTransitions;
 
     public PrdConfirmationService(
             PrdSessionRepository sessions,
@@ -63,7 +70,9 @@ public class PrdConfirmationService {
             GitIntegrationService git,
             RequirementContextManifestService manifests,
             PrdCitationService citations,
-            PrdMemoryCandidateService memoryCandidates) {
+            ArtifactMemoryLifecycleService memoryLifecycle,
+            ArtifactService artifacts,
+            ArtifactTransitionService artifactTransitions) {
         this.sessions = sessions;
         this.events = events;
         this.temporal = temporal;
@@ -79,7 +88,9 @@ public class PrdConfirmationService {
         this.git = git;
         this.manifests = manifests;
         this.citations = citations;
-        this.memoryCandidates = memoryCandidates;
+        this.memoryLifecycle = memoryLifecycle;
+        this.artifacts = artifacts;
+        this.artifactTransitions = artifactTransitions;
     }
 
     public PrdConfirmResponse confirm(String prdId, Authentication actor) {
@@ -89,7 +100,7 @@ public class PrdConfirmationService {
         var current = prepared.session();
         if (!prepared.startTemporal()) {
             return new PrdConfirmResponse(prdId, current.workItemId(), current.caseId(), current.status(),
-                    prepared.requirementManifestId());
+                    prepared.requirementManifestId(), prepared.productArtifactId());
         }
         var workItemId = current.workItemId();
         var caseId = current.caseId();
@@ -119,7 +130,7 @@ public class PrdConfirmationService {
                         gitConfig.mrLabels(),
                         agentConfig.maxRevisions(),
                         agentConfigSnapshot(agentConfig),
-                        prdPayload(current, prepared.requirementManifestId())));
+                        prdPayload(prepared.requirementManifestId(), prepared.productArtifactId())));
             } catch (WorkflowExecutionAlreadyStarted error) {
                 // confirm 幂等：Temporal workflow 已存在说明上一轮启动实际成功，按成功路径收敛。
             }
@@ -134,7 +145,6 @@ public class PrdConfirmationService {
                             "caseId", caseId,
                             "releaseMode", gitConfig.releaseMode(),
                             "validationMode", gitConfig.validationMode()));
-            extractMemoryCandidates(current, prepared.requirementManifestId(), actor.getName());
         } catch (RuntimeException error) {
             aggregate.update(new PrdSession(
                     current.prdId(), current.systemId(), current.conversationId(), workItemId, caseId,
@@ -145,7 +155,7 @@ public class PrdConfirmationService {
             throw new IllegalStateException("Temporal case 启动失败，可重试", error);
         }
         return new PrdConfirmResponse(prdId, workItemId, caseId, "waiting_owner_approval",
-                prepared.requirementManifestId());
+                prepared.requirementManifestId(), prepared.productArtifactId());
     }
 
     private PreparedConfirmation prepare(String prdId, Authentication actor) {
@@ -153,7 +163,9 @@ public class PrdConfirmationService {
         // 加锁后重新读取，确保并发确认同一个 PRD 时复用首次分配的工作项编号。
         var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
         if ("waiting_owner_approval".equals(current.status()) || "case_starting".equals(current.status())) {
-            return new PreparedConfirmation(current, false, manifests.requirementManifestId(prdId));
+            var product = artifacts.requireCurrentProduct(current.systemId(), current.prdId());
+            return new PreparedConfirmation(current, false, manifests.requirementManifestId(prdId),
+                    product.artifactId());
         }
         if (!List.of("waiting_user_confirm", "case_start_failed").contains(current.status())) {
             throw new IllegalStateException("PRD 还不能确认");
@@ -166,37 +178,61 @@ public class PrdConfirmationService {
         var workItemId = current.workItemId() == null ? workItemIds.nextId() : current.workItemId();
         var caseId = current.caseId() == null ? "case-" + prdId : current.caseId();
         var now = Instant.now();
+        if ("case_start_failed".equals(current.status())) {
+            // Temporal 启动失败只重试外部启动，复用首次确认时已提交的 ProductArtifact 事实。
+            var product = artifacts.requireCurrentProduct(current.systemId(), current.prdId());
+            var starting = new PrdSession(
+                    current.prdId(), current.systemId(), current.conversationId(), workItemId, caseId,
+                    current.title(), current.goal(), current.draftJson(), current.missingFields(), "case_starting",
+                    current.createdBy(), current.confirmedBy(), current.confirmedAt(), current.createdAt(), now);
+            aggregate.update(starting);
+            log.info("PRD 确认重试复用 ProductArtifact prdId={} artifactId={}",
+                    prdId, product.artifactId());
+            return new PreparedConfirmation(
+                    starting, true,
+                    product.content().path("requirementManifestId").asText(),
+                    product.artifactId());
+        }
         var draft = draftCodec.read(current.draftJson());
         var requirementManifestId = manifests.freeze(current.systemId(), prdId, workItemId,
                 citations.references(draft), current.draftJson(), actor.getName());
+        // 先写入 Case 启动态，再在同一事务中提交 ProductArtifact 与 PRDConfirmed。
         var starting = new PrdSession(
                 current.prdId(), current.systemId(), current.conversationId(), workItemId, caseId,
                 current.title(), current.goal(), current.draftJson(), current.missingFields(), "case_starting",
                 current.createdBy(), actor.getName(), now, current.createdAt(), now);
         aggregate.update(starting);
-        append(DomainEventType.PRDConfirmed, current.systemId(), caseId, prdId, workItemId, actor.getName(),
-                "PRDConfirmed:" + prdId,
-                Map.of("title", current.title(), "requirementManifestId", requirementManifestId));
-        return new PreparedConfirmation(starting, true, requirementManifestId);
+        var productResult = artifactTransitions.confirmProduct(
+                new ArtifactTransitionService.EventMetadata(
+                        DomainEventType.PRDConfirmed, current.systemId(), caseId, prdId, workItemId,
+                        actor.getName(), "control-plane", prdId, null, "PRDConfirmed:" + prdId),
+                Map.of("title", current.title(), "requirementManifestId", requirementManifestId),
+                new ArtifactService.Metadata(current.systemId(), prdId, workItemId, caseId, actor.getName()),
+                new ProductArtifactContent(
+                        draft.title(), draft.goal(), draft.scope(), draft.acceptanceCriteria(),
+                        draft.targets().stream().map(target -> new ProductArtifactContent.ConfirmedTarget(
+                                target.entryId(), target.repo(), target.kind(), target.title(), target.routePath(),
+                                target.apiEndpoints(), target.codeRefs())).toList(),
+                        citationMap(draft), requirementManifestId,
+                        List.of("PRDConfirmed:" + prdId)),
+                null,
+                null,
+                "ConfirmProductArtifact:" + prdId + ":" + requirementManifestId);
+        var productArtifact = artifacts.require(productResult.artifactRef().artifactId());
+        memoryLifecycle.schedule(productResult);
+        return new PreparedConfirmation(starting, true, requirementManifestId, productArtifact.artifactId());
     }
 
-    private void extractMemoryCandidates(PrdSession session, String manifestId, String actorId) {
-        try {
-            var items = manifests.requirementItems(
-                    manifestId, session.systemId(), session.prdId(), session.workItemId());
-            memoryCandidates.extractAsync(
-                    session, draftCodec.read(session.draftJson()), session.workItemId(), actorId, items);
-        } catch (RuntimeException error) {
-            // 记忆候选不属于确认事务，调度失败只记录日志。
-            log.warn("PRD 记忆候选未能调度 prdId={} type={}",
-                    session.prdId(), error.getClass().getSimpleName());
-        }
+    private TemporalCasePort.PrdPayload prdPayload(String requirementManifestId, String productArtifactId) {
+        return new TemporalCasePort.PrdPayload(
+                requirementManifestId,
+                com.asterism.artifact.ArtifactRef.from(artifacts.require(productArtifactId)));
     }
 
-    private TemporalCasePort.PrdPayload prdPayload(PrdSession current, String requirementManifestId) {
-        var draft = draftCodec.read(current.draftJson());
-        return new TemporalCasePort.PrdPayload(current.title(), current.goal(), draft.acceptanceCriteria(),
-                draftCodec.toMap(draft), requirementManifestId);
+    private Map<String, List<String>> citationMap(PrdDraft draft) {
+        var value = draft.extras().get("citations");
+        if (!(value instanceof Map<?, ?> citationsValue)) return Map.of();
+        return objectMapper.convertValue(citationsValue, new TypeReference<>() {});
     }
 
     private TemporalCasePort.AgentConfigSnapshot agentConfigSnapshot(
@@ -226,9 +262,10 @@ public class PrdConfirmationService {
     }
 
     public record PrdConfirmResponse(String prdId, String workItemId, String caseId, String lifecycleStatus,
-                                     String requirementManifestId) {
+                                     String requirementManifestId, String productArtifactId) {
     }
 
-    private record PreparedConfirmation(PrdSession session, boolean startTemporal, String requirementManifestId) {
+    private record PreparedConfirmation(PrdSession session, boolean startTemporal, String requirementManifestId,
+                                        String productArtifactId) {
     }
 }

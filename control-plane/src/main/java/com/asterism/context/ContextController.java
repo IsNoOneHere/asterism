@@ -1,5 +1,6 @@
 package com.asterism.context;
 
+import com.asterism.artifact.ArtifactContextBuilder;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -7,24 +8,23 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Map;
-
 @RestController
 @RequestMapping("/api/v5/context-snapshots")
 public class ContextController {
-    private final RequirementContextManifestService manifests;
+    private final ArtifactContextBuilder contexts;
 
-    public ContextController(RequirementContextManifestService manifests) {
-        this.manifests = manifests;
+    public ContextController(ArtifactContextBuilder contexts) {
+        this.contexts = contexts;
     }
 
     @PostMapping
-    RequirementContextManifestService.ExecutionContextSnapshot snapshot(
+    ArtifactContextBuilder.ArtifactContextSnapshot snapshot(
             @Valid @RequestBody SnapshotRequest request) {
-        // Worker 只能凭 PRD 已冻结的 manifest 读取需求上下文，不能自行创建新快照。
-        return manifests.executionSnapshot(
+        // 跨阶段只按已批准 Artifact 引用构建上下文，不拼接上游 Session Transcript。
+        return contexts.build(new ArtifactContextBuilder.Request(
                 request.systemId(), request.prdId(), request.workItemId(), request.requirementManifestId(),
-                request.goal(), request.draft());
+                request.phase(), request.productArtifact(), request.planningArtifact(),
+                request.previousArtifact(), request.gitBaseRevisions()));
     }
 
     public record SnapshotRequest(
@@ -32,7 +32,10 @@ public class ContextController {
             @NotBlank String prdId,
             @NotBlank String workItemId,
             @NotBlank String requirementManifestId,
-            String goal,
-            Map<String, Object> draft) {
+            @NotBlank String phase,
+            com.asterism.artifact.ArtifactRef productArtifact,
+            com.asterism.artifact.ArtifactRef planningArtifact,
+            com.asterism.artifact.ArtifactRef previousArtifact,
+            java.util.Map<String, String> gitBaseRevisions) {
     }
 }

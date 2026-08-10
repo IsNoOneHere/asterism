@@ -21,6 +21,10 @@ class FakeExecutionProvider(ExecutionProvider):
             plan_markdown=f"# 执行计划\n\n{request.goal}",
             revision=request.plan_revision,
             session_id="fake-session",
+            acceptance_criteria_refs=[
+                f"AC-{index + 1}" for index in range(len(request.acceptance_criteria))
+            ],
+            repositories=[repo.repo_id for repo in request.repos],
         )
 
     async def run(self, request: CodingAttemptRequest, _workspace: TeamWorkspace) -> CodingAttemptResult:

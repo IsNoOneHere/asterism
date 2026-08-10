@@ -1,6 +1,7 @@
 package com.asterism.event;
 
-import com.asterism.memory.WorkItemMemoryLearningService;
+import com.asterism.artifact.ArtifactTransitionService;
+import com.asterism.memory.ArtifactMemoryLifecycleService;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -13,19 +14,20 @@ import static org.mockito.Mockito.when;
 
 class ProjectionControllerMemoryLearningTest {
     @Test
-    void releaseProjectionInvokesMemoryLearningAfterIdempotentAppend() {
-        var events = mock(DomainEventService.class);
-        var learning = mock(WorkItemMemoryLearningService.class);
+    void artifactProjectionSchedulesMemoryExtractionAfterTransition() {
+        var learning = mock(ArtifactMemoryLifecycleService.class);
+        var transitions = mock(ArtifactTransitionService.class);
         var saved = new DomainEventRecord(10L, "evt-release", "ReleaseCompleted", "v5.0", "sys-1",
                 "case-1", "prd-1", "wi-1", "worker", "worker", "{}", "case-1", null,
                 "release-1", Instant.now());
-        when(events.append(any())).thenReturn(saved);
-        var controller = new ProjectionController(events, learning);
+        when(transitions.ingest(any(), any(), any(), any()))
+                .thenReturn(new ArtifactTransitionService.Result(saved, null, null, null));
+        var controller = new ProjectionController(learning, transitions);
 
         controller.ingest(new ProjectionController.ProjectionEventRequest(
                 "ReleaseCompleted", "sys-1", "case-1", "prd-1", "wi-1", "worker",
-                Map.of(), "case-1", null, "release-1"));
+                Map.of(), "case-1", null, "release-1", null, null));
 
-        verify(learning).learn(saved);
+        verify(learning).schedule(any(ArtifactTransitionService.Result.class));
     }
 }

@@ -7,20 +7,20 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 from urllib.parse import quote, urlsplit
 
 import httpx
 
 from asterism_worker.config.settings import Settings
 from asterism_worker.contracts import RepoSnapshot
+from asterism_worker.networking import (
+    endpoint_host,
+    is_private_endpoint,
+    redact_subprocess_stderr,
+    subprocess_environment,
+)
 
 log = logging.getLogger(__name__)
-
-
-class RepoSourcePort(Protocol):
-    def prepare(self, repo: RepoSnapshot, workspace_root: str) -> Path:
-        """准备隔离工作区并返回仓库目录。"""
 
 
 @dataclass(slots=True)
@@ -54,11 +54,20 @@ class LocalRepoSource:
             # fake/http provider 的旧行为允许空仓库，local 模式保持不变。
             return workspace
         target = workspace / "repo"
-        if (source / ".git").exists():
-            subprocess.run(["git", "clone", "--quiet", str(source), str(target)], check=True)
-        else:
-            shutil.copytree(source, target)
-        return target
+        try:
+            if (source / ".git").exists():
+                # VirtioFS 源仓库禁用本地复制优化，避免 pack 文件被复制成无效临时副本。
+                subprocess.run(
+                    ["git", "clone", "--quiet", "--no-local", str(source), str(target)],
+                    check=True, capture_output=True, text=True,
+                )
+            else:
+                shutil.copytree(source, target)
+            log.info("本地仓库工作区已准备 repo=%s", repo.repo_id)
+            return target
+        except Exception:
+            shutil.rmtree(workspace, ignore_errors=True)
+            raise
 
 
 @dataclass(slots=True)
@@ -73,7 +82,12 @@ class GitlabRepoSource:
         parsed = urlsplit(clone_url)
         if not parsed.scheme or not parsed.netloc or not self.token:
             raise RuntimeError("GitLab clone 配置不完整")
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        env = subprocess_environment(clone_url)
+        if is_private_endpoint(clone_url):
+            log.info(
+                "私网 GitLab clone 已绕过环境代理 repo=%s host=%s",
+                repo.repo_id, endpoint_host(clone_url),
+            )
         try:
             with git_credentials(clone_url, self.token, workspace) as auth:
                 subprocess.run([
@@ -82,16 +96,27 @@ class GitlabRepoSource:
                 ], check=True, capture_output=True, text=True, env=env)
             log.info("GitLab 仓库工作区已准备 repo=%s project=%s", repo.repo_id, repo.gitlab_project)
             return target
+        except subprocess.CalledProcessError as error:
+            detail = redact_subprocess_stderr(error.stderr, self.token)
+            shutil.rmtree(workspace, ignore_errors=True)
+            log.warning(
+                "GitLab clone 失败 repo=%s project=%s exit_code=%s detail=%s",
+                repo.repo_id, repo.gitlab_project, error.returncode, detail,
+            )
+            raise RuntimeError(f"GitLab clone 失败（exit {error.returncode}）：{detail}") from error
         except Exception:
             shutil.rmtree(workspace, ignore_errors=True)
             raise
 
 
-async def prepare_repo_workspace(repo: RepoSnapshot, system_id: str, settings: Settings) -> Path:
+async def prepare_repo_workspace(
+    repo: RepoSnapshot, system_id: str, settings: Settings, workspace_root: str | None = None,
+) -> Path:
+    root = workspace_root or settings.workspace_root
     if repo.clone_mode != "gitlab":
-        return LocalRepoSource().prepare(repo, settings.workspace_root)
+        return LocalRepoSource().prepare(repo, root)
     base_url, token = await fetch_git_connection(system_id, settings)
-    return GitlabRepoSource(base_url, token).prepare(repo, settings.workspace_root)
+    return GitlabRepoSource(base_url, token).prepare(repo, root)
 
 
 async def prepare_team_workspace(
@@ -179,9 +204,10 @@ async def _populate_case_staging(
     """把所有仓库放入同一个未发布的 Case staging 目录。"""
 
     for index, repo in enumerate(repos):
-        workspace = await prepare_repo_workspace(repo, system_id, settings)
+        # 临时 clone 与最终目录同处 Artifact 持久卷，禁止跨文件系统 move 回退成复制加删除。
+        workspace = await prepare_repo_workspace(repo, system_id, settings, str(staging))
         target = staging / _repo_directory(repo.repo_id, index)
-        shutil.move(str(workspace), target)
+        workspace.rename(target)
         if workspace.name == "repo":
             shutil.rmtree(workspace.parent, ignore_errors=True)
 

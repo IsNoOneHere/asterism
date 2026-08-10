@@ -1,5 +1,11 @@
 package com.asterism.workitem;
 
+import com.asterism.artifact.ArtifactActionPolicy;
+import com.asterism.artifact.ArtifactRef;
+import com.asterism.artifact.ArtifactService;
+import com.asterism.artifact.ArtifactStatus;
+import com.asterism.artifact.ArtifactTransitionService;
+import com.asterism.artifact.ArtifactType;
 import com.asterism.common.ApiException;
 import com.asterism.context.RequirementContextManifestService;
 import com.asterism.event.DomainEventRecord;
@@ -21,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Instant;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,20 +44,44 @@ public class WorkItemActionService {
                     "start_modification", "coding_plan_approved", "coding_plan_rejected", "interrupt_attempt", "cancel_case")),
             Map.entry("worker_blocked", List.of(
                     "retry_current_phase", "rework", "rework_with_latest_config",
-                    "rework_with_latest_context", "cancel_case")),
-            Map.entry("validation_failed", List.of("rework", "cancel_case")),
+                    "rework_with_latest_context", "release_retry", "release_revalidate",
+                    "release_rework_coding", "cancel_case")),
+            Map.entry("validation_failed", List.of(
+                    "validation_retry", "validation_rework_coding",
+                    "validation_rework_planning", "rework", "cancel_case")),
             Map.entry("modification_completed", List.of("patch_apply_approved", "patch_apply_rejected", "cancel_case")),
             Map.entry("patch_applied", List.of("validation_passed", "validation_rejected")),
-            Map.entry("validation_passed", List.of("release_approved", "cancel_case")),
-            Map.entry("waiting_merge", List.of("check_merge_status", "rework", "cancel_case")));
+            Map.entry("validation_passed", List.of(
+                    "release_approved", "validation_rework_coding",
+                    "validation_rework_planning", "cancel_case")),
+            Map.entry("waiting_merge", List.of(
+                    "check_merge_status", "release_revalidate", "release_rework_coding", "rework", "cancel_case")));
     private static final Set<String> VALIDATION_ACTIONS = Set.of("validation_passed", "validation_rejected");
+    private static final Set<String> SELECTED_CODING_ACTIONS = Set.of(
+            "patch_apply_approved", "patch_apply_rejected",
+            "validation_passed", "validation_rejected");
+    private static final Set<String> VALIDATION_ROUTE_ACTIONS = Set.of(
+            "validation_retry", "validation_rework_coding", "validation_rework_planning",
+            "release_approved", "release_retry", "release_revalidate", "release_rework_coding");
+    private static final Set<String> PASSED_VALIDATION_ACTIONS = Set.of(
+            "release_approved", "release_retry", "release_revalidate", "release_rework_coding");
+    private static final Set<String> RESULT_ARTIFACT_ACTIONS = Set.of(
+            "validation_retry", "validation_rework_coding", "validation_rework_planning",
+            "release_retry", "release_revalidate", "release_rework_coding");
+    private static final Set<String> VALIDATION_REWORK_ACTIONS = Set.of(
+            "validation_rework_coding", "validation_rework_planning");
+    private static final Set<String> LEGACY_RELEASE_RECOVERY_ACTIONS = Set.of(
+            "retry_current_phase", "rework", "rework_with_latest_config", "rework_with_latest_context");
     private static final Set<String> CONFIG_REFRESH_PHASES = Set.of("planning", "coding");
     private static final Map<String, String> FAILURE_EVENT_PHASES = Map.of(
             "PatchApplyBlocked", "patch");
     private static final Map<String, Set<String>> NOTE_REQUIRED_STATUSES = Map.of(
             "coding_plan_rejected", Set.of("activated"),
             "patch_apply_rejected", Set.of("modification_completed"),
-            "rework", Set.of("waiting_merge"));
+            "rework", Set.of("waiting_merge"),
+            "validation_rework_coding", Set.of("validation_failed", "validation_passed"),
+            "validation_rework_planning", Set.of("validation_failed", "validation_passed"),
+            "release_rework_coding", Set.of("worker_blocked", "waiting_merge"));
     private static final Predicate<RuntimeState> ALWAYS_AVAILABLE = ignored -> true;
     private static final Map<String, Predicate<RuntimeState>> ACTION_GUARDS = Map.of(
             "start_modification", RuntimeState::planningMayStart,
@@ -59,7 +90,10 @@ public class WorkItemActionService {
             "interrupt_attempt", RuntimeState::attemptInterruptible,
             "retry_current_phase", RuntimeState::phaseRetrySupported,
             "rework_with_latest_config", RuntimeState::configurationRefreshSupported,
-            "rework_with_latest_context", RuntimeState::contextRefreshSupported);
+            "rework_with_latest_context", RuntimeState::contextRefreshSupported,
+            "release_retry", RuntimeState::releaseRetrySupported,
+            "release_revalidate", RuntimeState::releaseReworkSupported,
+            "release_rework_coding", RuntimeState::releaseReworkSupported);
 
     private final WorkItemProjectionRepository workItems;
     private final TemporalCasePort temporal;
@@ -67,12 +101,17 @@ public class WorkItemActionService {
     private final SystemAccessService access;
     private final AgentConfigurationService configurations;
     private final RequirementContextManifestService manifests;
+    private final ArtifactService artifacts;
+    private final ArtifactTransitionService artifactTransitions;
+    private final ArtifactActionPolicy artifactActions;
     private final ObjectMapper objectMapper;
     private final TransactionOperations transactions;
 
     public WorkItemActionService(WorkItemProjectionRepository workItems, TemporalCasePort temporal,
                                  DomainEventService events, SystemAccessService access,
                                  AgentConfigurationService configurations, RequirementContextManifestService manifests,
+                                 ArtifactService artifacts,
+                                 ArtifactTransitionService artifactTransitions, ArtifactActionPolicy artifactActions,
                                  ObjectMapper objectMapper,
                                  TransactionOperations transactions) {
         this.workItems = workItems;
@@ -81,6 +120,9 @@ public class WorkItemActionService {
         this.access = access;
         this.configurations = configurations;
         this.manifests = manifests;
+        this.artifacts = artifacts;
+        this.artifactTransitions = artifactTransitions;
+        this.artifactActions = artifactActions;
         this.objectMapper = objectMapper;
         this.transactions = transactions;
     }
@@ -133,7 +175,7 @@ public class WorkItemActionService {
         var runtime = runtime(item);
         return pendingActionAllows(action, runtime)
                 && ACTIONS.getOrDefault(item.lifecycleStatus(), List.of()).contains(action)
-                && actionAvailable(action, runtime);
+                && actionAvailable(action, runtime, item);
     }
 
     public Availability availability(WorkItemProjection item, Authentication actor) {
@@ -143,7 +185,7 @@ public class WorkItemActionService {
         var available = canControl ? allowed : allowed.stream()
                 .filter(action -> requesterMayValidate(item, runtime, action, actor))
                 .toList();
-        available = available.stream().filter(action -> actionAvailable(action, runtime)).toList();
+        available = available.stream().filter(action -> actionAvailable(action, runtime, item)).toList();
         if (runtime.pendingAction() != null) {
             available = canControl && runtime.attemptInterruptible()
                     ? available.stream().filter("interrupt_attempt"::equals).toList()
@@ -158,7 +200,7 @@ public class WorkItemActionService {
     private PreparedSignal prepare(String workItemId, String action, ActionRequest rawRequest, Authentication actor) {
         var item = workItems.lockById(workItemId).orElseThrow(() -> new IllegalArgumentException("工作项不存在"));
         if (item.deleted()) throw new IllegalArgumentException("工作项不存在");
-        var request = rawRequest == null ? new ActionRequest(null, null, null, null, null) : rawRequest;
+        var request = rawRequest == null ? new ActionRequest(null, null, null, null, null, null) : rawRequest;
         var requestId = request.requestId() == null || request.requestId().isBlank()
                 ? UUID.randomUUID().toString() : request.requestId().trim();
         if (!requestId.matches("[A-Za-z0-9_-]{8,80}")) {
@@ -192,9 +234,11 @@ public class WorkItemActionService {
         if (!ACTIONS.getOrDefault(item.lifecycleStatus(), List.of()).contains(action)) {
             throw new ApiException(HttpStatus.CONFLICT, "ACTION_NOT_AVAILABLE", "当前阶段不能执行该操作");
         }
-        if (!actionAvailable(action, runtime)) {
+        if (!actionAvailable(action, runtime, item)) {
             throw new ApiException(HttpStatus.CONFLICT, "ACTION_NOT_AVAILABLE", "当前阻塞不支持该恢复操作");
         }
+        var artifactRef = artifactActions.validate(
+                action, workItemId, request.artifactRef(), currentTransitionRefs(workItemId));
 
         var attempt = events.countSignalFailures(workItemId, signalId) + 1;
         var submissionKey = attempt == 1 ? requestKey : requestKey + ":retry:" + attempt;
@@ -207,6 +251,7 @@ public class WorkItemActionService {
         payload.put("attempt", attempt);
         if (!note.isBlank()) payload.put("note", note);
         if (!evidence.isBlank()) payload.put("evidence", evidence);
+        if (artifactRef != null) payload.put("artifactRef", artifactRef);
         Map<String, Object> signalContext = switch (action) {
             case "retry_current_phase" -> Map.<String, Object>of(
                     "retry_phase", runtime.failedPhase());
@@ -214,11 +259,29 @@ public class WorkItemActionService {
                     "agent_config_snapshot", latestAgentConfig(item.systemId()),
                     "resume_failed_stage", true,
                     "retry_phase", runtime.failedPhase());
-            case "rework_with_latest_context" -> Map.<String, Object>of(
-                    "requirement_manifest_id", manifests.refresh(
-                            item.systemId(), item.prdId(), item.workItemId(), actor.getName(), requestKey));
+            case "rework_with_latest_context" ->
+                    refreshedArtifactContext(item, actor.getName(), requestKey, artifactRef);
             default -> Map.of();
         };
+        if (artifactRef != null) {
+            var withArtifact = new LinkedHashMap<String, Object>(signalContext);
+            withArtifact.put("artifact_ref", artifactPayload(artifactRef));
+            if (artifactRef.artifactType() == ArtifactType.CODING
+                    && artifactRef.status() == ArtifactStatus.APPROVED
+                    && (SELECTED_CODING_ACTIONS.contains(action)
+                    || "release_approved".equals(action)
+                    || VALIDATION_REWORK_ACTIONS.contains(action))) {
+                withArtifact.putAll(selectedCodingRoute(artifactRef));
+                log.info("代码审核绑定已选中 CodingArtifact workItem={} version={}",
+                        workItemId, artifactRef.version());
+            } else if (artifactRef.artifactType() == ArtifactType.VALIDATION
+                    && VALIDATION_ROUTE_ACTIONS.contains(action)) {
+                withArtifact.putAll(selectedValidationRoute(artifactRef));
+                log.info("返工/发布动作已绑定 ValidationArtifact workItem={} version={} action={}",
+                        workItemId, artifactRef.version(), action);
+            }
+            signalContext = Map.copyOf(withArtifact);
+        }
         if ("rework_with_latest_config".equals(action)) payload.put("refreshConfiguration", true);
         if ("rework_with_latest_context".equals(action)) payload.put("refreshContext", true);
         events.append(new DomainEventService.AppendEvent(
@@ -227,6 +290,76 @@ public class WorkItemActionService {
                 actor.getName(), "control-plane", payload, workItemId, null, submissionKey));
         return prepared(item, requestId, signalId, submissionKey, note, evidence, signalContext,
                 actor.getName(), true);
+    }
+
+    private Map<String, Object> selectedCodingRoute(ArtifactRef coding) {
+        var heads = artifacts.effectiveHeads(coding.rootArtifactId());
+        var product = heads.get(ArtifactType.PRODUCT);
+        var planning = heads.get(ArtifactType.PLANNING);
+        if (!coding.equals(heads.get(ArtifactType.CODING)) || product == null || planning == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "STALE_ARTIFACT",
+                    "当前代码版本路线已变化，请刷新后重试");
+        }
+        var requirementManifestId = artifacts.require(product.artifactId())
+                .content().path("requirementManifestId").asText();
+        return Map.of(
+                "selected_type", ArtifactType.CODING.name(),
+                "selected_artifact", artifactPayload(coding),
+                "product_artifact", artifactPayload(product),
+                "planning_artifact", artifactPayload(planning),
+                "coding_artifact", artifactPayload(coding),
+                "requirement_manifest_id", requirementManifestId);
+    }
+
+    private Map<String, Object> selectedValidationRoute(ArtifactRef validation) {
+        var heads = artifacts.effectiveHeads(validation.rootArtifactId());
+        var product = heads.get(ArtifactType.PRODUCT);
+        var planning = heads.get(ArtifactType.PLANNING);
+        var coding = heads.get(ArtifactType.CODING);
+        if (!validation.equals(heads.get(ArtifactType.VALIDATION))
+                || product == null || planning == null || coding == null
+                || !coding.artifactId().equals(validation.parentArtifactId())) {
+            throw new ApiException(HttpStatus.CONFLICT, "STALE_ARTIFACT",
+                    "当前验证结果路线已变化，请刷新后重试");
+        }
+        var requirementManifestId = artifacts.require(product.artifactId())
+                .content().path("requirementManifestId").asText();
+        return Map.of(
+                "selected_type", ArtifactType.VALIDATION.name(),
+                "selected_artifact", artifactPayload(validation),
+                "product_artifact", artifactPayload(product),
+                "planning_artifact", artifactPayload(planning),
+                "coding_artifact", artifactPayload(coding),
+                "validation_artifact", artifactPayload(validation),
+                "requirement_manifest_id", requirementManifestId);
+    }
+
+    private Map<String, Object> artifactPayload(ArtifactRef reference) {
+        return objectMapper.copy()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                .convertValue(reference,
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+    }
+
+    private Map<String, Object> refreshedArtifactContext(
+            WorkItemProjection item, String actorId, String requestKey, ArtifactRef productArtifact) {
+        var manifestId = manifests.refresh(
+                item.systemId(), item.prdId(), item.workItemId(), actorId, requestKey);
+        var product = artifactTransitions.refreshProductManifest(
+                new ArtifactTransitionService.EventMetadata(
+                        DomainEventType.RequirementContextRefreshed,
+                        item.systemId(), item.caseId(), item.prdId(), item.workItemId(),
+                        actorId, "control-plane", item.workItemId(), requestKey,
+                        "RequirementContextRefreshed:" + requestKey),
+                productArtifact,
+                manifestId,
+                "RefreshProductArtifact:" + requestKey);
+        return Map.of(
+                "requirement_manifest_id", manifestId,
+                "product_artifact", objectMapper.copy()
+                        .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                        .convertValue(product.artifactRef(),
+                                new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {}));
     }
 
     private PreparedSignal prepared(WorkItemProjection item, String requestId, String signalId, String submissionKey,
@@ -256,8 +389,44 @@ public class WorkItemActionService {
                 && actor.getName().equals(item.createdBy());
     }
 
-    private boolean actionAvailable(String action, RuntimeState runtime) {
-        return ACTION_GUARDS.getOrDefault(action, ALWAYS_AVAILABLE).test(runtime);
+    private boolean actionAvailable(String action, RuntimeState runtime, WorkItemProjection item) {
+        if (!ACTION_GUARDS.getOrDefault(action, ALWAYS_AVAILABLE).test(runtime)) return false;
+        var heads = currentArtifactHeads(item.workItemId());
+        var validation = heads.get(ArtifactType.VALIDATION);
+        // V22 前通过验证的在途 Case 没有 ValidationArtifact，显式返工兼容当前 Coding Head。
+        var legacyPassedRework = "validation_passed".equals(item.lifecycleStatus())
+                && VALIDATION_REWORK_ACTIONS.contains(action)
+                && heads.get(ArtifactType.CODING) != null;
+        if (RESULT_ARTIFACT_ACTIONS.contains(action) && validation == null && !legacyPassedRework) return false;
+        // 新结果模式只允许绑定精确 ValidationArtifact 的发布恢复动作，禁止通用动作绕过版本契约。
+        if (validation != null && "worker_blocked".equals(item.lifecycleStatus())
+                && "release".equals(runtime.failedPhase())
+                && LEGACY_RELEASE_RECOVERY_ACTIONS.contains(action)) {
+            return false;
+        }
+        if ("rework".equals(action) && validation != null
+                && (Set.of("validation_failed", "waiting_merge").contains(item.lifecycleStatus())
+                || "worker_blocked".equals(item.lifecycleStatus())
+                && "release".equals(runtime.failedPhase()))) {
+            return false;
+        }
+        if (!PASSED_VALIDATION_ACTIONS.contains(action)) return true;
+        if (validation == null) {
+            return "release_approved".equals(action) && heads.get(ArtifactType.CODING) != null;
+        }
+        try {
+            artifacts.requirePassedValidation(validation);
+            return true;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private Map<ArtifactType, ArtifactRef> currentArtifactHeads(String workItemId) {
+        var chain = artifacts.findArtifactChain(workItemId);
+        return chain.isEmpty()
+                ? Map.of()
+                : artifacts.effectiveHeads(chain.getFirst().rootArtifactId());
     }
 
     private boolean pendingActionAllows(String action, RuntimeState runtime) {
@@ -342,6 +511,22 @@ public class WorkItemActionService {
         }
     }
 
+    private Map<ArtifactType, ArtifactRef> currentTransitionRefs(String workItemId) {
+        var result = new EnumMap<ArtifactType, ArtifactRef>(ArtifactType.class);
+        for (var event : events.findByWorkItemId(workItemId)) {
+            var payload = payload(event);
+            // 手工信号也携带 ArtifactRef；只有服务端已提交 Transition 的返回值才是当前事实。
+            if (string(payload.get("transitionId")).isBlank() || payload.get("artifactRef") == null) continue;
+            try {
+                var reference = objectMapper.convertValue(payload.get("artifactRef"), ArtifactRef.class);
+                result.put(reference.artifactType(), reference);
+            } catch (IllegalArgumentException ignored) {
+                // 旧事件没有完整 ArtifactRef 时不参与当前版本选择。
+            }
+        }
+        return Map.copyOf(result);
+    }
+
     private WorkItemProjection resolve(String workItemId) {
         return workItems.findById(workItemId).or(() -> workItems.findByDisplayWorkItemId(workItemId))
                 .filter(item -> !item.deleted())
@@ -361,7 +546,7 @@ public class WorkItemActionService {
     }
 
     public record ActionRequest(String requestId, String expectedStatus, Long expectedProjectionSequence,
-                                String note, String evidence) {
+                                String note, String evidence, ArtifactRef artifactRef) {
     }
 
     public record PendingAction(String action, String signalId, Instant submittedAt) {
@@ -391,6 +576,14 @@ public class WorkItemActionService {
 
         boolean contextRefreshSupported() {
             return "context_stale".equals(failedReason) && CONFIG_REFRESH_PHASES.contains(failedPhase);
+        }
+
+        boolean releaseRetrySupported() {
+            return "release".equals(failedPhase);
+        }
+
+        boolean releaseReworkSupported() {
+            return "release".equals(failedPhase) || failedPhase.isBlank();
         }
 
         boolean attemptInterruptible() {

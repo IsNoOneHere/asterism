@@ -1,5 +1,7 @@
 package com.asterism.temporal;
 
+import com.asterism.artifact.ArtifactRef;
+
 import java.util.List;
 import java.util.Map;
 
@@ -55,11 +57,7 @@ public interface TemporalCasePort {
                          String prompt, Integer maxTurns, Integer timeoutSeconds) {
     }
 
-    record PrdPayload(String title, String goal, List<String> acceptanceCriteria, Map<String, Object> draftJson,
-                      String requirementManifestId) {
-        public PrdPayload(String title, String goal, List<String> acceptanceCriteria, Map<String, Object> draftJson) {
-            this(title, goal, acceptanceCriteria, draftJson, "");
-        }
+    record PrdPayload(String requirementManifestId, ArtifactRef productArtifact) {
     }
 
     record SignalCaseCommand(String caseId, String signalName, String signalId, Map<String, Object> context) {

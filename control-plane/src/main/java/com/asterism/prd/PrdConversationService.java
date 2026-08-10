@@ -1,24 +1,17 @@
 package com.asterism.prd;
 
-import com.asterism.attachment.Attachment;
 import com.asterism.attachment.AttachmentService;
 import com.asterism.common.ApiException;
-import com.asterism.common.ModelInvocationException;
-import com.asterism.context.ContextBundle;
 import com.asterism.context.ContextRecallQuery;
 import com.asterism.context.ContextRecallService;
 import com.asterism.event.DomainEventService;
 import com.asterism.event.DomainEventType;
 import com.asterism.identity.SystemAccessService;
 import com.asterism.knowledge.KnowledgeMatchService;
-import com.asterism.vision.ImageAnalysisService;
-import com.asterism.vision.UiObservation;
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.core.task.TaskExecutor;
 import org.springframework.data.jdbc.core.JdbcAggregateTemplate;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -28,71 +21,56 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Service
 public class PrdConversationService {
     private static final Logger log = LoggerFactory.getLogger(PrdConversationService.class);
-    private static final String AI_UNAVAILABLE = "AI 暂时不可用，请重试";
-    private static final String TURN_FAILED_MESSAGE = "AI 生成失败，本轮未修改草稿。你可以重试或手工编辑。";
-    static final String PENDING_SENDER = "assistant_pending";
-    static final long PENDING_TIMEOUT_SECONDS = 120;
     private static final Set<String> EDITABLE_STATUSES = Set.of(
             "waiting_input", "need_clarification", "waiting_user_confirm", "turn_failed", "case_start_failed");
 
     private final PrdSessionRepository sessions;
     private final ConversationMessageRepository messages;
-    private final ProductAgentPort productAgent;
+    private final ProductAgentExecutionRepository executionRepository;
+    private final ProductAgentExecutionService executionService;
     private final DomainEventService events;
     private final ObjectMapper objectMapper;
     private final PrdDraftCodec draftCodec;
     private final TransactionOperations transactions;
     private final SystemAccessService access;
     private final ContextRecallService contextRecall;
-    private final PrdCitationService citations;
     private final JdbcAggregateTemplate aggregate;
     private final AttachmentService attachments;
-    private final ImageAnalysisService imageAnalysis;
-    private final KnowledgeMatchService knowledge;
-    private final TaskExecutor taskExecutor;
 
     public PrdConversationService(
             PrdSessionRepository sessions,
             ConversationMessageRepository messages,
-            ProductAgentPort productAgent,
+            ProductAgentExecutionRepository executionRepository,
+            ProductAgentExecutionService executionService,
             DomainEventService events,
             ObjectMapper objectMapper,
             PrdDraftCodec draftCodec,
             TransactionOperations transactions,
             SystemAccessService access,
             ContextRecallService contextRecall,
-            PrdCitationService citations,
             JdbcAggregateTemplate aggregate,
-            AttachmentService attachments,
-            ImageAnalysisService imageAnalysis,
-            KnowledgeMatchService knowledge,
-            TaskExecutor taskExecutor) {
+            AttachmentService attachments) {
         this.sessions = sessions;
         this.messages = messages;
-        this.productAgent = productAgent;
+        this.executionRepository = executionRepository;
+        this.executionService = executionService;
         this.events = events;
         this.objectMapper = objectMapper;
         this.draftCodec = draftCodec;
         this.transactions = transactions;
         this.access = access;
         this.contextRecall = contextRecall;
-        this.citations = citations;
         this.aggregate = aggregate;
         this.attachments = attachments;
-        this.imageAnalysis = imageAnalysis;
-        this.knowledge = knowledge;
-        this.taskExecutor = taskExecutor;
     }
 
     public PrdMessageResponse message(String systemId, PrdMessageRequest request, Authentication actor) {
@@ -101,24 +79,24 @@ public class PrdConversationService {
         if (attachmentIds.size() > 3) throw new IllegalArgumentException("每条消息最多上传 3 张图片");
         if (attachmentIds.isEmpty() && content.isBlank()) throw new IllegalArgumentException("消息内容和图片不能同时为空");
 
-        final PreparedTurn turn;
+        final PreparedExecution prepared;
         try {
-            turn = transactions.execute(status -> beginTurn(systemId, request.prdId(), content, attachmentIds, actor));
+            prepared = transactions.execute(status -> prepareExecution(
+                    systemId, request.prdId(), content, attachmentIds, actor));
         } catch (DataIntegrityViolationException error) {
-            // 并发请求最终由数据库唯一索引裁决。
+            // 并发请求最终由 execution 部分唯一索引裁决。
             throw new ApiException(HttpStatus.CONFLICT, "PRD_ASSISTANT_PENDING", "AI 正在分析，请稍候");
         }
-        var response = new PrdMessageResponse(turn.session().prdId(), turn.session().conversationId(),
-                turn.session().status(), null, turn.currentMissing(), draftCodec.toMap(turn.currentDraft()), true);
+        var execution = prepared.execution();
         try {
-            taskExecutor.execute(() -> executeTurn(turn));
-        } catch (RuntimeException error) {
-            log.warn("PRD 后台执行器拒绝回合 prdId={} type={}", turn.session().prdId(), error.getClass().getSimpleName());
-            transactions.executeWithoutResult(status -> failTurn(turn, "EXECUTOR_REJECTED"));
-            return new PrdMessageResponse(response.prdId(), response.conversationId(), "turn_failed", TURN_FAILED_MESSAGE,
-                    response.missingFields(), response.draft(), false);
+            execution = executionService.start(execution.executionId());
+        } catch (IllegalStateException error) {
+            // 创建事实已经提交，启动失败交给 CREATED 恢复任务复用同一 workflowId 重试。
+            log.warn("Product Agent 首次启动失败，已返回 executionId 等待自动恢复 executionId={}",
+                    execution.executionId());
         }
-        return response;
+        return new PrdMessageResponse(execution.executionId(), prepared.session().prdId(),
+                prepared.session().conversationId(), execution.status());
     }
 
     @Transactional
@@ -126,6 +104,7 @@ public class PrdConversationService {
                                               Authentication actor) {
         var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
         access.requireMember(current.systemId(), actor);
+        requireNoActiveExecution(current.prdId());
         var draft = draftCodec.read(current.draftJson());
         var selectedIds = entryIds == null ? List.<String>of() : entryIds;
         var selected = draft.suspectedTargets().stream()
@@ -159,6 +138,7 @@ public class PrdConversationService {
         var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
         access.requireMember(current.systemId(), actor);
         if (!actor.getName().equals(current.createdBy())) access.requireOwnerOrAdmin(current.systemId(), actor);
+        requireNoActiveExecution(current.prdId());
         // 草稿删除只隐藏业务入口，保留对话和关联工作项用于历史审计。
         sessions.markDeleted(prdId, Instant.now());
         log.info("PRD 草稿已删除 prdId={} actor={}", prdId, actor.getName());
@@ -170,11 +150,8 @@ public class PrdConversationService {
         var current = sessions.findById(prdId).orElseThrow(() -> new IllegalArgumentException("PRD 不存在"));
         access.requireMember(current.systemId(), actor);
         requireEditable(current);
-        // 手工编辑与后台回合互斥，避免旧快照覆盖用户刚保存的内容。
-        if (messages.findFirstByConversationIdAndSenderTypeOrderByCreatedAtAsc(
-                current.conversationId(), PENDING_SENDER).isPresent()) {
-            throw new ApiException(HttpStatus.CONFLICT, "PRD_ASSISTANT_PENDING", "AI 正在分析，请稍候");
-        }
+        // 手工编辑与活跃 execution 互斥，避免旧执行结果覆盖用户刚保存的内容。
+        requireNoActiveExecution(current.prdId());
         var currentDraft = draftCodec.read(current.draftJson());
         var updatedTitle = title == null ? first(currentDraft.title(), current.title()) : title.trim();
         var updatedGoal = goal == null ? first(currentDraft.goal(), current.goal()) : goal.trim();
@@ -192,7 +169,7 @@ public class PrdConversationService {
             manualCitations.put("AC-" + (index + 1), List.of(userRef));
         }
         draft = draft.withCitations(manualCitations, List.of(userRef));
-        var missing = computeMissingFields(draft);
+        var missing = ProductAgentExecutionService.missingFields(draft);
         var status = missing.isEmpty() ? "waiting_user_confirm" : "need_clarification";
         var now = Instant.now();
         aggregate.update(new PrdSession(current.prdId(), current.systemId(), current.conversationId(), current.workItemId(),
@@ -217,21 +194,8 @@ public class PrdConversationService {
                 + "\n验收标准：" + String.join("；", criteria);
     }
 
-    private void executeTurn(PreparedTurn turn) {
-        try {
-            // HTTP/LLM 与图片字节处理必须处于数据库事务之外。
-            var result = processTurn(turn);
-            transactions.executeWithoutResult(status -> completeTurn(turn, result));
-        } catch (RuntimeException error) {
-            var failureCode = failureCode(error);
-            log.warn("PRD AI 回合失败，已保留原草稿 prdId={} code={}",
-                    turn.session().prdId(), failureCode);
-            transactions.executeWithoutResult(status -> failTurn(turn, failureCode));
-        }
-    }
-
-    private PreparedTurn beginTurn(String systemId, String requestedPrdId, String content, List<String> attachmentIds,
-                                   Authentication actor) {
+    private PreparedExecution prepareExecution(String systemId, String requestedPrdId, String content,
+                                               List<String> attachmentIds, Authentication actor) {
         var now = Instant.now();
         var current = requestedPrdId == null ? null : sessions.findById(requestedPrdId).orElse(null);
         if (current == null) {
@@ -242,20 +206,13 @@ public class PrdConversationService {
                 throw new ApiException(HttpStatus.CONFLICT, "PRD_SYSTEM_MISMATCH", "PRD 所属系统不能变更");
             }
             requireEditable(current);
+            requireNoActiveExecution(current.prdId());
         }
         var prdId = current == null ? "prd-" + UUID.randomUUID() : current.prdId();
         var conversationId = current == null ? "conv-" + prdId : current.conversationId();
-        var pending = messages.findFirstByConversationIdAndSenderTypeOrderByCreatedAtAsc(conversationId, PENDING_SENDER);
-        if (pending.isPresent() && pending.get().createdAt().isAfter(now.minusSeconds(PENDING_TIMEOUT_SECONDS))) {
-            throw new ApiException(HttpStatus.CONFLICT, "PRD_ASSISTANT_PENDING", "AI 正在分析，请稍候");
-        }
-        pending.ifPresent(value -> messages.completePending(value.messageId(), AI_UNAVAILABLE));
-        var turn = messages.countByConversationIdAndSenderType(conversationId, "user") + 1;
         var history = current == null ? List.<ConversationMessage>of()
                 : messages.findByConversationIdOrderByCreatedAtAsc(conversationId);
-        var validatedAttachments = attachmentIds.stream()
-                .map(attachmentId -> attachments.requireForSystem(attachmentId, systemId))
-                .toList();
+        attachmentIds.forEach(attachmentId -> attachments.requireForSystem(attachmentId, systemId));
         var session = current == null
                 ? new PrdSession(prdId, systemId, conversationId, null, null, null, content, "{}", "[]",
                 "need_clarification", actor.getName(), null, null, now, now)
@@ -264,111 +221,34 @@ public class PrdConversationService {
         var userMessage = new ConversationMessage("msg-" + UUID.randomUUID(), conversationId, systemId, prdId,
                 "user", content, json(attachmentIds), "[]", actor.getName(), now);
         aggregate.insert(userMessage);
-        var pendingMessage = new ConversationMessage("msg-" + UUID.randomUUID(), conversationId, systemId, prdId,
-                PENDING_SENDER, "", "[]", "[]", "product-agent", now.plusNanos(1_000));
-        aggregate.insert(pendingMessage);
         var currentDraft = draftCodec.read(session.draftJson());
         var targetRefs = currentDraft.targets().stream().map(KnowledgeMatchService.SuspectedTarget::entryId).toList();
         var bundle = contextRecall.recall(new ContextRecallQuery(
                 systemId, prdId, "product", content, userMessage.messageId(), draftCodec.toMap(currentDraft),
                 targetRefs, history, actor.getName()));
+        var executionId = "prd-exec-" + UUID.randomUUID();
+        var execution = new ProductAgentExecution(
+                executionId, prdId, ProductAgentExecutionStatus.CREATED, "product-agent-" + executionId,
+                userMessage.messageId(), bundle.bundleId(), "CREATED", 0, null,
+                null, null, null, null, now, now);
         append(DomainEventType.UserMessageReceived, systemId, prdId, actor.getName(),
-                "UserMessageReceived:" + prdId + ":" + turn, Map.of("content", content, "turn", turn));
-        return new PreparedTurn(session, userMessage, pendingMessage, turn, history, bundle,
-                validatedAttachments, currentDraft, readList(session.missingFields()), actor.getName());
-    }
-
-    private ProcessedTurn processTurn(PreparedTurn turn) {
-        var analysis = analyze(turn.session().systemId(), turn.attachments());
-        var agentContent = turn.userMessage().content() + (analysis.observations().isEmpty() ? "" : "\n截图观察："
-                + analysis.observations().stream().map(UiObservation::contextText).collect(Collectors.joining("\n")));
-        var result = productAgent.updateDraft(turn.session().systemId(), agentContent, turn.currentDraft().productContent(),
-                turn.currentMissing(), turn.history(), turn.contextBundle().items());
-        var draft = turn.currentDraft().apply(result.patch());
-        var citationResult = citations.validateAndMerge(turn.contextBundle(), turn.currentDraft(), draft, result);
-        draft = draft.withCitations(citationResult.citations(), citationResult.usedRefs());
-        var anchors = analysis.observations().stream().flatMap(observation -> observation.anchors().stream()).toList();
-        var match = anchors.isEmpty() ? new KnowledgeMatchService.MatchResult(List.of(), false)
-                : knowledge.match(turn.session().systemId(), anchors);
-        if (!match.targets().isEmpty()) draft = draft.withSuspectedTargets(match.targets());
-        return new ProcessedTurn(citationResult, draft, analysis,
-                assistantMessage(result.assistantMessage(), analysis.failed(), match));
-    }
-
-    private void completeTurn(PreparedTurn turn, ProcessedTurn processed) {
-        var now = Instant.now();
-        if (messages.completePending(turn.pendingMessage().messageId(), processed.assistantMessage()) == 0) return;
-        messages.attachContext(turn.pendingMessage().messageId(), turn.contextBundle().bundleId(),
-                json(processed.citationResult().usedRefs()), json(processed.citationResult().citations()));
-        var missing = computeMissingFields(processed.draft());
-        var status = missing.isEmpty() ? "waiting_user_confirm" : "need_clarification";
-        var title = processed.draft().title();
-        var goal = processed.draft().goal();
-        var session = new PrdSession(turn.session().prdId(), turn.session().systemId(), turn.session().conversationId(),
-                turn.session().workItemId(), turn.session().caseId(), title, goal, draftCodec.write(processed.draft()),
-                json(missing), status, turn.session().createdBy(), turn.session().confirmedBy(),
-                turn.session().confirmedAt(), turn.session().createdAt(), now);
-        aggregate.update(session);
-        aggregate.update(new ConversationMessage(turn.userMessage().messageId(), turn.userMessage().conversationId(),
-                turn.userMessage().systemId(), turn.userMessage().prdId(), turn.userMessage().senderType(),
-                turn.userMessage().content(), turn.userMessage().attachmentIds(), json(processed.analysis().observations()),
-                turn.userMessage().contextBundleId(), turn.userMessage().usedContextRefs(), turn.userMessage().citationsJson(),
-                turn.userMessage().createdBy(), turn.userMessage().createdAt()));
-        append(DomainEventType.PRDUpdated, session.systemId(), session.prdId(), turn.actorId(),
-                "PRDUpdated:" + session.prdId() + ":" + turn.turn(),
-                Map.of("title", title, "status", status, "turn", turn.turn(),
-                        "contextBundleId", turn.contextBundle().bundleId(),
-                        "usedContextRefs", processed.citationResult().usedRefs()));
-        if (!missing.isEmpty()) {
-            append(DomainEventType.ClarificationRequested, session.systemId(), session.prdId(), "product-agent",
-                    "ClarificationRequested:" + session.prdId() + ":" + turn.turn(),
-                    Map.of("missingFields", missing));
-        }
-    }
-
-    private void failTurn(PreparedTurn turn, String failureCode) {
-        if (messages.completePending(turn.pendingMessage().messageId(), TURN_FAILED_MESSAGE) == 0) return;
-        var current = turn.session();
-        var now = Instant.now();
-        aggregate.update(new PrdSession(current.prdId(), current.systemId(), current.conversationId(),
-                current.workItemId(), current.caseId(), current.title(), current.goal(),
-                draftCodec.write(turn.currentDraft()), json(turn.currentMissing()), "turn_failed",
-                current.createdBy(), current.confirmedBy(), current.confirmedAt(), current.createdAt(), now));
-        append(DomainEventType.PRDUpdated, current.systemId(), current.prdId(), turn.actorId(),
-                "PRDUpdated:" + current.prdId() + ":" + turn.turn() + ":failed",
-                Map.of("source", "model_failure", "status", "turn_failed", "reason", failureCode));
-    }
-
-    private String failureCode(RuntimeException error) {
-        if (error instanceof ModelInvocationException modelError) return modelError.code();
-        if (error instanceof PrdDraftCodec.DraftFieldTypeException) return "PRD_DRAFT_INVALID";
-        return error.getClass().getSimpleName();
-    }
-
-    private List<String> computeMissingFields(PrdDraft draft) {
-        // 缺失字段由控制面根据合并后的草稿确定性计算。
-        var missing = new ArrayList<String>();
-        if (draft.title() == null || draft.title().isBlank()) missing.add("title");
-        if (draft.goal() == null || draft.goal().isBlank()) missing.add("goal");
-        if (draft.acceptanceCriteria().isEmpty()) missing.add("acceptance_criteria");
-        return List.copyOf(missing);
-    }
-
-    private AnalysisResult analyze(String systemId, List<Attachment> turnAttachments) {
-        var observations = new ArrayList<UiObservation>();
-        var failed = false;
-        for (var attachment : turnAttachments) {
-            try {
-                var observation = imageAnalysis.analyze(systemId, attachment, attachments.read(attachment));
-                if (observation != null) observations.add(observation);
-            } catch (RuntimeException error) {
-                // 只记录定位信息和异常类型，图片字节与密钥不得进入日志。
-                log.warn("图片分析失败，已降级为文字对话 systemId={} attachmentId={} type={}",
-                        systemId, attachment.attachmentId(), error.getClass().getSimpleName());
-                failed = true;
-            }
-        }
-        return new AnalysisResult(observations, failed);
+                "UserMessageReceived:" + prdId + ":" + executionId,
+                Map.of("content", content, "executionId", executionId));
+        var createdEventId = "evt-product-agent-created-" + executionId;
+        events.append(new DomainEventService.AppendEvent(
+                DomainEventType.ProductAgentExecutionCreated, systemId, null, prdId, null,
+                actor.getName(), "control-plane",
+                Map.of(
+                        "executionId", execution.executionId(),
+                        "workflowId", execution.workflowId(),
+                        "inputMessageId", execution.inputMessageId(),
+                        "contextBundleId", execution.contextBundleId(),
+                        "status", execution.status().name()),
+                execution.executionId(), userMessage.messageId(),
+                "ProductAgentExecutionCreated:" + executionId, createdEventId));
+        // execution 是 Created 事件的查询投影，二者与输入消息、上下文在同一事务提交。
+        aggregate.insert(execution);
+        return new PreparedExecution(session, execution);
     }
 
     private void requireEditable(PrdSession session) {
@@ -378,37 +258,16 @@ public class PrdConversationService {
         }
     }
 
-    private String assistantMessage(String original, boolean analysisFailed, KnowledgeMatchService.MatchResult match) {
-        var message = new StringBuilder(original == null ? "" : original);
-        if (analysisFailed) message.append("\n图片分析不可用，已保留图片，不影响文字对话。");
-        if (!match.targets().isEmpty()) {
-            var target = match.targets().getFirst();
-            message.append("\nAI 定位到可能涉及的系统位置【").append(target.title()).append("】");
-            if (target.routePath() != null && !target.routePath().isBlank()) {
-                message.append("，路由 ").append(target.routePath());
-            }
-            if (!target.apiEndpoints().isEmpty()) {
-                message.append("，相关接口 ").append(String.join("、", target.apiEndpoints()));
-            }
-            message.append("。该信息仅供 Agent 定位参考，不限制实际修改范围。");
-        } else if (match.knowledgeEmpty()) {
-            message.append("\n系统知识库为空，可让管理员运行路由索引。");
+    private void requireNoActiveExecution(String prdId) {
+        if (executionRepository.findActiveByPrdId(prdId).isPresent()) {
+            throw new ApiException(HttpStatus.CONFLICT, "PRD_ASSISTANT_PENDING", "AI 正在分析，请稍候");
         }
-        return message.toString();
     }
 
     private void append(DomainEventType type, String systemId, String prdId, String actorId,
                         String idempotencyKey, Map<String, Object> payload) {
         events.append(new DomainEventService.AppendEvent(type, systemId, null, prdId, null, actorId,
                 "control-plane", payload, prdId, null, idempotencyKey));
-    }
-
-    private List<String> readList(String json) {
-        try {
-            return objectMapper.readValue(json, new TypeReference<>() {});
-        } catch (JsonProcessingException error) {
-            throw new IllegalArgumentException("missing_fields 不是合法 JSON", error);
-        }
     }
 
     private String json(Object value) {
@@ -425,25 +284,14 @@ public class PrdConversationService {
         }
     }
 
-    public record PrdMessageResponse(String prdId, String conversationId, String status, String assistantMessage,
-                                     List<String> missingFields, Map<String, Object> draft, boolean assistantPending) {
+    public record PrdMessageResponse(String executionId, String prdId, String conversationId,
+                                     ProductAgentExecutionStatus status) {
     }
 
     public record DraftUpdateResponse(String title, String goal, Map<String, Object> draft,
                                       List<String> missingFields, String status) {
     }
 
-    private record PreparedTurn(PrdSession session, ConversationMessage userMessage,
-                                ConversationMessage pendingMessage, long turn, List<ConversationMessage> history,
-                                ContextBundle contextBundle,
-                                List<Attachment> attachments, PrdDraft currentDraft,
-                                List<String> currentMissing, String actorId) {
-    }
-
-    private record ProcessedTurn(PrdCitationService.CitationResult citationResult, PrdDraft draft,
-                                 AnalysisResult analysis, String assistantMessage) {
-    }
-
-    private record AnalysisResult(List<UiObservation> observations, boolean failed) {
+    private record PreparedExecution(PrdSession session, ProductAgentExecution execution) {
     }
 }

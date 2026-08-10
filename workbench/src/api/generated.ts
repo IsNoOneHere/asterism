@@ -852,6 +852,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v5/internal/product-agent-executions/{executionId}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["startProductAgentExecution"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/internal/product-agent-executions/{executionId}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["applyProductAgentExecutionEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v5/internal/attachments/{attachmentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["downloadInternalAttachment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -955,15 +1003,10 @@ export interface components {
             attachmentIds?: string[];
         };
         PrdMessageResponse: {
+            executionId?: string;
             prdId?: string;
             conversationId?: string;
-            status?: string;
-            assistantMessage?: string;
-            missingFields?: string[];
-            draft?: {
-                [key: string]: Record<string, never>;
-            };
-            assistantPending?: boolean;
+            status?: components["schemas"]["ProductAgentExecutionStatus"];
         };
         ModelProfileRequest: {
             name?: string;
@@ -1336,13 +1379,78 @@ export interface components {
         };
         ConversationResponse: {
             messages?: components["schemas"]["ConversationMessageView"][];
-            pendingAssistant?: boolean;
-            /** Format: date-time */
-            pendingSince?: string;
+            activeExecution?: components["schemas"]["ProductAgentExecutionView"] | null;
+            latestExecution?: components["schemas"]["ProductAgentExecutionView"] | null;
         };
         CurrentUser: {
             userId?: string;
             roles?: string[];
+        };
+        /** @enum {string} */
+        ProductAgentExecutionStatus: "CREATED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
+        ProductAgentExecutionView: {
+            executionId?: string;
+            prdId?: string;
+            status?: components["schemas"]["ProductAgentExecutionStatus"];
+            workflowId?: string;
+            inputMessageId?: string;
+            contextBundleId?: string;
+            stage?: string;
+            /** Format: int32 */
+            attempt?: number;
+            failureCode?: string | null;
+            /** Format: date-time */
+            startedAt?: string | null;
+            /** Format: date-time */
+            completedAt?: string | null;
+            /** Format: date-time */
+            lastHeartbeat?: string | null;
+            resultMessageId?: string | null;
+            /** Format: date-time */
+            createdAt?: string;
+            /** Format: date-time */
+            updatedAt?: string;
+        };
+        /** @enum {string} */
+        ProductAgentExecutionEventType: "Started" | "Heartbeat" | "Completed" | "Failed" | "Cancelled";
+        PrdPatch: {
+            title?: string | null;
+            goal?: string | null;
+            scope?: string | null;
+            acceptanceCriteria?: string[] | null;
+        };
+        DraftResult: {
+            patch?: components["schemas"]["PrdPatch"];
+            assistant_message?: string;
+            citations?: {
+                [key: string]: string[];
+            };
+        };
+        UiElement: {
+            type?: string;
+            description?: string;
+        };
+        UiObservation: {
+            page_title?: string;
+            text_anchors?: string[];
+            ui_elements?: components["schemas"]["UiElement"][];
+            error_messages?: string[];
+            user_visible_summary?: string;
+        };
+        ProductAgentExecutionEvent: {
+            event_id?: string;
+            idempotency_key?: string | null;
+            event_type?: components["schemas"]["ProductAgentExecutionEventType"];
+            stage?: string;
+            /** Format: int32 */
+            attempt?: number;
+            failure_code?: string | null;
+            result?: components["schemas"]["DraftResult"] | null;
+            generated_artifact_candidate?: {
+                [key: string]: unknown;
+            } | null;
+            observations?: components["schemas"]["UiObservation"][];
+            image_analysis_failed?: boolean;
         };
     };
     responses: never;
@@ -2802,6 +2910,113 @@ export interface operations {
         responses: {
             /** @description OK */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    startProductAgentExecution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                executionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProductAgentExecutionView"];
+                };
+            };
+            /** @description Worker token missing or invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    applyProductAgentExecutionEvent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                executionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProductAgentExecutionEvent"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": components["schemas"]["ProductAgentExecutionView"];
+                };
+            };
+            /** @description Worker token missing or invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    downloadInternalAttachment: {
+        parameters: {
+            query: {
+                systemId: string;
+            };
+            header?: never;
+            path: {
+                attachmentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Original attachment bytes with the stored Content-Type */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": string;
+                };
+            };
+            /** @description Worker token missing or invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Attachment does not belong to the requested system */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Attachment not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

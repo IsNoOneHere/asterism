@@ -1,6 +1,5 @@
 package com.asterism.prd;
 
-import com.asterism.context.ContextItem;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Collections;
@@ -9,20 +8,6 @@ import java.util.List;
 import java.util.Map;
 
 public interface ProductAgentPort {
-    DraftResult updateDraft(
-            String systemId,
-            String content,
-            PrdContent currentDraft,
-            List<String> missingFields,
-            List<ConversationMessage> conversationHistory,
-            List<ContextItem> contextItems);
-
-    MemoryCandidateResult extractMemoryCandidates(
-            String systemId,
-            PrdContent draft,
-            List<String> targetRefs,
-            List<ContextItem> contextItems);
-
     record PrdContent(
             String title,
             String goal,
@@ -58,23 +43,4 @@ public interface ProductAgentPort {
         }
     }
 
-    record MemoryCandidateProposal(
-            String category,
-            String audience,
-            String title,
-            String content,
-            @JsonProperty("target_refs") List<String> targetRefs,
-            @JsonProperty("evidence_refs") List<String> evidenceRefs) {
-
-        public MemoryCandidateProposal {
-            targetRefs = targetRefs == null ? List.of() : List.copyOf(targetRefs);
-            evidenceRefs = evidenceRefs == null ? List.of() : List.copyOf(evidenceRefs);
-        }
-    }
-
-    record MemoryCandidateResult(List<MemoryCandidateProposal> candidates) {
-        public MemoryCandidateResult {
-            candidates = candidates == null ? List.of() : List.copyOf(candidates);
-        }
-    }
 }

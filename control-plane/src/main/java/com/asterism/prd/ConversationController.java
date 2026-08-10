@@ -7,11 +7,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.security.core.Authentication;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.time.Instant;
 
 @RestController
 @RequestMapping("/api/v5/conversations")
@@ -20,40 +18,35 @@ public class ConversationController {
     private final SystemAccessService access;
     private final ObjectMapper objectMapper;
     private final ContextBundleStore bundles;
+    private final ProductAgentExecutionService executions;
 
     public ConversationController(ConversationMessageRepository messages, SystemAccessService access,
-                                  ObjectMapper objectMapper, ContextBundleStore bundles) {
+                                  ObjectMapper objectMapper, ContextBundleStore bundles,
+                                  ProductAgentExecutionService executions) {
         this.messages = messages;
         this.access = access;
         this.objectMapper = objectMapper;
         this.bundles = bundles;
+        this.executions = executions;
     }
 
     @GetMapping("/{conversationId}")
-    @Transactional
     ConversationResponse messages(@PathVariable String conversationId, Authentication actor) {
         var result = messages.findByConversationIdOrderByCreatedAtAsc(conversationId);
         if (!result.isEmpty()) {
             access.requireMember(result.getFirst().systemId(), actor);
         }
-        var pending = result.stream()
-                .filter(message -> PrdConversationService.PENDING_SENDER.equals(message.senderType()))
-                .findFirst();
-        if (pending.isPresent()
-                && !pending.get().createdAt().isAfter(Instant.now().minusSeconds(PrdConversationService.PENDING_TIMEOUT_SECONDS))) {
-            messages.completePending(pending.get().messageId(), "AI 暂时不可用，请重试");
-            result = messages.findByConversationIdOrderByCreatedAtAsc(conversationId);
-            pending = java.util.Optional.empty();
-        }
         var views = result.stream()
-                .filter(message -> !PrdConversationService.PENDING_SENDER.equals(message.senderType()))
                 .map(message -> new ConversationMessageView(
                 message.messageId(), message.conversationId(), message.systemId(), message.prdId(), message.senderType(),
                 message.content(), readList(message.attachmentIds()), readObjects(message.observationsJson()),
                 readList(message.usedContextRefs()), readCitationMap(message.citationsJson()), contextItems(message),
                 message.createdAt()))
                 .toList();
-        return new ConversationResponse(views, pending.isPresent(), pending.map(ConversationMessage::createdAt).orElse(null));
+        var prdId = result.isEmpty() ? null : result.getFirst().prdId();
+        var latest = prdId == null ? null : executions.latestView(prdId);
+        var active = latest != null && latest.status().active() ? latest : null;
+        return new ConversationResponse(views, active, latest);
     }
 
     private List<String> readList(String json) {
@@ -94,7 +87,8 @@ public class ConversationController {
                                           java.time.Instant createdAt) {
     }
 
-    public record ConversationResponse(List<ConversationMessageView> messages, boolean pendingAssistant,
-                                       Instant pendingSince) {
+    public record ConversationResponse(List<ConversationMessageView> messages,
+                                       ProductAgentExecutionView activeExecution,
+                                       ProductAgentExecutionView latestExecution) {
     }
 }

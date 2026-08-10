@@ -11,6 +11,7 @@ from temporalio.worker import Worker
 
 from asterism_worker.activities.execution import (
     apply_patch_to_repo,
+    capture_case_revisions,
     generate_coding_plan,
     revert_patch,
     run_coding_attempt,
@@ -19,15 +20,46 @@ from asterism_worker.activities.execution import (
 )
 from asterism_worker.activities.projections import fetch_context, send_projection_event
 from asterism_worker.activities.gitlab import check_merge_requests, publish_merge_request, ready_merge_requests
+from asterism_worker.activities.product_agent import (
+    generate_product_draft,
+    prepare_product_agent_input,
+    send_product_agent_event,
+)
 from asterism_worker.activities.route_index import index_system_routes, send_knowledge_candidates
 from asterism_worker.config.settings import load_settings
 from asterism_worker.readiness import readiness_loop
 from asterism_worker.workflows.lifecycle import AsterismCaseWorkflow
+from asterism_worker.workflows.product_agent import AsterismProductAgentWorkflow
 from asterism_worker.workflows.route_index import AsterismRouteIndexWorkflow
 
 app = typer.Typer()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger(__name__)
+
+REGISTERED_WORKFLOWS = [
+    AsterismCaseWorkflow,
+    AsterismRouteIndexWorkflow,
+    AsterismProductAgentWorkflow,
+]
+REGISTERED_ACTIVITIES = [
+    capture_case_revisions,
+    fetch_context,
+    generate_coding_plan,
+    run_coding_attempt,
+    apply_patch_to_repo,
+    run_release,
+    revert_patch,
+    run_validation,
+    publish_merge_request,
+    check_merge_requests,
+    ready_merge_requests,
+    send_projection_event,
+    index_system_routes,
+    send_knowledge_candidates,
+    prepare_product_agent_input,
+    generate_product_draft,
+    send_product_agent_event,
+]
 
 
 @app.command()
@@ -79,22 +111,8 @@ async def _worker() -> None:
     worker = Worker(
         client,
         task_queue=settings.temporal_task_queue,
-        workflows=[AsterismCaseWorkflow, AsterismRouteIndexWorkflow],
-        activities=[
-            fetch_context,
-            generate_coding_plan,
-            run_coding_attempt,
-            apply_patch_to_repo,
-            run_release,
-            revert_patch,
-            run_validation,
-            publish_merge_request,
-            check_merge_requests,
-            ready_merge_requests,
-            send_projection_event,
-            index_system_routes,
-            send_knowledge_candidates,
-        ],
+        workflows=REGISTERED_WORKFLOWS,
+        activities=REGISTERED_ACTIVITIES,
     )
     heartbeat = asyncio.create_task(readiness_loop(settings))
     try:

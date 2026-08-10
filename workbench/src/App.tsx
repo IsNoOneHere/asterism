@@ -28,7 +28,7 @@ const navigationGroups: { label: string; items: NavigationItem[] }[] = [
     { to: '/work-items', label: '工作项', icon: ClipboardList },
   ] },
   { label: '知识与上下文', items: [
-    { to: '/memory', label: '系统记忆', icon: BrainCircuit },
+    { to: '/memory', label: '项目记忆', icon: BrainCircuit },
     { to: '/knowledge', label: '系统知识', icon: Map },
   ] },
   { label: '系统管理', items: [
@@ -174,7 +174,7 @@ function shouldShowSystemContext(pathname: string) {
 function pageContext(pathname: string) {
   if (pathname === '/') return { group: 'Asterism', title: '首页' };
   if (pathname.startsWith('/work-items')) return { group: '工作空间', title: pathname.includes('/new') ? '创建工作项' : '工作项' };
-  if (pathname === '/memory') return { group: '知识与上下文', title: '系统记忆' };
+  if (pathname === '/memory') return { group: '知识与上下文', title: '项目记忆' };
   if (pathname === '/knowledge') return { group: '知识与上下文', title: '系统知识库' };
   if (pathname === '/systems') return { group: '系统管理', title: '系统配置' };
   if (pathname === '/models') return { group: '系统管理', title: '模型配置' };

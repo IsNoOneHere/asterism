@@ -27,6 +27,7 @@ from asterism_worker.providers.claude_sdk_planning import (
     PlanningResultError,
 )
 from asterism_worker.providers.claude_sdk_team import (
+    SDK_PERMISSION_CONTEXT_BLOCKER,
     SUBAGENT_TOOLS,
     SUPERVISOR_TOOLS,
     TEAM_TOOLS,
@@ -210,6 +211,7 @@ def test_team_provider_uses_native_subagents_and_enforces_repo_write_policy(tmp_
 
     assert result.session_id == "session-team"
     assert result.outcome.status == "completed"
+    assert result.outcome.blockers == []
     assert result.outcome.changed_paths == ["src/app.txt"]
     assert result.token_usage == {"input_tokens": 100, "output_tokens": 20}
     assert {item.repo for item in result.repo_changes if item.diff_patch} == {"backend", "frontend"}
@@ -702,6 +704,403 @@ def test_team_provider_keeps_background_task_events_as_telemetry(tmp_path, monke
     assert result.outcome.status == "blocked"
 
 
+def test_team_provider_reports_permission_context_loss_from_background_tool_errors(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    team_root = tmp_path / "team"
+    team_root.mkdir()
+    request, workspace = team_request(team_root)
+    event_order = []
+
+    async def interrupted_query(**_kwargs):
+        event_order.append("task_started")
+        yield TaskStartedMessage(
+            subtype="task_started", data={}, task_id="task-permission", description="后台探索",
+            uuid="uuid-permission", session_id="session-permission",
+        )
+        event_order.append("initial_result")
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-initial", result="后台任务已提交",
+        )
+        for index, message in enumerate((
+            "The user doesn't want to take this action right now. Please try again.",
+            "Request interrupted by user for tool use",
+            "Stream closed",
+            "The user doesn't want to take this action right now. Please try again.",
+        )):
+            event_order.append("tool_result")
+            yield UserMessage(content=[ToolResultBlock(
+                tool_use_id=f"tool-{index}", content=message, is_error=True,
+            )])
+        event_order.append("task_terminal")
+        yield TaskUpdatedMessage(
+            subtype="task_updated", data={}, task_id="task-permission", patch={"status": "completed"},
+            status="completed", session_id="session-permission", uuid="uuid-permission-done",
+        )
+        event_order.append("final_result")
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-final", result="执行完成",
+        )
+
+    provider = ClaudeSdkTeamProvider(
+        ModelProfile(provider="anthropic", model="claude", api_key="key"),
+        EngineConfig(name="claude_sdk_team"),
+        str(tmp_path / "artifacts"),
+        AgentConstraints(role_id="developer"),
+        {"query": interrupted_query},
+    )
+
+    result = asyncio.run(provider.run(request, workspace))
+
+    assert event_order == [
+        "task_started", "initial_result", "tool_result", "tool_result", "tool_result",
+        "tool_result", "task_terminal", "final_result",
+    ]
+    assert result.session_id == "session-final"
+    assert result.outcome.status == "blocked"
+    assert result.outcome.blockers.count(SDK_PERMISSION_CONTEXT_BLOCKER) == 1
+    assert "Coding Attempt 未生成有效代码变更" in result.outcome.blockers
+    transcript = next((tmp_path / "artifacts").rglob("coding-attempt-*.jsonl"))
+    records = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
+    assert [record["type"] for record in records if record["type"] in {
+        "task_started", "sdk_result_metadata", "tool_result", "task_updated",
+    }] == [
+        "task_started", "sdk_result_metadata", "tool_result", "tool_result", "tool_result",
+        "tool_result", "task_updated", "sdk_result_metadata",
+    ]
+    assert not any(record["type"] == "subagent_tasks_still_running" for record in records)
+
+
+def test_recovered_task_output_read_permission_becomes_audited_warning(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    team_root = tmp_path / "team"
+    team_root.mkdir()
+    request, workspace = team_request(team_root)
+    task_id = "task-recovered"
+    task_session = "session-recovered"
+    output_path = (
+        f"/tmp/claude-65534/{workspace.root.name}/{task_session}/tasks/{task_id}.output"
+    )
+
+    async def recovered_query(*, options, **_kwargs):
+        yield TaskStartedMessage(
+            subtype="task_started", data={}, task_id=task_id, description="后台读取",
+            uuid="uuid-recovered", session_id=task_session,
+        )
+        gate = options.hooks["PreToolUse"][0].hooks[0]
+        denied = await gate({
+            "tool_name": "Read", "tool_input": {"file_path": output_path},
+        }, "read-task-output", None)
+        assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+        yield UserMessage(content=[ToolResultBlock(
+            tool_use_id="read-task-output",
+            content="The user doesn't want to take this action right now.",
+            is_error=True,
+        )])
+        allowed = await gate({
+            "tool_name": "TaskOutput", "tool_input": {"task_id": task_id},
+        }, "task-output-success", None)
+        assert allowed["hookSpecificOutput"]["permissionDecision"] == "allow"
+        yield UserMessage(content=[ToolResultBlock(
+            tool_use_id="task-output-success", content="后台结果", is_error=False,
+        )])
+        (workspace.repos["backend"] / "src" / "app.txt").write_text("recovered backend\n")
+        yield TaskUpdatedMessage(
+            subtype="task_updated", data={}, task_id=task_id, patch={"status": "completed"},
+            status="completed", session_id=task_session, uuid="uuid-recovered-done",
+        )
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-final", result="执行完成",
+            permission_denials=[{"tool_use_id": "read-task-output"}],
+        )
+
+    provider = ClaudeSdkTeamProvider(
+        ModelProfile(provider="anthropic", model="claude", api_key="key"),
+        EngineConfig(name="claude_sdk_team"),
+        str(tmp_path / "artifacts"),
+        AgentConstraints(role_id="developer"),
+        {"query": recovered_query},
+    )
+
+    result = asyncio.run(provider.run(request, workspace))
+
+    assert result.outcome.status == "completed"
+    records = [
+        json.loads(line)
+        for line in next((tmp_path / "artifacts").rglob("coding-attempt-*.jsonl"))
+        .read_text(encoding="utf-8").splitlines()
+    ]
+    incident = next(record for record in records if record["type"] == "permission_incident")
+    recovered = next(
+        record for record in records if record["type"] == "permission_incident_recovered"
+    )
+    summary = next(
+        record for record in records if record["type"] == "permission_incident_summary"
+    )
+    assert incident["status"] == "unresolved"
+    assert recovered["status"] == "recovered"
+    assert incident["incident_id"] == recovered["incident_id"]
+    assert incident["task_id"] == task_id
+    assert incident["session_id"] == task_session
+    assert summary == {
+        "type": "permission_incident_summary",
+        "local_hook_denial_count": 0,
+        "task_output_read_count": 1,
+        "recovered_count": 1,
+        "unresolved_count": 0,
+        "unmatched_permission_denial_count": 0,
+        "last_result_success": True,
+        "has_diff": True,
+    }
+
+
+def test_unrecovered_task_output_read_is_audited_without_blocking_candidate(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    team_root = tmp_path / "team"
+    team_root.mkdir()
+    request, workspace = team_request(team_root)
+    task_id = "task-unrecovered"
+    task_session = "session-unrecovered"
+    output_path = (
+        f"/private/tmp/claude-65534/{workspace.root.name}/{task_session}/tasks/{task_id}.output"
+    )
+
+    async def unrecovered_query(*, options, **_kwargs):
+        yield TaskStartedMessage(
+            subtype="task_started", data={}, task_id=task_id, description="后台读取",
+            uuid="uuid-unrecovered", session_id=task_session,
+        )
+        gate = options.hooks["PreToolUse"][0].hooks[0]
+        await gate({
+            "tool_name": "Read", "tool_input": {"file_path": output_path},
+        }, "read-task-output", None)
+        (workspace.repos["backend"] / "src" / "app.txt").write_text("partial backend\n")
+        yield TaskUpdatedMessage(
+            subtype="task_updated", data={}, task_id=task_id, patch={"status": "completed"},
+            status="completed", session_id=task_session, uuid="uuid-unrecovered-done",
+        )
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-final", result="执行完成",
+            permission_denials=[{
+                "tool_name": "Read", "tool_input": {"file_path": output_path},
+            }],
+        )
+
+    provider = ClaudeSdkTeamProvider(
+        ModelProfile(provider="anthropic", model="claude", api_key="key"),
+        EngineConfig(name="claude_sdk_team"),
+        str(tmp_path / "artifacts"),
+        AgentConstraints(role_id="developer"),
+        {"query": unrecovered_query},
+    )
+
+    result = asyncio.run(provider.run(request, workspace))
+
+    assert result.outcome.status == "completed"
+    assert result.outcome.blockers == []
+    transcript = next((tmp_path / "artifacts").rglob("coding-attempt-*.jsonl"))
+    records = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
+    summary = next(record for record in records if record["type"] == "permission_incident_summary")
+    assert summary["task_output_read_count"] == 1
+    assert summary["recovered_count"] == 0
+    assert summary["unresolved_count"] == 1
+    assert summary["unmatched_permission_denial_count"] == 0
+
+
+def test_task_output_suffix_outside_sdk_temp_root_or_relative_path_stays_local_audit(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    team_root = tmp_path / "team"
+    team_root.mkdir()
+    request, workspace = team_request(team_root)
+    task_id = "task-external"
+    task_session = "session-external"
+    output_paths = {
+        "read-external-output": f"/opt/untrusted/{task_session}/tasks/{task_id}.output",
+        "read-relative-output": os.path.relpath(
+            f"/tmp/claude-65534/{workspace.root.name}/{task_session}/tasks/{task_id}.output"
+        ),
+    }
+
+    async def external_query(*, options, **_kwargs):
+        yield TaskStartedMessage(
+            subtype="task_started", data={}, task_id=task_id, description="外部读取",
+            uuid="uuid-external", session_id=task_session,
+        )
+        gate = options.hooks["PreToolUse"][0].hooks[0]
+        for tool_use_id, output_path in output_paths.items():
+            denied = await gate({
+                "tool_name": "Read", "tool_input": {"file_path": output_path},
+            }, tool_use_id, None)
+            assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+        await gate({
+            "tool_name": "TaskOutput", "tool_input": {"task_id": task_id},
+        }, "task-output-external", None)
+        yield UserMessage(content=[ToolResultBlock(
+            tool_use_id="task-output-external", content="任务结果", is_error=False,
+        )])
+        (workspace.repos["backend"] / "src" / "app.txt").write_text("partial backend\n")
+        yield TaskUpdatedMessage(
+            subtype="task_updated", data={}, task_id=task_id, patch={"status": "completed"},
+            status="completed", session_id=task_session, uuid="uuid-external-done",
+        )
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-final", result="执行完成",
+            permission_denials=[{"tool_use_id": item} for item in output_paths],
+        )
+
+    provider = ClaudeSdkTeamProvider(
+        ModelProfile(provider="anthropic", model="claude", api_key="key"),
+        EngineConfig(name="claude_sdk_team"),
+        str(tmp_path / "artifacts"),
+        AgentConstraints(role_id="developer"),
+        {"query": external_query},
+    )
+
+    result = asyncio.run(provider.run(request, workspace))
+
+    assert result.outcome.status == "completed"
+    assert result.outcome.blockers == []
+    transcript = next((tmp_path / "artifacts").rglob("coding-attempt-*.jsonl"))
+    records = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
+    incidents = [record for record in records if record["type"] == "permission_incident"]
+    assert len(incidents) == 2
+    assert {incident["kind"] for incident in incidents} == {"local_hook_denial"}
+    assert {incident["status"] for incident in incidents} == {"recorded"}
+    assert next(
+        incident for incident in incidents if incident["tool_use_id"] == "read-relative-output"
+    )["target"] == output_paths["read-relative-output"]
+    summary = next(record for record in records if record["type"] == "permission_incident_summary")
+    assert summary["local_hook_denial_count"] == 2
+    assert summary["task_output_read_count"] == 0
+    assert summary["recovered_count"] == 0
+
+
+@pytest.mark.parametrize(("tool_name", "target"), [
+    ("Edit", "backend/README.md"),
+    ("Write", "backend/README.md"),
+    ("Read", "/private/tmp/unrelated.txt"),
+])
+def test_denied_local_policy_is_audited_and_candidate_completes_with_diff(
+    tmp_path, monkeypatch, tool_name, target,
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    team_root = tmp_path / "team"
+    team_root.mkdir()
+    request, workspace = team_request(team_root)
+
+    async def denied_write_query(*, options, **_kwargs):
+        gate = options.hooks["PreToolUse"][0].hooks[0]
+        denied = await gate({
+            "tool_name": tool_name, "tool_input": {"file_path": target},
+        }, f"denied-{tool_name.lower()}", None)
+        assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+        yield UserMessage(content=[ToolResultBlock(
+            tool_use_id=f"denied-{tool_name.lower()}",
+            content="The user doesn't want to take this action right now.",
+            is_error=True,
+        )])
+        (workspace.repos["backend"] / "src" / "app.txt").write_text("partial backend\n")
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-denied-write", result="执行完成",
+            permission_denials=[{"tool_use_id": f"denied-{tool_name.lower()}"}],
+        )
+
+    provider = ClaudeSdkTeamProvider(
+        ModelProfile(provider="anthropic", model="claude", api_key="key"),
+        EngineConfig(name="claude_sdk_team"),
+        str(tmp_path / "artifacts"),
+        AgentConstraints(role_id="developer"),
+        {"query": denied_write_query},
+    )
+
+    result = asyncio.run(provider.run(request, workspace))
+
+    assert result.outcome.status == "completed"
+    assert result.outcome.blockers == []
+    assert SDK_PERMISSION_CONTEXT_BLOCKER not in result.outcome.blockers
+    assert result.repo_changes[0].diff_patch
+    transcript = next((tmp_path / "artifacts").rglob("coding-attempt-*.jsonl"))
+    records = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
+    incident = next(record for record in records if record["type"] == "permission_incident")
+    assert incident["tool"] == tool_name
+    assert incident["kind"] == "local_hook_denial"
+    assert incident["status"] == "recorded"
+
+
+def test_other_task_output_cannot_recover_denied_task_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    team_root = tmp_path / "team"
+    team_root.mkdir()
+    request, workspace = team_request(team_root)
+    task_a = "task-a"
+    task_b = "task-b"
+    output_path = (
+        f"/tmp/claude-65534/{workspace.root.name}/session-a/tasks/{task_a}.output"
+    )
+
+    async def crossed_query(*, options, **_kwargs):
+        yield TaskStartedMessage(
+            subtype="task_started", data={}, task_id=task_a, description="任务 A",
+            uuid="uuid-a", session_id="session-a",
+        )
+        yield TaskStartedMessage(
+            subtype="task_started", data={}, task_id=task_b, description="任务 B",
+            uuid="uuid-b", session_id="session-b",
+        )
+        gate = options.hooks["PreToolUse"][0].hooks[0]
+        await gate({
+            "tool_name": "Read", "tool_input": {"file_path": output_path},
+        }, "read-task-a", None)
+        allowed = await gate({
+            "tool_name": "TaskOutput", "tool_input": {"task_id": task_b},
+        }, "task-output-b", None)
+        assert allowed["hookSpecificOutput"]["permissionDecision"] == "allow"
+        yield UserMessage(content=[ToolResultBlock(
+            tool_use_id="task-output-b", content="任务 B 结果", is_error=False,
+        )])
+        (workspace.repos["backend"] / "src" / "app.txt").write_text("partial backend\n")
+        for task_id, session_id in ((task_a, "session-a"), (task_b, "session-b")):
+            yield TaskUpdatedMessage(
+                subtype="task_updated", data={}, task_id=task_id, patch={"status": "completed"},
+                status="completed", session_id=session_id, uuid=f"uuid-{task_id}-done",
+            )
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-final", result="执行完成",
+            permission_denials=[{"tool_use_id": "read-task-a"}],
+        )
+
+    provider = ClaudeSdkTeamProvider(
+        ModelProfile(provider="anthropic", model="claude", api_key="key"),
+        EngineConfig(name="claude_sdk_team"),
+        str(tmp_path / "artifacts"),
+        AgentConstraints(role_id="developer"),
+        {"query": crossed_query},
+    )
+
+    result = asyncio.run(provider.run(request, workspace))
+
+    assert result.outcome.status == "completed"
+    assert result.outcome.blockers == []
+    transcript = next((tmp_path / "artifacts").rglob("coding-attempt-*.jsonl"))
+    records = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
+    summary = next(record for record in records if record["type"] == "permission_incident_summary")
+    assert summary["task_output_read_count"] == 1
+    assert summary["recovered_count"] == 0
+    assert summary["unresolved_count"] == 1
+
+
 def test_team_provider_closes_builtin_agent_from_task_terminal_event(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 501)
     team_root = tmp_path / "team"
@@ -749,10 +1148,15 @@ def test_permission_denial_blocks_candidate_even_when_diff_exists(tmp_path, monk
 
     async def denied_query(**_kwargs):
         (workspace.repos["backend"] / "src" / "app.txt").write_text("partial backend\n")
+        denial = {"tool_name": "Edit"}
         yield ResultMessage(
             subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
-            session_id="session-denied", result="已完成",
-            permission_denials=[{"tool_name": "Edit"}],
+            session_id="session-initial", result="后台任务已提交",
+            permission_denials=[denial, denial],
+        )
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False, num_turns=1,
+            session_id="session-final", result="已完成",
         )
 
     provider = ClaudeSdkTeamProvider(
@@ -766,8 +1170,15 @@ def test_permission_denial_blocks_candidate_even_when_diff_exists(tmp_path, monk
     result = asyncio.run(provider.run(request, workspace))
 
     assert result.outcome.status == "blocked"
-    assert any("permission_denials" in blocker for blocker in result.outcome.blockers)
+    assert any("无法关联 Hook 审计" in blocker for blocker in result.outcome.blockers)
     assert result.repo_changes[0].diff_patch
+    transcript = next((tmp_path / "artifacts").rglob("coding-attempt-*.jsonl"))
+    records = [json.loads(line) for line in transcript.read_text(encoding="utf-8").splitlines()]
+    summary = next(record for record in records if record["type"] == "permission_incident_summary")
+    assert summary["local_hook_denial_count"] == 0
+    assert summary["unmatched_permission_denial_count"] == 1
+    metadata = [record for record in records if record["type"] == "sdk_result_metadata"]
+    assert [record["unmatched_permission_denial_count"] for record in metadata] == [1, 1]
 
 
 def test_sdk_non_success_terminal_blocks_candidate_even_when_error_flag_is_false(tmp_path, monkeypatch):

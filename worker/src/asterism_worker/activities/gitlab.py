@@ -1,5 +1,4 @@
 import logging
-import os
 import subprocess
 from pathlib import Path
 from urllib.parse import quote
@@ -16,6 +15,7 @@ from asterism_worker.repo_source import (
     fetch_git_connection,
     git_credentials,
 )
+from asterism_worker.networking import endpoint_host, is_private_endpoint, subprocess_environment
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ async def check_merge_requests(request: dict) -> list[dict]:
     base_url, token = await fetch_git_connection(request["system_id"], settings)
     repos = {repo.repo_id: repo for repo in map(RepoSnapshot.model_validate, request.get("repos", []))}
     result = []
-    async with httpx.AsyncClient(timeout=20, headers={"PRIVATE-TOKEN": token}) as client:
+    async with _gitlab_client(base_url, token) as client:
         for item in request.get("merge_requests", []):
             current = MergeRequestRef.model_validate(item)
             repo = repos[current.repo]
@@ -106,7 +106,7 @@ async def ready_merge_requests(request: dict) -> list[dict]:
     base_url, token = await fetch_git_connection(request["system_id"], settings)
     repos = {repo.repo_id: repo for repo in map(RepoSnapshot.model_validate, request.get("repos", []))}
     result = []
-    async with httpx.AsyncClient(timeout=20, headers={"PRIVATE-TOKEN": token}) as client:
+    async with _gitlab_client(base_url, token) as client:
         for value in request.get("merge_requests", []):
             current = MergeRequestRef.model_validate(value)
             repo = repos[current.repo]
@@ -126,7 +126,9 @@ async def ready_merge_requests(request: dict) -> list[dict]:
 
 def _push_branch(workspace: Path, clone_url: str, token: str, branch: str,
                  expected_remote_commit: str = "") -> str:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    env = subprocess_environment(clone_url)
+    if is_private_endpoint(clone_url):
+        log.info("私网 GitLab Git 操作已绕过环境代理 host=%s", endpoint_host(clone_url))
     with git_credentials(clone_url, token, workspace.parent) as auth:
         remote = subprocess.run(
             ["git", *auth, "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
@@ -161,10 +163,9 @@ def _push_branch(workspace: Path, clone_url: str, token: str, branch: str,
 async def _ensure_merge_request(base_url: str, token: str, project: str, source_branch: str,
                                 target_branch: str, title: str, description: str,
                                 labels: list[str], repo_id: str, draft: bool = False) -> MergeRequestRef:
-    headers = {"PRIVATE-TOKEN": token}
     url = _mrs_url(base_url, project)
     params = {"state": "opened", "source_branch": source_branch, "target_branch": target_branch}
-    async with httpx.AsyncClient(timeout=20, headers=headers) as client:
+    async with _gitlab_client(base_url, token) as client:
         existing = await client.get(url, params=params)
         existing.raise_for_status()
         values = existing.json()
@@ -185,6 +186,17 @@ async def _ensure_merge_request(base_url: str, token: str, project: str, source_
                 return _mr_ref(repo_id, project, values[0])
         response.raise_for_status()
         return _mr_ref(repo_id, project, response.json())
+
+
+def _gitlab_client(base_url: str, token: str) -> httpx.AsyncClient:
+    private = is_private_endpoint(base_url)
+    if private:
+        log.info("私网 GitLab API 已绕过环境代理 host=%s", endpoint_host(base_url))
+    return httpx.AsyncClient(
+        timeout=20,
+        headers={"PRIVATE-TOKEN": token},
+        trust_env=not private,
+    )
 
 
 def _description(request: dict, public_url: str) -> str:

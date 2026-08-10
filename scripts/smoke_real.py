@@ -109,13 +109,16 @@ def wait_event(work_item_id: str, event_type: str) -> dict:
 
 def wait_prd_turn(accepted: dict) -> dict:
     deadline = time.time() + TIMEOUT_SECONDS
+    execution_id = accepted["executionId"]
     while time.time() < deadline:
         conversation = request("GET", f"/api/v5/conversations/{accepted['conversationId']}") or {}
-        if not conversation.get("pendingAssistant"):
-            messages = conversation.get("messages", [])
-            if messages and messages[-1].get("content") == "AI 暂时不可用，请重试":
-                raise RuntimeError("PRD AI 回合失败")
-            return request("GET", f"/api/v5/prd-sessions/{accepted['prdId']}")  # type: ignore[return-value]
+        execution = conversation.get("activeExecution") or conversation.get("latestExecution")
+        if execution and execution.get("executionId") == execution_id:
+            status = execution.get("status")
+            if status == "COMPLETED":
+                return request("GET", f"/api/v5/prd-sessions/{accepted['prdId']}")  # type: ignore[return-value]
+            if status in {"FAILED", "CANCELLED"}:
+                raise RuntimeError(f"PRD AI 回合进入终态 {status}")
         time.sleep(1)
     raise RuntimeError(f"等待 PRD AI 回合超时: {accepted['prdId']}")
 
